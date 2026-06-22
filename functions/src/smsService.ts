@@ -4,7 +4,9 @@ const db = getFirestore();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MOCK SMS SENDER
-// Logs to console + writes to sms_logs. No real SMS is sent.
+// MOCK SMS ENABLED FOR DEMO
+// Prevents Semaphore SMS charges
+// Uncomment Semaphore API integration for production
 // ─────────────────────────────────────────────────────────────────────────────
 async function sendSMS(
   number: string,
@@ -20,6 +22,26 @@ async function sendSMS(
     status: 'mock',
     ...(tenantId && { tenantId }),
   });
+
+  // PRODUCTION ONLY - ENABLE AFTER ADDING SEMAPHORE API KEY
+  /*
+  const SEMAPHORE_API_KEY = process.env.SEMAPHORE_API_KEY ?? '';
+  const params = new URLSearchParams();
+  params.append('apikey', SEMAPHORE_API_KEY);
+  params.append('number', number);
+  params.append('message', message);
+  params.append('sendername', 'RentWise');
+
+  const response = await fetch('https://api.semaphore.co/api/v4/messages', {
+    method: 'POST',
+    body: params,
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`Semaphore SMS failed: ${response.status} ${errBody}`);
+  }
+  */
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

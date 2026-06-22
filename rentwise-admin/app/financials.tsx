@@ -30,7 +30,7 @@ import { Menu } from "lucide-react-native";
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
 import { Colors } from "../shared/constants/color";
-import { logUpdate } from "../shared/services/updatesService";
+import { logDetailedUpdate } from "../shared/services/updatesService";
 import Sidebar from "./components/Sidebar";
 import UpdatesReportFAB from "./components/UpdatesReportFAB";
 import { File, Paths } from "expo-file-system";
@@ -801,12 +801,18 @@ export default function Financials() {
                         status: "Approved",
                       },
                     });
-                    void logUpdate({
-                      category: "finance",
+                    void logDetailedUpdate({
+                      module: "Financials",
+                      type: "Cash Payment Confirmation",
+                      tenantId: selectedTenant.id,
                       tenantName: selectedTenant.name,
-                      status: "Paid",
                       spaceNo: selectedTenant.spaceId,
-                      change: "Receipt Generation",
+                      paymentAmount: payment,
+                      paymentMethod: "cash",
+                      oldValue: "Unpaid",
+                      newValue: "Paid",
+                      changedBy: auth.currentUser?.uid ?? "",
+                      approvalStatus: "pending",
                     });
                     setReceiptData({
                       tenantName: selectedTenant.name,
@@ -992,6 +998,20 @@ export default function Financials() {
                       "receiptData.status": "Approved",
                     },
                   );
+
+                  void logDetailedUpdate({
+                    module: "Financials",
+                    type: "Online Payment Confirmation",
+                    tenantId: selectedTenant?.id ?? "",
+                    tenantName: receiptData?.tenantName ?? "",
+                    spaceNo: receiptData?.spaceId ?? "",
+                    paymentAmount: receiptData?.payment ?? 0,
+                    paymentMethod: "online",
+                    oldValue: "Pending",
+                    newValue: "Approved",
+                    changedBy: auth.currentUser?.uid ?? "",
+                    approvalStatus: "pending",
+                  });
 
                   setOnlineConfirmModal(false);
                 }}
