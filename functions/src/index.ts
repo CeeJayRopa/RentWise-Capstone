@@ -274,3 +274,6 @@ export const createPaymongoCheckout = httpsV1.onCall(
     };
   },
 );
+
+// Owner notifications are now created explicitly by the admin FAB
+// "Apply Changes" button — see rentwise-admin/app/components/UpdatesReportFAB.tsx.

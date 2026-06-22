@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
 import { Colors } from "../shared/constants/color";
-import { logUpdate } from "../shared/services/updatesService";
+import { logDetailedUpdate } from "../shared/services/updatesService";
 
 type Schedule = "daily" | "weekly" | "monthly";
 
@@ -41,6 +41,13 @@ export default function EditRentalInfo() {
   const [width, setWidth] = useState("");
   const [rentalRate, setRentalRate] = useState("");
   const [paymentSchedule, setPaymentSchedule] = useState<Schedule>("monthly");
+
+  const originalRef = useRef<{
+    length: string;
+    width: string;
+    rentalRate: string;
+    paymentSchedule: Schedule;
+  } | null>(null);
 
   // Per-field validation errors
   const [lengthError, setLengthError] = useState("");
@@ -94,6 +101,12 @@ export default function EditRentalInfo() {
       setPaymentSchedule(
         ((data.paymentSchedule as string) || "monthly") as Schedule,
       );
+      originalRef.current = {
+        length: String(data.length ?? ""),
+        width: String(data.width ?? ""),
+        rentalRate: String(data.price ?? ""),
+        paymentSchedule: ((data.paymentSchedule as string) || "monthly") as Schedule,
+      };
     } catch (err) {
       console.error("EDIT RENTAL INFO FETCH ERROR:", err);
       setLoadError("Failed to load stall data. Please try again.");
@@ -152,12 +165,42 @@ export default function EditRentalInfo() {
         paymentSchedule,
       });
 
-      void logUpdate({
-        category: "building",
-        spaceNo: spaceId,
-        status: "Updated",
-        change: "Stall Update",
-      });
+      const orig = originalRef.current;
+      if (orig) {
+        const adminId = auth.currentUser?.uid ?? "";
+        const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+        const changes: Array<{ field: string; old: string; newV: string }> = [];
+        if (parseFloat(length) !== parseFloat(orig.length)) {
+          changes.push({ field: "Length", old: `${orig.length} m`, newV: `${length} m` });
+        }
+        if (parseFloat(width) !== parseFloat(orig.width)) {
+          changes.push({ field: "Width", old: `${orig.width} m`, newV: `${width} m` });
+        }
+        if (parseFloat(rentalRate) !== parseFloat(orig.rentalRate)) {
+          changes.push({ field: "Rental Rate", old: `₱${orig.rentalRate}`, newV: `₱${rentalRate}` });
+        }
+        if (paymentSchedule !== orig.paymentSchedule) {
+          changes.push({
+            field: "Payment Schedule",
+            old: cap(orig.paymentSchedule),
+            newV: cap(paymentSchedule),
+          });
+        }
+        for (const c of changes) {
+          void logDetailedUpdate({
+            module: "Building Management",
+            type: "Rental Information Update",
+            targetId: stallId!,
+            spaceNo: spaceId,
+            buildingNo: buildingNumber,
+            fieldChanged: c.field,
+            oldValue: c.old,
+            newValue: c.newV,
+            changedBy: adminId,
+            approvalStatus: "pending",
+          });
+        }
+      }
 
       setSaved(true);
       // Brief success display, then return to Building Management

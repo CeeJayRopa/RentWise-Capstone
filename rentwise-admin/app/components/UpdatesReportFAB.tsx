@@ -12,7 +12,16 @@ import {
   Alert,
   StyleSheet,
 } from "react-native";
-import { collection, getDocs } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDocs,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+  writeBatch,
+} from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { FileEdit } from "lucide-react-native";
 
@@ -26,12 +35,35 @@ if (
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
+function notifLocation(u: any): string {
+  const module: string = u.module ?? "";
+  const category: string = u.category ?? "";
+
+  if (module === "Building Management" || category === "building") {
+    return `Building ${u.buildingNo ?? u.spaceNo ?? ""} Stall Information`;
+  }
+  if (module === "Financials" || category === "finance") {
+    return `${u.tenantName ?? "a tenant"}'s Payment`;
+  }
+  if (module === "Register Tenant") {
+    return `Tenant Registration (${u.tenantName ?? ""})`;
+  }
+  if (module === "Manage Account") {
+    return `${u.tenantName ?? "a tenant"}'s Account`;
+  }
+  if (module === "Account Archive") {
+    return `${u.tenantName ?? "a tenant"}'s Account Restoration`;
+  }
+  return "Rental Information";
+}
+
 export default function UpdatesReportFAB() {
   const insets = useSafeAreaInsets();
 
   const [visible, setVisible] = useState(false);
   const [updates, setUpdates] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [applying, setApplying] = useState(false);
   const [buildingOpen, setBuildingOpen] = useState(true);
   const [financeOpen, setFinanceOpen] = useState(true);
   const [archiveOpen, setArchiveOpen] = useState(true);
@@ -41,13 +73,15 @@ export default function UpdatesReportFAB() {
     setLoading(true);
     try {
       const snap = await getDocs(collection(db, "updates"));
-      const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      // Newest first — sort by createdAt seconds descending
-      docs.sort((a: any, b: any) => {
-        const aTs = a.createdAt?.seconds ?? 0;
-        const bTs = b.createdAt?.seconds ?? 0;
-        return bTs - aTs;
-      });
+      const docs = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        // hide updates already submitted to the owner
+        .filter((d: any) => !d.notifiedAt)
+        .sort((a: any, b: any) => {
+          const aTs = a.createdAt?.seconds ?? 0;
+          const bTs = b.createdAt?.seconds ?? 0;
+          return bTs - aTs;
+        });
       setUpdates(docs);
     } catch (err) {
       console.error("UpdatesReport fetch error:", err);
@@ -63,9 +97,88 @@ export default function UpdatesReportFAB() {
     setter((v) => !v);
   };
 
-  const buildingUpdates = updates.filter((u) => u.category === "building");
-  const financeUpdates = updates.filter((u) => u.category === "finance");
-  const archiveUpdates = updates.filter((u) => u.category === "archive");
+  const applyChanges = async () => {
+    const pendingUpdates = updates.filter(
+      (u: any) => u.approvalStatus !== "approved",
+    );
+
+    if (pendingUpdates.length === 0) {
+      Alert.alert(
+        "No Pending Updates",
+        "All changes have already been approved.",
+      );
+      return;
+    }
+
+    setApplying(true);
+    try {
+      const ownersSnap = await getDocs(
+        query(collection(db, "users"), where("role", "==", "owner")),
+      );
+
+      if (ownersSnap.empty) {
+        Alert.alert("No Owner Found", "No owner account found to notify.");
+        setApplying(false);
+        return;
+      }
+
+      // Deterministic notification IDs prevent duplicates if Apply Changes
+      // is clicked more than once. Also stamp notifiedAt on each update so
+      // the FAB hides them on the next open.
+      const batch = writeBatch(db);
+      for (const u of pendingUpdates) {
+        const location = notifLocation(u);
+        for (const ownerDoc of ownersSnap.docs) {
+          const notifId = `notif_${u.id}_${ownerDoc.id}`;
+          batch.set(
+            doc(db, "notifications", notifId),
+            {
+              userId: ownerDoc.id,
+              message: `Admin made some changes in ${location}.`,
+              status: "To be Approved",
+              read: false,
+              updateId: u.id,
+              createdAt: serverTimestamp(),
+            },
+            { merge: true },
+          );
+        }
+        // Mark update as submitted so it no longer appears in the FAB
+        batch.update(doc(db, "updates", u.id), {
+          notifiedAt: serverTimestamp(),
+        });
+      }
+      await batch.commit();
+
+      // Clear local state immediately so the modal goes blank right away
+      setUpdates([]);
+
+      Alert.alert(
+        "Changes Submitted",
+        `${pendingUpdates.length} update(s) submitted to the Owner for approval.`,
+        [{ text: "OK", onPress: closeModal }],
+      );
+    } catch (err) {
+      console.error("applyChanges error:", err);
+      Alert.alert("Error", "Failed to submit changes. Please try again.");
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const buildingUpdates = updates.filter(
+    (u) => u.category === "building" || u.module === "Building Management",
+  );
+  const financeUpdates = updates.filter(
+    (u) => u.category === "finance" || u.module === "Financials",
+  );
+  const accountUpdates = updates.filter(
+    (u) =>
+      u.category === "archive" ||
+      u.module === "Manage Account" ||
+      u.module === "Register Tenant" ||
+      u.module === "Account Archive",
+  );
 
   return (
     <>
@@ -86,7 +199,6 @@ export default function UpdatesReportFAB() {
         onRequestClose={closeModal}
       >
         <View style={styles.overlay}>
-          {/* Tap outside to close */}
           <TouchableOpacity
             style={StyleSheet.absoluteFill}
             activeOpacity={1}
@@ -94,10 +206,8 @@ export default function UpdatesReportFAB() {
           />
 
           <View style={styles.card}>
-            {/* Title */}
             <Text style={styles.title}>Updates Report</Text>
 
-            {/* Body */}
             {loading ? (
               <View style={styles.loadingBox}>
                 <ActivityIndicator color={Colors.primary} size="large" />
@@ -112,68 +222,75 @@ export default function UpdatesReportFAB() {
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
               >
-                {/* Building Management */}
                 <AccordionSection
                   title="Building Management"
                   open={buildingOpen}
                   onToggle={() => toggle(setBuildingOpen)}
-                  columns={["Space No.", "Status", "Type of Change"]}
+                  columns={["Space No.", "Field Changed", "Change"]}
                   rows={buildingUpdates.map((u) => [
                     u.spaceNo ?? "—",
-                    u.status ?? "—",
-                    u.change ?? "—",
+                    u.module ? (u.fieldChanged ?? u.type ?? "—") : (u.status ?? "—"),
+                    u.module
+                      ? (u.oldValue && u.newValue ? `${u.oldValue} → ${u.newValue}` : "—")
+                      : (u.change ?? "—"),
                   ])}
                 />
 
-                {/* Finances */}
                 <AccordionSection
                   title="Finances"
                   open={financeOpen}
                   onToggle={() => toggle(setFinanceOpen)}
-                  columns={["Tenant Name", "Status", "Space No."]}
+                  columns={["Tenant Name", "Method", "Amount"]}
                   rows={financeUpdates.map((u) => [
                     u.tenantName ?? "—",
-                    u.status ?? "—",
-                    u.spaceNo ?? "—",
+                    u.module ? (u.paymentMethod ?? "cash") : (u.status ?? "—"),
+                    u.module
+                      ? (u.paymentAmount != null ? `₱${Number(u.paymentAmount).toLocaleString()}` : "—")
+                      : (u.spaceNo ?? "—"),
                   ])}
                 />
 
-                {/* Account Archives */}
                 <AccordionSection
                   title="Account Archives"
                   open={archiveOpen}
                   onToggle={() => toggle(setArchiveOpen)}
-                  columns={["Tenant Name", "Status", "Type of Change"]}
-                  rows={archiveUpdates.map((u) => [
+                  columns={["Tenant Name", "Type", "Change"]}
+                  rows={accountUpdates.map((u) => [
                     u.tenantName ?? "—",
-                    u.status ?? "—",
-                    u.change ?? "—",
+                    u.module ? (u.type ?? "—") : (u.status ?? "—"),
+                    u.module
+                      ? (u.oldValue && u.newValue ? `${u.oldValue} → ${u.newValue}` : "—")
+                      : (u.change ?? "—"),
                   ])}
                 />
               </ScrollView>
             )}
 
-            {/* Buttons */}
             <View style={styles.btnRow}>
               <TouchableOpacity
                 style={[styles.btn, styles.btnOutline]}
                 onPress={closeModal}
                 activeOpacity={0.8}
+                disabled={applying}
               >
                 <Text style={styles.btnOutlineText}>Close</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.btn, styles.btnPrimary]}
-                onPress={() =>
-                  Alert.alert(
-                    "Owner Validation",
-                    "Changes submitted for owner validation (future feature)",
-                  )
-                }
+                style={[
+                  styles.btn,
+                  styles.btnPrimary,
+                  applying && styles.btnDisabled,
+                ]}
+                onPress={applyChanges}
                 activeOpacity={0.8}
+                disabled={applying}
               >
-                <Text style={styles.btnPrimaryText}>Apply Changes</Text>
+                {applying ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <Text style={styles.btnPrimaryText}>Apply Changes</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>
@@ -202,7 +319,6 @@ function AccordionSection({
 }: AccordionSectionProps) {
   return (
     <View style={sectionStyles.container}>
-      {/* Section header (tap to expand/collapse) */}
       <TouchableOpacity
         style={sectionStyles.header}
         onPress={onToggle}
@@ -214,7 +330,6 @@ function AccordionSection({
 
       {open && (
         <View style={sectionStyles.body}>
-          {/* Column header row */}
           <View style={[sectionStyles.tableRow, sectionStyles.colHeaderRow]}>
             {columns.map((col) => (
               <Text
@@ -226,7 +341,6 @@ function AccordionSection({
             ))}
           </View>
 
-          {/* Data rows or empty message */}
           {rows.length === 0 ? (
             <Text style={sectionStyles.emptyText}>No records yet.</Text>
           ) : (
@@ -298,28 +412,12 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.border,
   },
 
-  loadingBox: {
-    paddingVertical: 48,
-    alignItems: "center",
-  },
+  loadingBox: { paddingVertical: 48, alignItems: "center" },
+  emptyBox: { paddingVertical: 48, alignItems: "center" },
+  emptyBoxText: { fontSize: 14, color: Colors.textMuted },
 
-  emptyBox: {
-    paddingVertical: 48,
-    alignItems: "center",
-  },
-  emptyBoxText: {
-    fontSize: 14,
-    color: Colors.textMuted,
-  },
-
-  scrollArea: {
-    flexGrow: 0,
-    maxHeight: 420,
-  },
-  scrollContent: {
-    padding: 14,
-    gap: 10,
-  },
+  scrollArea: { flexGrow: 0, maxHeight: 420 },
+  scrollContent: { padding: 14, gap: 10 },
 
   btnRow: {
     flexDirection: "row",
@@ -340,6 +438,7 @@ const styles = StyleSheet.create({
   btnOutlineText: { fontSize: 14, fontWeight: "600", color: Colors.textSecondary },
   btnPrimary: { backgroundColor: Colors.primary },
   btnPrimaryText: { fontSize: 14, fontWeight: "600", color: "#FFFFFF" },
+  btnDisabled: { opacity: 0.5 },
 });
 
 const sectionStyles = StyleSheet.create({
@@ -350,7 +449,6 @@ const sectionStyles = StyleSheet.create({
     overflow: "hidden",
     marginBottom: 2,
   },
-
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -359,34 +457,16 @@ const sectionStyles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
-  headerText: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: Colors.textPrimary,
-  },
-  arrow: {
-    fontSize: 11,
-    color: Colors.textSecondary,
-  },
-
-  body: {
-    backgroundColor: "#FFFFFF",
-  },
-
-  tableRow: {
-    flexDirection: "row",
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-  },
+  headerText: { fontSize: 14, fontWeight: "700", color: Colors.textPrimary },
+  arrow: { fontSize: 11, color: Colors.textSecondary },
+  body: { backgroundColor: "#FFFFFF" },
+  tableRow: { flexDirection: "row", paddingHorizontal: 12, paddingVertical: 9 },
   colHeaderRow: {
     backgroundColor: "#F5F9FD",
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
-  rowBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
+  rowBorder: { borderBottomWidth: 1, borderBottomColor: Colors.border },
   colHeaderCell: {
     fontWeight: "700",
     color: Colors.textSecondary,
@@ -394,17 +474,6 @@ const sectionStyles = StyleSheet.create({
     textTransform: "uppercase",
     letterSpacing: 0.3,
   },
-  cell: {
-    flex: 1,
-    fontSize: 12,
-    color: Colors.textPrimary,
-    paddingRight: 4,
-  },
-
-  emptyText: {
-    padding: 14,
-    fontSize: 13,
-    color: Colors.textMuted,
-    textAlign: "center",
-  },
+  cell: { flex: 1, fontSize: 12, color: Colors.textPrimary, paddingRight: 4 },
+  emptyText: { padding: 14, fontSize: 13, color: Colors.textMuted, textAlign: "center" },
 });

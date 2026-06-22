@@ -20,7 +20,7 @@ import {
 import { firebaseApp } from "../firebaseConfig";
 import { auth } from "./auth";
 import { db } from "./firestore";
-import { logUpdate } from "./updatesService";
+import { logDetailedUpdate } from "./updatesService";
 
 type CreateTenantParams = {
   firstName: string;
@@ -88,10 +88,20 @@ export const createTenantAccount = async (
 
     await batch.commit();
 
-    // Fire-and-forget: fetch spaceId for the log (non-blocking)
+    // Fire-and-forget: fetch stall info for the log (non-blocking)
     getDoc(doc(db, "stalls", stallId)).then((snap) => {
       const spaceNo = snap.exists() ? String(snap.data().spaceId ?? stallId) : stallId;
-      void logUpdate({ category: "building", spaceNo, status: "Occupied", change: "Stall Assignment" });
+      void logDetailedUpdate({
+        module: "Register Tenant",
+        type: "Tenant Registration",
+        tenantId: uid,
+        tenantName: `${firstName} ${lastName}`,
+        spaceNo,
+        oldValue: "Unoccupied",
+        newValue: "Active Tenant",
+        changedBy: auth.currentUser?.uid ?? "",
+        approvalStatus: "pending",
+      });
     }).catch(() => {});
 
     return { uid };
@@ -165,8 +175,18 @@ export const archiveTenant = async (uid: string): Promise<void> => {
   await batch.commit();
 
   const tenantName = `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim();
-  void logUpdate({ category: "archive", tenantName, status: "Archived", change: "Tenant Archive" });
-  void logUpdate({ category: "building", spaceNo: spaceId || stallId, status: "Unoccupied", change: "Stall Release" });
+  void logDetailedUpdate({
+    module: "Manage Account",
+    type: "Tenant Archived",
+    tenantId: uid,
+    tenantName,
+    spaceNo: spaceId || stallId,
+    buildingNo: buildingNumber,
+    oldValue: "Active",
+    newValue: "Archived",
+    changedBy: auth.currentUser?.uid ?? "",
+    approvalStatus: "pending",
+  });
 };
 
 export const restoreTenant = async (uid: string): Promise<void> => {
@@ -198,15 +218,18 @@ export const restoreTenant = async (uid: string): Promise<void> => {
 
   await batch.commit();
 
-  void logUpdate({ category: "archive", tenantName, status: "Active", change: "Tenant Restore" });
-  if (stallReassigned) {
-    void logUpdate({
-      category: "building",
-      spaceNo: (archive.spaceId as string) || stallId,
-      status: "Occupied",
-      change: "Stall Assignment",
-    });
-  }
+  void logDetailedUpdate({
+    module: "Account Archive",
+    type: "Tenant Restore",
+    tenantId: uid,
+    tenantName,
+    spaceNo: stallReassigned ? ((archive.spaceId as string) || stallId) : "",
+    buildingNo: (archive.buildingNumber as string) ?? "",
+    oldValue: "Archived",
+    newValue: stallReassigned ? "Active Tenant" : "Active (No Stall Assigned)",
+    changedBy: auth.currentUser?.uid ?? "",
+    approvalStatus: "pending",
+  });
 };
 
 export const restoreTenantToNewStall = async (
@@ -245,6 +268,16 @@ export const restoreTenantToNewStall = async (
 
   await batch.commit();
 
-  void logUpdate({ category: "archive", tenantName, status: "Active", change: "Tenant Relocation" });
-  void logUpdate({ category: "building", spaceNo: newSpaceNo, status: "Occupied", change: "Tenant Relocation" });
+  void logDetailedUpdate({
+    module: "Account Archive",
+    type: "Tenant Restore",
+    tenantId: uid,
+    tenantName,
+    spaceNo: newSpaceNo,
+    buildingNo: String(stallSnap.data().buildingNumber ?? ""),
+    oldValue: "Archived",
+    newValue: "Active Tenant",
+    changedBy: auth.currentUser?.uid ?? "",
+    approvalStatus: "pending",
+  });
 };
