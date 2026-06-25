@@ -516,7 +516,7 @@ export default function Dashboard() {
                 setPayAmount("");
               }}
             >
-              <Text style={styles.cancelBtnText}>Cancel</Text>
+              <Text style={styles.cancelBtnText}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -529,91 +529,95 @@ export default function Dashboard() {
           <View style={styles.receiptPreviewCard}>
             <Text style={styles.payTitle}>Payment Receipt</Text>
 
-            {selectedPayment?.receiptData ? (
-              <View style={styles.receiptFields}>
-                <View style={styles.receiptFieldRow}>
-                  <Text style={styles.receiptFieldLabel}>Receipt No</Text>
-                  <Text style={styles.receiptFieldValue}>
-                    {selectedPayment.receiptData.receiptNo}
-                  </Text>
-                </View>
-                <View style={styles.receiptFieldRow}>
-                  <Text style={styles.receiptFieldLabel}>Tenant Name</Text>
-                  <Text style={styles.receiptFieldValue}>
-                    {selectedPayment.receiptData.tenantName}
-                  </Text>
-                </View>
-                <View style={styles.receiptFieldRow}>
-                  <Text style={styles.receiptFieldLabel}>Building No</Text>
-                  <Text style={styles.receiptFieldValue}>
-                    {selectedPayment.receiptData.buildingNumber}
-                  </Text>
-                </View>
-                <View style={styles.receiptFieldRow}>
-                  <Text style={styles.receiptFieldLabel}>Space ID</Text>
-                  <Text style={styles.receiptFieldValue}>
-                    {selectedPayment.receiptData.spaceId}
-                  </Text>
-                </View>
-                {selectedPayment.receiptData.paymentMethod && (
+            <ScrollView
+              style={styles.receiptScrollArea}
+              showsVerticalScrollIndicator={false}
+            >
+              {selectedPayment?.receiptData ? (
+                <View style={styles.receiptFields}>
                   <View style={styles.receiptFieldRow}>
-                    <Text style={styles.receiptFieldLabel}>Payment Method</Text>
+                    <Text style={styles.receiptFieldLabel}>Receipt No</Text>
                     <Text style={styles.receiptFieldValue}>
-                      {selectedPayment.receiptData.paymentMethod}
+                      {selectedPayment.receiptData.receiptNo}
                     </Text>
                   </View>
-                )}
-                <View style={styles.receiptFieldRow}>
-                  <Text style={styles.receiptFieldLabel}>Date</Text>
-                  <Text style={styles.receiptFieldValue}>
-                    {new Date(
-                      selectedPayment.receiptData.date,
-                    ).toLocaleDateString()}
-                  </Text>
+                  <View style={styles.receiptFieldRow}>
+                    <Text style={styles.receiptFieldLabel}>Tenant Name</Text>
+                    <Text style={styles.receiptFieldValue}>
+                      {selectedPayment.receiptData.tenantName}
+                    </Text>
+                  </View>
+                  <View style={styles.receiptFieldRow}>
+                    <Text style={styles.receiptFieldLabel}>Building No</Text>
+                    <Text style={styles.receiptFieldValue}>
+                      {selectedPayment.receiptData.buildingNumber}
+                    </Text>
+                  </View>
+                  <View style={styles.receiptFieldRow}>
+                    <Text style={styles.receiptFieldLabel}>Space ID</Text>
+                    <Text style={styles.receiptFieldValue}>
+                      {selectedPayment.receiptData.spaceId}
+                    </Text>
+                  </View>
+                  {selectedPayment.receiptData.paymentMethod && (
+                    <View style={styles.receiptFieldRow}>
+                      <Text style={styles.receiptFieldLabel}>Payment Method</Text>
+                      <Text style={styles.receiptFieldValue}>
+                        {selectedPayment.receiptData.paymentMethod}
+                      </Text>
+                    </View>
+                  )}
+                  <View style={styles.receiptFieldRow}>
+                    <Text style={styles.receiptFieldLabel}>Date</Text>
+                    <Text style={styles.receiptFieldValue}>
+                      {new Date(
+                        selectedPayment.receiptData.date,
+                      ).toLocaleDateString()}
+                    </Text>
+                  </View>
+                  <View style={styles.receiptFieldRow}>
+                    <Text style={styles.receiptFieldLabel}>Rent Amount</Text>
+                    <Text style={styles.receiptFieldValue}>
+                      ₱{selectedPayment.receiptData.rentAmount}
+                    </Text>
+                  </View>
+                  <View style={styles.receiptFieldRow}>
+                    <Text style={styles.receiptFieldLabel}>Payment</Text>
+                    <Text style={styles.receiptFieldValue}>
+                      ₱{selectedPayment.receiptData.payment}
+                    </Text>
+                  </View>
+                  <View style={styles.receiptFieldRow}>
+                    <Text style={styles.receiptFieldLabel}>Change</Text>
+                    <Text style={styles.receiptFieldValue}>
+                      ₱{selectedPayment.receiptData.change}
+                    </Text>
+                  </View>
+                  <View style={styles.receiptFieldRow}>
+                    <Text style={styles.receiptFieldLabel}>Status</Text>
+                    <Text
+                      style={[styles.receiptFieldValue, styles.statusSuccess]}
+                    >
+                      {selectedPayment.receiptData.status}
+                    </Text>
+                  </View>
                 </View>
-                <View style={styles.receiptFieldRow}>
-                  <Text style={styles.receiptFieldLabel}>Rent Amount</Text>
-                  <Text style={styles.receiptFieldValue}>
-                    ₱{selectedPayment.receiptData.rentAmount}
-                  </Text>
-                </View>
-                <View style={styles.receiptFieldRow}>
-                  <Text style={styles.receiptFieldLabel}>Payment</Text>
-                  <Text style={styles.receiptFieldValue}>
-                    ₱{selectedPayment.receiptData.payment}
-                  </Text>
-                </View>
-                <View style={styles.receiptFieldRow}>
-                  <Text style={styles.receiptFieldLabel}>Change</Text>
-                  <Text style={styles.receiptFieldValue}>
-                    ₱{selectedPayment.receiptData.change}
-                  </Text>
-                </View>
-                <View style={styles.receiptFieldRow}>
-                  <Text style={styles.receiptFieldLabel}>Status</Text>
-                  <Text
-                    style={[styles.receiptFieldValue, styles.statusSuccess]}
-                  >
-                    {selectedPayment.receiptData.status}
-                  </Text>
-                </View>
-              </View>
-            ) : selectedPayment?.receipt ? (
-              <Image
-                source={{ uri: selectedPayment.receipt }}
-                style={styles.receiptImage}
-              />
-            ) : null}
+              ) : selectedPayment?.receipt ? (
+                <Image
+                  source={{ uri: selectedPayment.receipt }}
+                  style={styles.receiptImage}
+                />
+              ) : null}
+            </ScrollView>
 
             <TouchableOpacity
-              style={styles.cancelBtn}
+              style={styles.receiptCloseBtn}
               onPress={() => {
                 setShowReceiptModal(false);
-
                 setSelectedPayment(null);
               }}
             >
-              <Text style={styles.cancelBtnText}>Close</Text>
+              <Text style={styles.receiptCloseBtnText}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -977,10 +981,10 @@ const styles = StyleSheet.create({
   },
 
   cancelBtn: {
-    flex: 1,
     backgroundColor: "#E74C3C",
-    padding: 12,
+    paddingVertical: 14,
     borderRadius: 8,
+    alignItems: "center",
   },
 
   submitBtnText: {
@@ -990,6 +994,8 @@ const styles = StyleSheet.create({
 
   cancelBtnText: {
     color: "#fff",
+    fontSize: 15,
+    fontWeight: "700",
     textAlign: "center",
   },
 
@@ -1123,6 +1129,22 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
 
+  receiptScrollArea: {
+    maxHeight: 360,
+    marginBottom: 12,
+  },
+  receiptCloseBtn: {
+    backgroundColor: "#E74C3C",
+    paddingVertical: 13,
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  receiptCloseBtnText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "600",
+    textAlign: "center",
+  },
   receiptFields: {
     width: "100%",
     marginBottom: 12,

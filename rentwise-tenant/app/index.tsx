@@ -8,6 +8,7 @@ export default function Login() {
   const insets = useSafeAreaInsets();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
 
   async function handleLogin() {
     try {
@@ -26,22 +27,33 @@ export default function Login() {
       <Text style={styles.title}>RentWise</Text>
 
       <View style={styles.form}>
-        <Text style={styles.label}>Username:</Text>
+        <Text style={styles.label}>Email:</Text>
         <TextInput
           style={styles.input}
           value={email}
           onChangeText={setEmail}
+          placeholder="example@rentwise.app"
+          placeholderTextColor="#999"
           autoCapitalize="none"
           keyboardType="email-address"
         />
 
         <Text style={styles.label}>Password:</Text>
-        <TextInput
-          style={styles.input}
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-        />
+        <View style={styles.passwordContainer}>
+          <TextInput
+            style={styles.passwordInput}
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry={!showPassword}
+          />
+          <TouchableOpacity
+            style={styles.eyeBtn}
+            onPress={() => setShowPassword((v) => !v)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.eyeIcon}>{showPassword ? "Hide" : "Show"}</Text>
+          </TouchableOpacity>
+        </View>
 
         <TouchableOpacity style={styles.loginButton} onPress={handleLogin}>
           <Text style={styles.loginText}>Login</Text>
@@ -92,6 +104,27 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 15,
     color: "#1A1A1A",
+  },
+  passwordContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 8,
+  },
+  passwordInput: {
+    flex: 1,
+    padding: 12,
+    fontSize: 15,
+    color: "#1A1A1A",
+  },
+  eyeBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  eyeIcon: {
+    fontSize: 13,
+    color: "#888",
+    fontWeight: "600",
   },
 
   loginButton: {
