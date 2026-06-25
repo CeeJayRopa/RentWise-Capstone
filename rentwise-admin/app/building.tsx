@@ -311,7 +311,7 @@ function StallRow({
 
   return (
     <View style={styles.row}>
-      <View>
+      <View style={styles.rowInfo}>
         <Text>Building: {stall.buildingNumber}</Text>
 
         <Text>Space: {stall.spaceId}</Text>
@@ -319,7 +319,9 @@ function StallRow({
         {stall.tenantName && <Text>{stall.tenantName}</Text>}
       </View>
 
-      <View>
+      <View style={styles.rowDividerVertical} />
+
+      <View style={styles.stallBtns}>
         {/* UNOCCUPIED */}
         {stall.status === "unoccupied" && (
           <TouchableOpacity
@@ -334,7 +336,7 @@ function StallRow({
               } as any)
             }
           >
-            <Text style={{ color: "#fff" }}>Register</Text>
+            <Text style={styles.buttonText}>Register</Text>
           </TouchableOpacity>
         )}
 
@@ -354,17 +356,12 @@ function StallRow({
                 } as any)
               }
             >
-              <Text style={{ color: "#fff" }}>Manage</Text>
+              <Text style={styles.buttonText}>Manage</Text>
             </TouchableOpacity>
 
             {/* EDIT RENTAL INFO */}
             <TouchableOpacity
-              style={[
-                styles.button,
-                {
-                  marginTop: 8,
-                },
-              ]}
+              style={styles.button}
               onPress={() =>
                 router.push({
                   pathname: "/edit-rental-info",
@@ -374,7 +371,7 @@ function StallRow({
                 } as any)
               }
             >
-              <Text style={{ color: "#fff" }}>Edit Rental</Text>
+              <Text style={styles.buttonText}>Edit Rental</Text>
             </TouchableOpacity>
           </>
         )}
@@ -513,17 +510,45 @@ const styles = StyleSheet.create({
   },
 
   row: {
-    padding: 15,
+    paddingVertical: 14,
+    paddingHorizontal: 15,
     backgroundColor: "#fff",
     marginVertical: 5,
     flexDirection: "row",
-    justifyContent: "space-between",
+    alignItems: "center",
+  },
+
+  rowInfo: {
+    flex: 1,
+  },
+
+  rowDividerVertical: {
+    width: 1,
+    backgroundColor: "#E0E0E0",
+    alignSelf: "stretch",
+    marginHorizontal: 12,
+  },
+
+  stallBtns: {
+    flexDirection: "column",
+    alignItems: "stretch",
+    gap: 6,
+    width: 110,
   },
 
   button: {
     backgroundColor: Colors.primary,
-    padding: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
     borderRadius: 6,
+    alignItems: "center",
+  },
+
+  buttonText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "600",
+    textAlign: "center",
   },
 
 });

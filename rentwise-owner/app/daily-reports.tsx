@@ -14,7 +14,7 @@ import { collection, getDocs, query, where } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
-import * as FileSystem from "expo-file-system/legacy";
+import { File, Paths } from "expo-file-system";
 import DateTimePicker, { DateTimePickerEvent } from "@react-native-community/datetimepicker";
 
 import { auth } from "../shared/services/auth";
@@ -153,13 +153,13 @@ export default function DailyReports() {
       const groups = groupByDate(filtered);
       const html = buildHtml(groups);
       const { base64 } = await Print.printToFileAsync({ html, base64: true });
-      const cacheUri = FileSystem.cacheDirectory + "daily-reports.pdf";
-      await FileSystem.writeAsStringAsync(cacheUri, base64!, { encoding: FileSystem.EncodingType.Base64 });
+      const destFile = new File(Paths.cache, "daily-reports.pdf");
+      destFile.write(base64!, { encoding: "base64" });
       const canShare = await Sharing.isAvailableAsync();
       if (canShare) {
-        await Sharing.shareAsync(cacheUri, { mimeType: "application/pdf", dialogTitle: "RentWise Daily Reports" });
+        await Sharing.shareAsync(destFile.uri, { mimeType: "application/pdf", dialogTitle: "RentWise Daily Reports" });
       } else {
-        Alert.alert("Saved", `PDF saved to: ${cacheUri}`);
+        Alert.alert("Saved", `PDF saved to: ${destFile.uri}`);
       }
     } catch (err) {
       console.error(err);

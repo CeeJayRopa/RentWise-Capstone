@@ -59,12 +59,14 @@ export default function Account() {
   const [userName, setUserName] = useState("");
   const [contactNo, setContactNo] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   // Field errors (create mode)
   const [firstNameError, setFirstNameError] = useState("");
   const [lastNameError, setLastNameError] = useState("");
   const [userNameError, setUserNameError] = useState("");
   const [passwordError, setPasswordError] = useState("");
+  const [confirmPasswordError, setConfirmPasswordError] = useState("");
 
   // Shared submit state
   const [submitting, setSubmitting] = useState(false);
@@ -160,10 +162,18 @@ export default function Account() {
     } else {
       setUserNameError("");
     }
-    if (password.length < 6) {
-      setPasswordError("Minimum 6 characters.");
+    const pwRegex = /^(?=.*[a-zA-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
+    if (!pwRegex.test(password)) {
+      setPasswordError("8–12 characters with letters, numbers, and special characters.");
       valid = false;
     } else setPasswordError("");
+    if (!confirmPassword) {
+      setConfirmPasswordError("Please confirm your password.");
+      valid = false;
+    } else if (password !== confirmPassword) {
+      setConfirmPasswordError("Passwords do not match");
+      valid = false;
+    } else setConfirmPasswordError("");
     return valid;
   };
 
@@ -307,18 +317,28 @@ export default function Account() {
                     error={lastNameError}
                     disabled={submitting || !!submitSuccess}
                   />
-                  <Field
-                    label="Username"
-                    value={userName}
-                    onChange={(t) => {
-                      setUserName(t);
-                      setUserNameError("");
-                    }}
-                    error={userNameError}
-                    hint="Used for tenant login"
-                    autoCapitalize="none"
-                    disabled={submitting || !!submitSuccess}
-                  />
+                  {/* Username with @rentwise.app suffix */}
+                  <View style={styles.field}>
+                    <Text style={styles.fieldLabel}>Username</Text>
+                    <Text style={styles.fieldHint}>Used for tenant login</Text>
+                    <View style={[styles.usernameRow, !!userNameError && styles.inputError]}>
+                      <TextInput
+                        style={styles.usernameInput}
+                        value={userName}
+                        onChangeText={(t) => {
+                          setUserName(t);
+                          setUserNameError("");
+                        }}
+                        placeholder="username"
+                        autoCapitalize="none"
+                        editable={!submitting && !submitSuccess}
+                        placeholderTextColor={Colors.textMuted}
+                      />
+                      <Text style={styles.usernameSuffix}>@rentwise.app</Text>
+                    </View>
+                    {userNameError ? <Text style={styles.fieldError}>{userNameError}</Text> : null}
+                  </View>
+
                   <Field
                     label="Contact No."
                     value={contactNo}
@@ -335,8 +355,21 @@ export default function Account() {
                       setPasswordError("");
                     }}
                     error={passwordError}
-                    hint="Minimum 6 characters"
+                    hint="8–12 characters, include letters, numbers & special characters"
                     secure
+                    showToggle
+                    disabled={submitting || !!submitSuccess}
+                  />
+                  <Field
+                    label="Confirm Password"
+                    value={confirmPassword}
+                    onChange={(t) => {
+                      setConfirmPassword(t);
+                      setConfirmPasswordError("");
+                    }}
+                    error={confirmPasswordError}
+                    secure
+                    showToggle
                     disabled={submitting || !!submitSuccess}
                   />
 
@@ -461,7 +494,7 @@ export default function Account() {
               <TouchableOpacity
                 style={[
                   styles.modalBtn,
-                  styles.dangerBtn,
+                  styles.modalDangerBtn,
                   archiving && styles.btnDisabled,
                 ]}
                 onPress={handleArchive}
@@ -492,6 +525,7 @@ function Field({
   hint,
   disabled,
   secure,
+  showToggle,
   autoCapitalize,
   keyboardType,
   maxLength,
@@ -503,25 +537,52 @@ function Field({
   hint?: string;
   disabled?: boolean;
   secure?: boolean;
+  showToggle?: boolean;
   autoCapitalize?: "none" | "sentences" | "words" | "characters";
   keyboardType?: "default" | "numeric" | "email-address" | "phone-pad";
   maxLength?: number;
 }) {
+  const [visible, setVisible] = useState(false);
+  const isSecure = secure && !visible;
+
   return (
     <View style={styles.field}>
       <Text style={styles.fieldLabel}>{label}</Text>
       {hint ? <Text style={styles.fieldHint}>{hint}</Text> : null}
-      <TextInput
-        style={[styles.input, error ? styles.inputError : null]}
-        value={value}
-        onChangeText={onChange}
-        secureTextEntry={secure}
-        autoCapitalize={autoCapitalize ?? "sentences"}
-        keyboardType={keyboardType ?? "default"}
-        maxLength={maxLength}
-        editable={!disabled}
-        placeholderTextColor={Colors.textMuted}
-      />
+      {secure && showToggle ? (
+        <View style={[styles.fieldInputRow, error ? styles.inputError : null]}>
+          <TextInput
+            style={styles.fieldInputFlex}
+            value={value}
+            onChangeText={onChange}
+            secureTextEntry={isSecure}
+            autoCapitalize={autoCapitalize ?? "none"}
+            keyboardType={keyboardType ?? "default"}
+            maxLength={maxLength}
+            editable={!disabled}
+            placeholderTextColor={Colors.textMuted}
+          />
+          <TouchableOpacity
+            style={styles.fieldEyeBtn}
+            onPress={() => setVisible((v) => !v)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.fieldEyeIcon}>{visible ? "Hide" : "Show"}</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <TextInput
+          style={[styles.input, error ? styles.inputError : null]}
+          value={value}
+          onChangeText={onChange}
+          secureTextEntry={isSecure}
+          autoCapitalize={autoCapitalize ?? "sentences"}
+          keyboardType={keyboardType ?? "default"}
+          maxLength={maxLength}
+          editable={!disabled}
+          placeholderTextColor={Colors.textMuted}
+        />
+      )}
       {error ? <Text style={styles.fieldError}>{error}</Text> : null}
     </View>
   );
@@ -621,6 +682,55 @@ const styles = StyleSheet.create({
   inputError: { borderColor: Colors.error },
   fieldError: { fontSize: 12, color: Colors.error, marginTop: 4 },
 
+  // Password show/hide row inside Field
+  fieldInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.inputBackground,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+  },
+  fieldInputFlex: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: Colors.textPrimary,
+  },
+  fieldEyeBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  fieldEyeIcon: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    fontWeight: "600",
+  },
+
+  // Username with @rentwise.app suffix
+  usernameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.inputBackground,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+  },
+  usernameInput: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: Colors.textPrimary,
+  },
+  usernameSuffix: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    paddingRight: 12,
+    fontWeight: "500",
+  },
+
   // Tenant info card (manage mode)
   infoCard: {
     backgroundColor: Colors.surface,
@@ -713,14 +823,15 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     marginBottom: 20,
   },
-  modalBtns: { flexDirection: "row", gap: 10 },
+  modalBtns: { flexDirection: "row", gap: 10, alignItems: "stretch" },
   modalBtn: {
     flex: 1,
-    minHeight: 44,
+    minHeight: 48,
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 10,
   },
+  modalDangerBtn: { backgroundColor: Colors.error },
   outlineBtn: { borderWidth: 1.5, borderColor: Colors.border },
   outlineBtnText: {
     fontSize: 14,

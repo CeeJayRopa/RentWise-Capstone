@@ -10,7 +10,7 @@ import {
   Alert,
 } from "react-native";
 import { router } from "expo-router";
-import { onAuthStateChanged } from "firebase/auth";
+import { onAuthStateChanged, updatePassword } from "firebase/auth";
 import { collection, doc, getDocs, query, updateDoc, where } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -39,6 +39,13 @@ export default function ManageAdmin() {
   const [username, setUsername] = useState("");
   const [contactNo, setContactNo] = useState("");
   const [sidebarVisible, setSidebarVisible] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showNewPass, setShowNewPass] = useState(false);
+  const [showConfirmPass, setShowConfirmPass] = useState(false);
+  const [pwError, setPwError] = useState("");
+  const [confirmError, setConfirmError] = useState("");
+  const [changingPw, setChangingPw] = useState(false);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -88,6 +95,48 @@ export default function ManageAdmin() {
     }
   };
 
+  const handleChangePassword = async () => {
+    const pwRegex = /^(?=.*[a-zA-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
+    let valid = true;
+
+    if (!pwRegex.test(newPassword)) {
+      setPwError("8–12 characters with letters, numbers, and special characters.");
+      valid = false;
+    } else {
+      setPwError("");
+    }
+
+    if (!confirmPassword) {
+      setConfirmError("Please confirm your password.");
+      valid = false;
+    } else if (newPassword !== confirmPassword) {
+      setConfirmError("Passwords do not match.");
+      valid = false;
+    } else {
+      setConfirmError("");
+    }
+
+    if (!valid) return;
+
+    const user = auth.currentUser;
+    if (!user) return;
+    setChangingPw(true);
+    try {
+      await updatePassword(user, newPassword);
+      setNewPassword("");
+      setConfirmPassword("");
+      Alert.alert("Success", "Password changed successfully.");
+    } catch (err: any) {
+      if (err?.code === "auth/requires-recent-login") {
+        Alert.alert("Session Expired", "Please log out and log in again before changing your password.");
+      } else {
+        Alert.alert("Error", "Failed to change password.");
+      }
+    } finally {
+      setChangingPw(false);
+    }
+  };
+
   if (checking) {
     return <View style={styles.fullCenter}><ActivityIndicator color={Colors.primary} size="large" /></View>;
   }
@@ -133,25 +182,31 @@ export default function ManageAdmin() {
           />
 
           <Text style={styles.fieldLabel}>Username</Text>
-          <TextInput
-            style={styles.input}
-            value={username}
-            onChangeText={setUsername}
-            placeholder="Username"
-            placeholderTextColor={Colors.textMuted}
-            autoCapitalize="none"
-          />
+          <View style={styles.usernameRow}>
+            <TextInput
+              style={styles.usernameInput}
+              value={username}
+              onChangeText={setUsername}
+              placeholder="username"
+              placeholderTextColor={Colors.textMuted}
+              autoCapitalize="none"
+            />
+            <Text style={styles.usernameSuffix}>@rentwise.app</Text>
+          </View>
 
           <Text style={styles.fieldLabel}>Contact Number</Text>
-          <TextInput
-            style={styles.input}
-            value={contactNo}
-            onChangeText={(t) => setContactNo(t.replace(/\D/g, "").slice(0, 11))}
-            placeholder="09XXXXXXXXX"
-            placeholderTextColor={Colors.textMuted}
-            keyboardType="phone-pad"
-            maxLength={11}
-          />
+          <View style={styles.phoneRow}>
+            <Text style={styles.phonePrefix}>+63</Text>
+            <TextInput
+              style={styles.phoneInput}
+              value={contactNo}
+              onChangeText={(t) => setContactNo(t.replace(/\D/g, "").slice(0, 11))}
+              placeholder="09XXXXXXXXX"
+              placeholderTextColor={Colors.textMuted}
+              keyboardType="phone-pad"
+              maxLength={11}
+            />
+          </View>
 
           <TouchableOpacity
             style={[styles.saveBtn, saving && styles.btnDisabled]}
@@ -163,6 +218,57 @@ export default function ManageAdmin() {
               <ActivityIndicator color="#FFFFFF" size="small" />
             ) : (
               <Text style={styles.saveBtnText}>Save Changes</Text>
+            )}
+          </TouchableOpacity>
+
+          <View style={styles.sectionDivider} />
+          <Text style={styles.sectionTitle}>Change Password</Text>
+
+          <Text style={styles.fieldLabel}>New Password</Text>
+          <View style={[styles.pwRow, !!pwError && styles.pwRowError]}>
+            <TextInput
+              style={styles.pwInput}
+              value={newPassword}
+              onChangeText={(t) => { setNewPassword(t); setPwError(""); }}
+              secureTextEntry={!showNewPass}
+              placeholder="New password"
+              placeholderTextColor={Colors.textMuted}
+              autoCapitalize="none"
+            />
+            <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowNewPass((v) => !v)} activeOpacity={0.7}>
+              <Text style={styles.eyeIcon}>{showNewPass ? "Hide" : "Show"}</Text>
+            </TouchableOpacity>
+          </View>
+          {!!pwError && <Text style={styles.fieldError}>{pwError}</Text>}
+          <Text style={styles.pwHint}>8–12 characters, include letters, numbers & special characters</Text>
+
+          <Text style={styles.fieldLabel}>Confirm Password</Text>
+          <View style={[styles.pwRow, !!confirmError && styles.pwRowError]}>
+            <TextInput
+              style={styles.pwInput}
+              value={confirmPassword}
+              onChangeText={(t) => { setConfirmPassword(t); setConfirmError(""); }}
+              secureTextEntry={!showConfirmPass}
+              placeholder="Confirm new password"
+              placeholderTextColor={Colors.textMuted}
+              autoCapitalize="none"
+            />
+            <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowConfirmPass((v) => !v)} activeOpacity={0.7}>
+              <Text style={styles.eyeIcon}>{showConfirmPass ? "Hide" : "Show"}</Text>
+            </TouchableOpacity>
+          </View>
+          {!!confirmError && <Text style={styles.fieldError}>{confirmError}</Text>}
+
+          <TouchableOpacity
+            style={[styles.saveBtn, styles.changePwBtn, changingPw && styles.btnDisabled]}
+            onPress={handleChangePassword}
+            disabled={changingPw}
+            activeOpacity={0.8}
+          >
+            {changingPw ? (
+              <ActivityIndicator color="#FFFFFF" size="small" />
+            ) : (
+              <Text style={styles.saveBtnText}>Update Password</Text>
             )}
           </TouchableOpacity>
         </ScrollView>
@@ -205,6 +311,86 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     marginBottom: 16,
   },
+  usernameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+    marginBottom: 16,
+  },
+  usernameInput: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: Colors.textPrimary,
+  },
+  usernameSuffix: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    paddingRight: 12,
+    fontWeight: "500",
+  },
+  phoneRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+    marginBottom: 16,
+  },
+  phonePrefix: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: Colors.textPrimary,
+    fontWeight: "600",
+    borderRightWidth: 1,
+    borderRightColor: Colors.border,
+  },
+  phoneInput: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: Colors.textPrimary,
+  },
+  sectionDivider: {
+    height: 1,
+    backgroundColor: Colors.border,
+    marginTop: 24,
+    marginBottom: 20,
+  },
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: Colors.textPrimary,
+    marginBottom: 16,
+  },
+  pwRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+    marginBottom: 4,
+  },
+  pwRowError: { borderColor: Colors.error },
+  pwInput: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: Colors.textPrimary,
+  },
+  eyeBtn: { paddingHorizontal: 12, paddingVertical: 12 },
+  eyeIcon: { fontSize: 13, color: Colors.textMuted, fontWeight: "600" },
+  fieldError: { fontSize: 12, color: Colors.error, marginBottom: 4 },
+  pwHint: { fontSize: 11, color: Colors.textMuted, marginBottom: 16 },
   saveBtn: {
     marginTop: 8,
     backgroundColor: Colors.primary,
@@ -212,6 +398,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     alignItems: "center",
   },
+  changePwBtn: { marginTop: 4, marginBottom: 8 },
   btnDisabled: { opacity: 0.5 },
   saveBtnText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
 });

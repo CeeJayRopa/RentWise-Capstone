@@ -68,6 +68,8 @@ export default function Financials() {
   const [dateFilter, setDateFilter] = useState<DateFilter>("Monthly");
   const [search, setSearch] = useState("");
   const [sidebarVisible, setSidebarVisible] = useState(false);
+  const [showPeriodDropdown, setShowPeriodDropdown] = useState(false);
+  const [showStatusDropdown, setShowStatusDropdown] = useState(false);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -191,7 +193,7 @@ export default function Financials() {
         <Text style={styles.viewOnly}>View Only</Text>
       </View>
 
-      <View style={styles.filters}>
+      <View style={[styles.filters, (showPeriodDropdown || showStatusDropdown) && styles.filtersOpen]}>
         <TextInput
           style={styles.searchInput}
           placeholder="Search tenant or building..."
@@ -201,25 +203,59 @@ export default function Financials() {
         />
 
         <View style={styles.filterRow}>
-          {(["All", "Paid", "Unpaid"] as StatusFilter[]).map((s) => (
+          {/* Period Dropdown */}
+          <View style={[styles.dropdownWrapper, showPeriodDropdown && styles.dropdownWrapperOpen]}>
+            <Text style={styles.dropdownLabel}>Period</Text>
             <TouchableOpacity
-              key={s}
-              style={[styles.chip, statusFilter === s && styles.chipActive]}
-              onPress={() => setStatusFilter(s)}
+              style={[styles.dropdownTrigger, showPeriodDropdown && styles.dropdownTriggerOpen]}
+              onPress={() => { setShowPeriodDropdown((v) => !v); setShowStatusDropdown(false); }}
+              activeOpacity={0.8}
             >
-              <Text style={[styles.chipText, statusFilter === s && styles.chipTextActive]}>{s}</Text>
+              <Text style={styles.dropdownTriggerText}>{dateFilter}</Text>
+              <Text style={styles.dropdownArrow}>{showPeriodDropdown ? "▴" : "▾"}</Text>
             </TouchableOpacity>
-          ))}
-          <View style={styles.chipSpacer} />
-          {(["Daily", "Weekly", "Monthly"] as DateFilter[]).map((d) => (
+            {showPeriodDropdown && (
+              <View style={styles.dropdownMenu}>
+                {(["Daily", "Monthly"] as DateFilter[]).map((d) => (
+                  <TouchableOpacity
+                    key={d}
+                    style={[styles.dropdownMenuItem, dateFilter === d && styles.dropdownMenuItemActive]}
+                    onPress={() => { setDateFilter(d); setShowPeriodDropdown(false); }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.dropdownMenuItemText, dateFilter === d && styles.dropdownMenuItemTextActive]}>{d}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+
+          {/* Payment Status Dropdown */}
+          <View style={[styles.dropdownWrapper, showStatusDropdown && styles.dropdownWrapperOpen]}>
+            <Text style={styles.dropdownLabel}>Payment Status</Text>
             <TouchableOpacity
-              key={d}
-              style={[styles.chip, dateFilter === d && styles.chipActive]}
-              onPress={() => setDateFilter(d)}
+              style={[styles.dropdownTrigger, showStatusDropdown && styles.dropdownTriggerOpen]}
+              onPress={() => { setShowStatusDropdown((v) => !v); setShowPeriodDropdown(false); }}
+              activeOpacity={0.8}
             >
-              <Text style={[styles.chipText, dateFilter === d && styles.chipTextActive]}>{d}</Text>
+              <Text style={styles.dropdownTriggerText}>{statusFilter}</Text>
+              <Text style={styles.dropdownArrow}>{showStatusDropdown ? "▴" : "▾"}</Text>
             </TouchableOpacity>
-          ))}
+            {showStatusDropdown && (
+              <View style={styles.dropdownMenu}>
+                {(["All", "Paid", "Unpaid"] as StatusFilter[]).map((s) => (
+                  <TouchableOpacity
+                    key={s}
+                    style={[styles.dropdownMenuItem, statusFilter === s && styles.dropdownMenuItemActive]}
+                    onPress={() => { setStatusFilter(s); setShowStatusDropdown(false); }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.dropdownMenuItemText, statusFilter === s && styles.dropdownMenuItemTextActive]}>{s}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
         </View>
       </View>
 
@@ -277,6 +313,7 @@ const styles = StyleSheet.create({
   pageTitle: { fontSize: 16, fontWeight: "700", color: "#FFFFFF" },
   viewOnly: { fontSize: 11, color: "rgba(255,255,255,0.7)", fontStyle: "italic" },
   filters: { backgroundColor: Colors.surface, padding: 12, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  filtersOpen: { zIndex: 50, elevation: 5 },
   searchInput: {
     backgroundColor: Colors.inputBackground,
     borderWidth: 1,
@@ -288,19 +325,79 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     marginBottom: 10,
   },
-  filterRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 16,
+  filterRow: { flexDirection: "row", gap: 10 },
+  dropdownWrapper: { flex: 1 },
+  dropdownWrapperOpen: { zIndex: 100, elevation: 10 },
+  dropdownLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: Colors.textMuted,
+    marginBottom: 4,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  dropdownTrigger: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: Colors.inputBackground,
     borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: Colors.inputBackground,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
   },
-  chipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  chipText: { fontSize: 12, color: Colors.textSecondary },
-  chipTextActive: { color: "#FFFFFF", fontWeight: "600" },
-  chipSpacer: { flex: 1 },
+  dropdownTriggerOpen: {
+    borderColor: Colors.primary,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+  },
+  dropdownTriggerText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: Colors.textPrimary,
+  },
+  dropdownArrow: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginLeft: 6,
+  },
+  dropdownMenu: {
+    position: "absolute",
+    top: 56,
+    left: 0,
+    right: 0,
+    zIndex: 200,
+    elevation: 10,
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: Colors.primary,
+    borderBottomLeftRadius: 8,
+    borderBottomRightRadius: 8,
+    backgroundColor: Colors.surface,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    overflow: "hidden",
+  },
+  dropdownMenuItem: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  dropdownMenuItemActive: {
+    backgroundColor: Colors.primary + "18",
+  },
+  dropdownMenuItemText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  dropdownMenuItemTextActive: {
+    color: Colors.primary,
+    fontWeight: "700",
+  },
   loader: { marginTop: 60 },
   list: { padding: 12, gap: 8, paddingBottom: 32 },
   empty: { textAlign: "center", color: Colors.textMuted, marginTop: 60, fontSize: 14 },

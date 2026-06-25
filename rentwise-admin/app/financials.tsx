@@ -543,7 +543,7 @@ export default function Financials() {
             <View style={styles.colHeader}>
               <Text style={styles.colHeaderText}>Tenant Info</Text>
 
-              <Text style={styles.colHeaderAction}>Action</Text>
+
             </View>
 
             {filteredRows.length === 0 ? (
@@ -578,123 +578,118 @@ export default function Financials() {
                       </Text>
                     </View>
 
-                    {/* VIEW INFO BUTTON */}
-                    <TouchableOpacity
-                      style={styles.profileBtn}
-                      onPress={() => {
-                        router.push({
-                          pathname: "/tenant-preview",
+                    <View style={styles.rowDividerVertical} />
 
-                          params: {
-                            tenantId: item.id,
-                          },
-                        });
-                      }}
-                    >
-                      <Text style={styles.profileBtnText}>View Info</Text>
-                    </TouchableOpacity>
-
-                    {/* PAYMENT BUTTON */}
-                    <TouchableOpacity
-                      style={[
-                        styles.toggleBtn,
-
-                        item.status !== "unpaid" && styles.toggleBtnPaid,
-                      ]}
-                      onPress={async () => {
-                        if (item.status === "online") {
-                          setSelectedTenant(item);
-
-                          // DEBUG: surface every pending doc for this tenant so
-                          // stale docs with wrong rentAmount are visible in logs
-                          const debugSnap = await getDocs(
-                            query(
-                              collection(db, "payments"),
-                              where("userId", "==", item.id),
-                              where("status", "==", "pending"),
-                            ),
-                          );
-                          console.log(
-                            "ADMIN DEBUG — pending docs for",
-                            item.id,
-                            "count:",
-                            debugSnap.docs.length,
-                          );
-                          debugSnap.docs.forEach((d) => {
-                            const p = d.data();
-                            console.log(
-                              "  id:", d.id,
-                              "| amount:", p.amount,
-                              "| rentAmount:", p.rentAmount,
-                              "| createdAt:", p.createdAt,
-                            );
-                          });
-
-                          // Fetch the exact payment computeRows already identified
-                          // instead of guessing via docs[0]
-                          if (!item.paymentId) return;
-
-                          const paymentSnap = await getDoc(
-                            doc(db, "payments", item.paymentId),
-                          );
-
-                          if (!paymentSnap.exists()) {
-                            console.log(
-                              "ADMIN: payment not found, id:",
-                              item.paymentId,
-                            );
-                            return;
-                          }
-
-                          const onlinePayment = paymentSnap.data();
-
-                          console.log(
-                            "ADMIN: fetched paymentId:", item.paymentId,
-                            "| amount:", onlinePayment.amount,
-                            "| rentAmount:", onlinePayment.rentAmount,
-                          );
-
-                          setReceiptData({
-                            tenantName: item.name,
-                            buildingNumber: item.buildingNumber,
-                            spaceId: item.spaceId,
-
-                            rentAmount: computeRentAmount(
-                              item.rent,
-                              item.paymentSchedule,
-                            ),
-                            payment: onlinePayment.amount ?? 0,
-
-                            receipt: onlinePayment.receipt,
-
-                            paymentId: item.paymentId,
-                          });
-
-                          setOnlineConfirmModal(true);
-                        } else if (item.status === "unpaid") {
-                          setSelectedTenant(item);
-
-                          setCashReceived("");
-
-                          setPaymentModal(true);
-                        }
-                      }}
-                      disabled={item.status === "paid"}
-                    >
-                      <Text
+                    {/* ACTION BUTTONS — Set to Paid on top, View Info below */}
+                    <View style={styles.actionBtns}>
+                      {/* PAYMENT BUTTON */}
+                      <TouchableOpacity
                         style={[
-                          styles.toggleBtnText,
-
-                          item.status !== "unpaid" && styles.toggleBtnTextPaid,
+                          styles.toggleBtn,
+                          item.status !== "unpaid" && styles.toggleBtnPaid,
                         ]}
+                        onPress={async () => {
+                          if (item.status === "online") {
+                            setSelectedTenant(item);
+
+                            // DEBUG: surface every pending doc for this tenant so
+                            // stale docs with wrong rentAmount are visible in logs
+                            const debugSnap = await getDocs(
+                              query(
+                                collection(db, "payments"),
+                                where("userId", "==", item.id),
+                                where("status", "==", "pending"),
+                              ),
+                            );
+                            console.log(
+                              "ADMIN DEBUG — pending docs for",
+                              item.id,
+                              "count:",
+                              debugSnap.docs.length,
+                            );
+                            debugSnap.docs.forEach((d) => {
+                              const p = d.data();
+                              console.log(
+                                "  id:", d.id,
+                                "| amount:", p.amount,
+                                "| rentAmount:", p.rentAmount,
+                                "| createdAt:", p.createdAt,
+                              );
+                            });
+
+                            // Fetch the exact payment computeRows already identified
+                            // instead of guessing via docs[0]
+                            if (!item.paymentId) return;
+
+                            const paymentSnap = await getDoc(
+                              doc(db, "payments", item.paymentId),
+                            );
+
+                            if (!paymentSnap.exists()) {
+                              console.log(
+                                "ADMIN: payment not found, id:",
+                                item.paymentId,
+                              );
+                              return;
+                            }
+
+                            const onlinePayment = paymentSnap.data();
+
+                            console.log(
+                              "ADMIN: fetched paymentId:", item.paymentId,
+                              "| amount:", onlinePayment.amount,
+                              "| rentAmount:", onlinePayment.rentAmount,
+                            );
+
+                            setReceiptData({
+                              tenantName: item.name,
+                              buildingNumber: item.buildingNumber,
+                              spaceId: item.spaceId,
+                              rentAmount: computeRentAmount(
+                                item.rent,
+                                item.paymentSchedule,
+                              ),
+                              payment: onlinePayment.amount ?? 0,
+                              receipt: onlinePayment.receipt,
+                              paymentId: item.paymentId,
+                            });
+
+                            setOnlineConfirmModal(true);
+                          } else if (item.status === "unpaid") {
+                            setSelectedTenant(item);
+                            setCashReceived("");
+                            setPaymentModal(true);
+                          }
+                        }}
+                        disabled={item.status === "paid"}
                       >
-                        {item.status === "unpaid"
-                          ? "Set to Paid"
-                          : item.status === "online"
-                            ? "Confirm"
-                            : "Paid"}
-                      </Text>
-                    </TouchableOpacity>
+                        <Text
+                          style={[
+                            styles.toggleBtnText,
+                            item.status !== "unpaid" && styles.toggleBtnTextPaid,
+                          ]}
+                        >
+                          {item.status === "unpaid"
+                            ? "Set to Paid"
+                            : item.status === "online"
+                              ? "Confirm"
+                              : "Paid"}
+                        </Text>
+                      </TouchableOpacity>
+
+                      {/* VIEW INFO BUTTON */}
+                      <TouchableOpacity
+                        style={styles.profileBtn}
+                        onPress={() => {
+                          router.push({
+                            pathname: "/tenant-preview",
+                            params: { tenantId: item.id },
+                          });
+                        }}
+                      >
+                        <Text style={styles.profileBtnText}>View Info</Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 )}
               />
@@ -1108,13 +1103,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "#F5F5F5",
   },
+  actionBtns: {
+    flexDirection: "column",
+    alignItems: "stretch",
+    gap: 6,
+    marginLeft: 8,
+    flexShrink: 0,
+  },
   profileBtn: {
     borderWidth: 1,
     borderColor: "#2D6A4F",
     borderRadius: 20,
     paddingVertical: 8,
     paddingHorizontal: 12,
-    marginBottom: 8,
     alignItems: "center",
   },
 
@@ -1218,6 +1219,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   rowDivider: { borderBottomWidth: 1, borderBottomColor: "#EBEBEB" },
+  rowDividerVertical: {
+    width: 2,
+    backgroundColor: "#E0E0E0",
+    alignSelf: "stretch",
+    marginHorizontal: 5,
+  },
   rowLeft: { flex: 1, flexShrink: 1 },
   rowText: { fontSize: 13, color: "#1A1A1A", lineHeight: 20 },
 
@@ -1227,11 +1234,8 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     paddingVertical: 8,
     paddingHorizontal: 14,
-    minWidth: 100,
     alignItems: "center",
     backgroundColor: "#FFFFFF",
-    flexShrink: 0,
-    marginLeft: 8,
   },
   toggleBtnPaid: { backgroundColor: "#EBF5EB", borderColor: "#2D6A4F" },
   toggleBtnText: { fontSize: 13, fontWeight: "600", color: "#1A1A1A" },

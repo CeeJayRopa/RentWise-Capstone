@@ -21,6 +21,7 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleLogin = async () => {
     setError("");
@@ -33,14 +34,13 @@ export default function Login() {
     setLoading(true);
 
     try {
+      let email = username.trim();
       const userDoc = await getUserByUsername(username.trim());
-
-      if (!userDoc) {
-        setError("Invalid username or password.");
-        return;
+      if (userDoc) {
+        email = userDoc.email;
       }
 
-      await loginUser(userDoc.email, password);
+      await loginUser(email, password);
 
       router.replace("/welcome");
     } catch (err) {
@@ -65,10 +65,10 @@ export default function Login() {
           <Text style={styles.subtitle}>Sign in to your account</Text>
 
           <View style={styles.field}>
-            <Text style={styles.label}>Username</Text>
+            <Text style={styles.label}>Email</Text>
             <TextInput
               style={styles.input}
-              placeholder="Enter your username"
+              placeholder="example@rentwise.app"
               placeholderTextColor={Colors.textMuted}
               value={username}
               onChangeText={(text) => {
@@ -83,18 +83,27 @@ export default function Login() {
 
           <View style={styles.field}>
             <Text style={styles.label}>Password</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter your password"
-              placeholderTextColor={Colors.textMuted}
-              value={password}
-              onChangeText={(text) => {
-                setPassword(text);
-                setError("");
-              }}
-              secureTextEntry
-              editable={!loading}
-            />
+            <View style={styles.passwordContainer}>
+              <TextInput
+                style={styles.passwordInput}
+                placeholder="Enter your password"
+                placeholderTextColor={Colors.textMuted}
+                value={password}
+                onChangeText={(text) => {
+                  setPassword(text);
+                  setError("");
+                }}
+                secureTextEntry={!showPassword}
+                editable={!loading}
+              />
+              <TouchableOpacity
+                style={styles.eyeBtn}
+                onPress={() => setShowPassword((v) => !v)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.eyeIcon}>{showPassword ? "Hide" : "Show"}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -191,6 +200,30 @@ const styles = StyleSheet.create({
   buttonText: {
     color: "#FFFFFF",
     fontSize: 15,
+    fontWeight: "600",
+  },
+  passwordContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.inputBackground,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+  },
+  passwordInput: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: Colors.textPrimary,
+  },
+  eyeBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  eyeIcon: {
+    fontSize: 13,
+    color: Colors.textMuted,
     fontWeight: "600",
   },
 });
