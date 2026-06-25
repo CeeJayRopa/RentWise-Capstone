@@ -1,58 +1,74 @@
-import { View, Text, StyleSheet, TouchableOpacity, Platform, } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Platform,
+} from "react-native";
 import { useEffect, useState } from "react";
 import { router } from "expo-router";
 import StallDetails from "./stall-details";
 
 export default function MarketMap() {
   const [Mapbox, setMapbox] = useState<any>(null);
-
   const [showVacant, setShowVacant] = useState(false);
 
   useEffect(() => {
     if (Platform.OS !== "web") {
       import("@rnmapbox/maps").then((module) => {
         const map = module.default;
-
         map.setAccessToken("YOUR_MAPBOX_TOKEN");
-
         setMapbox(() => map);
       });
     }
   }, []);
 
   return (
-    <View style={styles.container}>
-      {Platform.OS === "web" ? (
-        <View style={styles.webMap}>
-          <Text style={styles.title}>2D Market View</Text>
+    <View style={styles.screen}>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <Text style={styles.backIcon}>◀</Text>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>2D Market View</Text>
+        <View style={styles.backBtn} />
+      </View>
 
-          <Text>Ka Domeng Talipapa Map</Text>
-        </View>
-      ) : Mapbox ? (
-        <Mapbox.MapView style={styles.map}>
-          <Mapbox.Camera
-            zoomLevel={16}
-            centerCoordinate={[
-              121.0437,
+      {/* Map area */}
+      <View style={styles.mapArea}>
+        {Platform.OS !== "web" && Mapbox ? (
+          <Mapbox.MapView style={StyleSheet.absoluteFill}>
+            <Mapbox.Camera
+              zoomLevel={16}
+              centerCoordinate={[121.0437, 14.676]}
+            />
+          </Mapbox.MapView>
+        ) : (
+          <View style={styles.placeholder}>
+            <View style={styles.diagLine1} />
+            <View style={styles.diagLine2} />
+          </View>
+        )}
 
-              14.676,
-            ]}
-          />
-        </Mapbox.MapView>
-      ) : (
-        <Text>Loading Map...</Text>
-      )}
+        {/* Stall details overlay (floats over the map) */}
+        {showVacant && (
+          <View style={styles.stallOverlay}>
+            <StallDetails onClose={() => setShowVacant(false)} />
+          </View>
+        )}
+      </View>
 
-      <View style={styles.menu}>
+      {/* Bottom buttons */}
+      <View style={styles.bottomBar}>
         <TouchableOpacity
-          style={styles.button}
+          style={styles.actionBtn}
           onPress={() => setShowVacant(true)}
         >
-          <Text>Vacant Stalls</Text>
+          <Text style={styles.actionBtnText}>Vacant Stalls</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={styles.button}
+          style={styles.actionBtn}
           onPress={() => {
             if (Platform.OS === "web") {
               alert("AR viewing is only available on mobile devices.");
@@ -61,108 +77,84 @@ export default function MarketMap() {
             }
           }}
         >
-          <Text>AR Viewing</Text>
+          <Text style={styles.actionBtnText}>AR Viewing</Text>
         </TouchableOpacity>
       </View>
-
-      {showVacant && (
-        <View style={styles.popup}>
-          <StallDetails />
-
-          <TouchableOpacity
-            style={styles.closeButton}
-            onPress={() => setShowVacant(false)}
-          >
-            <Text>Close</Text>
-          </TouchableOpacity>
-        </View>
-      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  screen: {
     flex: 1,
+    backgroundColor: "#000",
+  },
 
-    justifyContent: "center",
-
+  /* Header */
+  header: {
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#1a1a1a",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    paddingTop: 48,
   },
+  backBtn: { width: 36, alignItems: "center" },
+  backIcon: { color: "#fff", fontSize: 20 },
+  headerTitle: { color: "#fff", fontSize: 18, fontWeight: "bold" },
 
-  map: {
+  /* Map */
+  mapArea: {
     flex: 1,
-
-    width: "100%",
+    backgroundColor: "#d4d4d4",
+    overflow: "hidden",
   },
-
-  webMap: {
-    flex: 1,
-
-    justifyContent: "center",
-
-    alignItems: "center",
-  },
-
-  menu: {
+  placeholder: { flex: 1, backgroundColor: "#d4d4d4" },
+  diagLine1: {
     position: "absolute",
-
-    bottom: 40,
-
-    left: 20,
-
-    right: 20,
+    top: "50%",
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: "#aaa",
+    transform: [{ rotate: "34deg" }, { scaleX: 3 }],
   },
-
-  button: {
-    padding: 15,
-
-    borderWidth: 1,
-
-    borderRadius: 10,
-
-    backgroundColor: "#fff",
-
-    alignItems: "center",
-
-    marginTop: 10,
-  },
-
-  popup: {
+  diagLine2: {
     position: "absolute",
-
-    top: 100,
-
-    left: 20,
-
-    right: 20,
-
-    bottom: 100,
-
-    backgroundColor: "#fff",
-
-    borderRadius: 15,
-
-    borderWidth: 1,
-
-    padding: 20,
+    top: "50%",
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: "#aaa",
+    transform: [{ rotate: "-34deg" }, { scaleX: 3 }],
   },
 
-  closeButton: {
-    padding: 15,
-
-    borderWidth: 1,
-
-    borderRadius: 10,
-
+  /* Stall popup overlay */
+  stallOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: "center",
     alignItems: "center",
-
-    marginTop: 10,
   },
 
-  title: {
-    fontSize: 25,
-
-    fontWeight: "bold",
+  /* Bottom bar */
+  bottomBar: {
+    flexDirection: "row",
+    gap: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    backgroundColor: "#fff",
   },
+  actionBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    backgroundColor: "#5a9e6f",
+    borderRadius: 24,
+    alignItems: "center",
+  },
+  actionBtnText: { color: "#fff", fontSize: 15, fontWeight: "600" },
 });
