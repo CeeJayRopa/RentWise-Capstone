@@ -14,6 +14,8 @@ import { collection, getDocs, query, where } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
+import * as FileSystem from "expo-file-system/legacy";
+import DateTimePicker, { DateTimePickerEvent } from "@react-native-community/datetimepicker";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
@@ -47,6 +49,16 @@ function formatDate(ts: any): string {
   if (!ts) return "—";
   const d: Date = ts.toDate ? ts.toDate() : new Date(ts);
   return d.toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" });
+}
+
+function isSameDay(r: ReportDoc, target: Date): boolean {
+  if (!r.createdAt) return false;
+  const d: Date = r.createdAt.toDate ? r.createdAt.toDate() : new Date(r.createdAt);
+  return (
+    d.getFullYear() === target.getFullYear() &&
+    d.getMonth() === target.getMonth() &&
+    d.getDate() === target.getDate()
+  );
 }
 
 function groupByDate(reports: ReportDoc[]): { date: string; items: ReportDoc[] }[] {
@@ -93,6 +105,8 @@ export default function DailyReports() {
   const [reports, setReports] = useState<ReportDoc[]>([]);
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -122,17 +136,30 @@ export default function DailyReports() {
     }
   };
 
+  const onDateChange = (_: DateTimePickerEvent, date?: Date) => {
+    setShowDatePicker(false);
+    if (date) setSelectedDate(date);
+  };
+
   const downloadPdf = async () => {
     setDownloading(true);
     try {
-      const groups = groupByDate(reports);
+      const filtered = reports.filter((r) => isSameDay(r, selectedDate));
+      if (filtered.length === 0) {
+        Alert.alert("No Reports", `No approved reports found for ${formatDate({ toDate: () => selectedDate })}.`);
+        setDownloading(false);
+        return;
+      }
+      const groups = groupByDate(filtered);
       const html = buildHtml(groups);
-      const { uri } = await Print.printToFileAsync({ html });
+      const { base64 } = await Print.printToFileAsync({ html, base64: true });
+      const cacheUri = FileSystem.cacheDirectory + "daily-reports.pdf";
+      await FileSystem.writeAsStringAsync(cacheUri, base64!, { encoding: FileSystem.EncodingType.Base64 });
       const canShare = await Sharing.isAvailableAsync();
       if (canShare) {
-        await Sharing.shareAsync(uri, { mimeType: "application/pdf", dialogTitle: "RentWise Daily Reports" });
+        await Sharing.shareAsync(cacheUri, { mimeType: "application/pdf", dialogTitle: "RentWise Daily Reports" });
       } else {
-        Alert.alert("Saved", `PDF saved to: ${uri}`);
+        Alert.alert("Saved", `PDF saved to: ${cacheUri}`);
       }
     } catch (err) {
       console.error(err);
@@ -155,14 +182,27 @@ export default function DailyReports() {
           <Text style={styles.menuIcon}>☰</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>RentWise</Text>
-        <TouchableOpacity style={styles.pdfBtn} onPress={downloadPdf} disabled={downloading || loading || reports.length === 0} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.pdfBtn} onPress={downloadPdf} disabled={downloading || loading || reports.filter((r) => isSameDay(r, selectedDate)).length === 0} activeOpacity={0.7}>
           {downloading ? <ActivityIndicator color={Colors.primary} size="small" /> : <Text style={styles.pdfBtnText}>PDF</Text>}
         </TouchableOpacity>
       </View>
 
       <View style={styles.subHeader}>
         <Text style={styles.pageTitle}>Daily Reports</Text>
+        <TouchableOpacity style={styles.dateBtn} onPress={() => setShowDatePicker(true)} activeOpacity={0.7}>
+          <Text style={styles.dateBtnText}>{formatDate({ toDate: () => selectedDate })}</Text>
+        </TouchableOpacity>
       </View>
+
+      {showDatePicker && (
+        <DateTimePicker
+          value={selectedDate}
+          mode="date"
+          display="default"
+          maximumDate={new Date()}
+          onChange={onDateChange}
+        />
+      )}
 
       {loading ? (
         <ActivityIndicator color={Colors.primary} size="large" style={styles.loader} />
@@ -218,8 +258,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   pdfBtnText: { fontSize: 12, fontWeight: "700", color: Colors.primary },
-  subHeader: { backgroundColor: Colors.primary, paddingVertical: 12, paddingHorizontal: 16 },
+  subHeader: { backgroundColor: Colors.primary, paddingVertical: 12, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   pageTitle: { fontSize: 16, fontWeight: "700", color: "#FFFFFF" },
+  dateBtn: { backgroundColor: "rgba(255,255,255,0.2)", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
+  dateBtnText: { fontSize: 12, fontWeight: "600", color: "#FFFFFF" },
   loader: { marginTop: 60 },
   emptyBox: { flex: 1, alignItems: "center", justifyContent: "center" },
   emptyText: { fontSize: 16, color: Colors.textMuted, fontWeight: "600" },
