@@ -30,7 +30,7 @@ export const getUserByUsername = async (
   const snap1 = await getDocs(q1);
   if (!snap1.empty) {
     const d = snap1.docs[0];
-    return { uid: d.id, ...d.data() };
+    return { uid: d.id, ...d.data() } as { uid: string; email: string; [key: string]: any };
   }
 
   // Try camelCase "userName" field (admin app convention)
@@ -42,7 +42,7 @@ export const getUserByUsername = async (
   const snap2 = await getDocs(q2);
   if (!snap2.empty) {
     const d = snap2.docs[0];
-    return { uid: d.id, ...d.data() };
+    return { uid: d.id, ...d.data() } as { uid: string; email: string; [key: string]: any };
   }
 
   return null;
