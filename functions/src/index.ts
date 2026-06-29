@@ -3,6 +3,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { https as httpsV1 } from "firebase-functions/v1";
 
 export { sendPaymentReminders } from "./reminderScheduler";
+export { sendPushOnNotification } from "./pushNotifications";
 
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";

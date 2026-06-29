@@ -567,7 +567,7 @@ function Field({
             onPress={() => setVisible((v) => !v)}
             activeOpacity={0.7}
           >
-            <Text style={styles.fieldEyeIcon}>{visible ? "Hide" : "Show"}</Text>
+            <Text style={styles.fieldEyeIcon}>{visible ? "🙈" : "👁"}</Text>
           </TouchableOpacity>
         </View>
       ) : (
@@ -703,9 +703,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   fieldEyeIcon: {
-    fontSize: 13,
-    color: Colors.textMuted,
-    fontWeight: "600",
+    fontSize: 18,
   },
 
   // Username with @rentwise.app suffix

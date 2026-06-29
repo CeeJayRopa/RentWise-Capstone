@@ -4,7 +4,15 @@
     "slug": "rentwise-tenant",
     "scheme": "rentwise",
     "plugins": [
-      "expo-router"
+      "expo-router",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#F5C518",
+          "defaultChannel": "default"
+        }
+      ]
     ],
     "version": "1.0.0",
     "orientation": "portrait",

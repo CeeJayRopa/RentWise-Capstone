@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -8,15 +8,16 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
+  Animated,
+  Easing,
 } from "react-native";
 import { router } from "expo-router";
 import { onAuthStateChanged, updatePassword } from "firebase/auth";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 
 import { auth } from "../shared/services/auth";
 import { getUserById, updateUserProfile } from "../shared/services/userServices";
-import { Colors } from "../shared/constants/color";
-import OwnerSidebar from "./components/OwnerSidebar";
 
 export default function OwnerProfile() {
   const insets = useSafeAreaInsets();
@@ -27,7 +28,7 @@ export default function OwnerProfile() {
   const [lastName, setLastName] = useState("");
   const [username, setUsername] = useState("");
   const [contactNo, setContactNo] = useState("");
-  const [sidebarVisible, setSidebarVisible] = useState(false);
+  const [original, setOriginal] = useState({ firstName: "", lastName: "", username: "", contactNo: "" });
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -37,9 +38,13 @@ export default function OwnerProfile() {
   const [confirmError, setConfirmError] = useState("");
   const [changingPw, setChangingPw] = useState(false);
 
+  const toastAnim = useRef(new Animated.Value(0)).current;
+  const [toastVisible, setToastVisible] = useState(false);
+  const [toastMsg, setToastMsg] = useState("");
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
-      if (!user) { router.replace("/"); return; }
+      if (!user) { router.replace("/login"); return; }
       setChecking(false);
       loadProfile(user.uid);
     });
@@ -50,10 +55,15 @@ export default function OwnerProfile() {
     try {
       const data = await getUserById(uid);
       if (data) {
-        setFirstName(data.firstName ?? "");
-        setLastName(data.lastName ?? "");
-        setUsername(data.username ?? "");
-        setContactNo(data.contactNo ?? "");
+        const fn = data.firstName ?? "";
+        const ln = data.lastName ?? "";
+        const un = data.userName ?? "";
+        const cn = data.contactNo ?? "";
+        setFirstName(fn);
+        setLastName(ln);
+        setUsername(un);
+        setContactNo(cn);
+        setOriginal({ firstName: fn, lastName: ln, username: un, contactNo: cn });
       }
     } catch (err) {
       console.error(err);
@@ -62,18 +72,29 @@ export default function OwnerProfile() {
     }
   };
 
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    setToastVisible(true);
+    toastAnim.setValue(0);
+    Animated.sequence([
+      Animated.timing(toastAnim, { toValue: 1, duration: 250, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      Animated.delay(1800),
+      Animated.timing(toastAnim, { toValue: 0, duration: 300, easing: Easing.in(Easing.ease), useNativeDriver: true }),
+    ]).start(() => setToastVisible(false));
+  };
+
   const handleSave = async () => {
     const user = auth.currentUser;
     if (!user) return;
     setSaving(true);
     try {
-      await updateUserProfile(user.uid, {
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        username: username.trim(),
-        contactNo: contactNo.trim(),
-      });
-      Alert.alert("Success", "Profile updated successfully.");
+      const fn = firstName.trim();
+      const ln = lastName.trim();
+      const un = username.trim();
+      const cn = contactNo.trim();
+      await updateUserProfile(user.uid, { firstName: fn, lastName: ln, username: un, contactNo: cn });
+      setOriginal({ firstName: fn, lastName: ln, username: un, contactNo: cn });
+      showToast("Profile saved!");
     } catch (err) {
       console.error(err);
       Alert.alert("Error", "Failed to update profile.");
@@ -83,11 +104,11 @@ export default function OwnerProfile() {
   };
 
   const handleChangePassword = async () => {
-    const pwRegex = /^(?=.*[a-zA-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
+    const pwRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
     let valid = true;
 
     if (!pwRegex.test(newPassword)) {
-      setPwError("8–12 characters with letters, numbers, and special characters.");
+      setPwError("8–12 characters with at least 1 uppercase letter, number & special character.");
       valid = false;
     } else {
       setPwError("");
@@ -112,7 +133,7 @@ export default function OwnerProfile() {
       await updatePassword(user, newPassword);
       setNewPassword("");
       setConfirmPassword("");
-      Alert.alert("Success", "Password changed successfully.");
+      showToast("Password updated!");
     } catch (err: any) {
       if (err?.code === "auth/requires-recent-login") {
         Alert.alert("Session Expired", "Please log out and log in again before changing your password.");
@@ -125,240 +146,264 @@ export default function OwnerProfile() {
   };
 
   if (checking || loading) {
-    return <View style={styles.fullCenter}><ActivityIndicator color={Colors.primary} size="large" /></View>;
+    return (
+      <View style={styles.fullCenter}>
+        <ActivityIndicator color="#0C2D6B" size="large" />
+      </View>
+    );
   }
 
   return (
     <View style={styles.screen}>
+      {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity style={styles.menuBtn} onPress={() => setSidebarVisible(true)} activeOpacity={0.7}>
-          <Text style={styles.menuIcon}>☰</Text>
+        <TouchableOpacity style={styles.headerBtn} onPress={() => router.replace("/dashboard")} activeOpacity={0.7}>
+          <Ionicons name="arrow-back" size={22} color="#E6F1FB" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>RentWise</Text>
-        <View style={styles.menuBtn} />
+        <View style={styles.headerBtn} />
       </View>
 
-      <View style={styles.banner}>
-        <Text style={styles.bannerText}>My Account</Text>
+      {/* Sub-header */}
+      <View style={styles.subHeader}>
+        <Text style={styles.subHeaderText}>My Account</Text>
       </View>
 
-      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]} keyboardShouldPersistTaps="handled">
-        <View style={styles.avatarWrapper}>
-          <View style={styles.avatar}>
-            <View style={styles.avatarHead} />
-            <View style={styles.avatarBody} />
-          </View>
-          <View style={styles.editBadge}>
-            <Text style={styles.editBadgeIcon}>✏</Text>
-          </View>
-        </View>
-
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 40 }]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Last Name */}
         <Text style={styles.fieldLabel}>Last Name</Text>
-        <TextInput style={styles.input} value={lastName} onChangeText={setLastName} placeholder="Last Name" placeholderTextColor={Colors.textMuted} />
+        <TextInput
+          style={styles.input}
+          value={lastName}
+          onChangeText={setLastName}
+          placeholder="Last Name"
+          placeholderTextColor="#B5D4F4"
+        />
 
+        {/* First Name */}
         <Text style={styles.fieldLabel}>First Name</Text>
-        <TextInput style={styles.input} value={firstName} onChangeText={setFirstName} placeholder="First Name" placeholderTextColor={Colors.textMuted} />
+        <TextInput
+          style={styles.input}
+          value={firstName}
+          onChangeText={setFirstName}
+          placeholder="First Name"
+          placeholderTextColor="#B5D4F4"
+        />
 
+        {/* Username */}
         <Text style={styles.fieldLabel}>Username</Text>
-        <View style={styles.usernameRow}>
+        <View style={styles.rowField}>
           <TextInput
-            style={styles.usernameInput}
+            style={styles.rowInput}
             value={username}
             onChangeText={setUsername}
             placeholder="username"
-            placeholderTextColor={Colors.textMuted}
+            placeholderTextColor="#B5D4F4"
             autoCapitalize="none"
           />
-          <Text style={styles.usernameSuffix}>@rentwise.app</Text>
+          <Text style={styles.suffix}>@rentwise.app</Text>
         </View>
 
+        {/* Contact */}
         <Text style={styles.fieldLabel}>Contact No.</Text>
-        <View style={styles.phoneRow}>
-          <Text style={styles.phonePrefix}>+63</Text>
+        <View style={styles.rowField}>
+          <Text style={styles.prefix}>+63</Text>
           <TextInput
-            style={styles.phoneInput}
+            style={styles.rowInput}
             value={contactNo}
             onChangeText={(t) => setContactNo(t.replace(/\D/g, "").slice(0, 11))}
             placeholder="09XXXXXXXXX"
-            placeholderTextColor={Colors.textMuted}
+            placeholderTextColor="#B5D4F4"
             keyboardType="phone-pad"
             maxLength={11}
           />
         </View>
 
+        {/* Save Button */}
         <TouchableOpacity
-          style={[styles.saveBtn, saving && styles.btnDisabled]}
+          style={[styles.saveBtn, (saving || (firstName === original.firstName && lastName === original.lastName && username === original.username && contactNo === original.contactNo)) && styles.btnDisabled]}
           onPress={handleSave}
-          disabled={saving}
+          disabled={saving || (firstName === original.firstName && lastName === original.lastName && username === original.username && contactNo === original.contactNo)}
           activeOpacity={0.8}
         >
-          {saving ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={styles.saveBtnText}>Save</Text>}
+          {saving
+            ? <ActivityIndicator color="#FFFFFF" size="small" />
+            : <Text style={styles.saveBtnText}>Save</Text>
+          }
         </TouchableOpacity>
 
-        <View style={styles.sectionDivider} />
+        {/* Divider */}
+        <View style={styles.divider} />
+
         <Text style={styles.sectionTitle}>Change Password</Text>
 
+        {/* New Password */}
         <Text style={styles.fieldLabel}>New Password</Text>
-        <View style={[styles.pwRow, !!pwError && styles.pwRowError]}>
+        <View style={[styles.pwField, !!pwError && styles.pwFieldError]}>
           <TextInput
             style={styles.pwInput}
             value={newPassword}
-            onChangeText={(t) => { setNewPassword(t); setPwError(""); }}
+            onChangeText={(t) => { setNewPassword(t); setPwError(""); if (confirmPassword && confirmPassword === t) setConfirmError(""); }}
             secureTextEntry={!showNewPass}
             placeholder="New password"
-            placeholderTextColor={Colors.textMuted}
+            placeholderTextColor="#B5D4F4"
             autoCapitalize="none"
+            maxLength={12}
           />
           <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowNewPass((v) => !v)} activeOpacity={0.7}>
-            <Text style={styles.eyeIcon}>{showNewPass ? "Hide" : "Show"}</Text>
+            <Ionicons name={showNewPass ? "eye-outline" : "eye-off-outline"} size={18} color="#1A4DA0" />
           </TouchableOpacity>
         </View>
         {!!pwError && <Text style={styles.fieldError}>{pwError}</Text>}
-        <Text style={styles.pwHint}>8–12 characters, include letters, numbers & special characters</Text>
+        <Text style={styles.pwHint}>Min. 8 characters with Capitalize letter, number and special characters</Text>
 
+        {/* Confirm Password */}
         <Text style={styles.fieldLabel}>Confirm Password</Text>
-        <View style={[styles.pwRow, !!confirmError && styles.pwRowError]}>
+        <View style={[styles.pwField, !!confirmError && styles.pwFieldError]}>
           <TextInput
             style={styles.pwInput}
             value={confirmPassword}
-            onChangeText={(t) => { setConfirmPassword(t); setConfirmError(""); }}
+            onChangeText={(t) => { setConfirmPassword(t); setConfirmError(t && t !== newPassword ? "Passwords do not match." : ""); }}
             secureTextEntry={!showConfirmPass}
             placeholder="Confirm new password"
-            placeholderTextColor={Colors.textMuted}
+            placeholderTextColor="#B5D4F4"
             autoCapitalize="none"
+            maxLength={12}
           />
           <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowConfirmPass((v) => !v)} activeOpacity={0.7}>
-            <Text style={styles.eyeIcon}>{showConfirmPass ? "Hide" : "Show"}</Text>
+            <Ionicons name={showConfirmPass ? "eye-outline" : "eye-off-outline"} size={18} color="#1A4DA0" />
           </TouchableOpacity>
         </View>
         {!!confirmError && <Text style={styles.fieldError}>{confirmError}</Text>}
 
+        {/* Update Password Button */}
         <TouchableOpacity
-          style={[styles.saveBtn, styles.changePwBtn, changingPw && styles.btnDisabled]}
+          style={[styles.updatePwBtn, (changingPw || newPassword.length < 8 || confirmPassword.length < 8) && styles.btnDisabled]}
           onPress={handleChangePassword}
-          disabled={changingPw}
+          disabled={changingPw || newPassword.length < 8 || confirmPassword.length < 8}
           activeOpacity={0.8}
         >
-          {changingPw ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={styles.saveBtnText}>Update Password</Text>}
+          {changingPw
+            ? <ActivityIndicator color="#FFFFFF" size="small" />
+            : <Text style={styles.saveBtnText}>Update Password</Text>
+          }
         </TouchableOpacity>
       </ScrollView>
 
-      <OwnerSidebar visible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
+      {/* Toast */}
+      {toastVisible && (
+        <Animated.View
+          style={[
+            styles.toast,
+            {
+              opacity: toastAnim,
+              transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }],
+            },
+          ]}
+        >
+          <Ionicons name="checkmark-circle-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
+          <Text style={styles.toastText}>{toastMsg}</Text>
+        </Animated.View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#EBEBEB" },
-  fullCenter: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#EBEBEB" },
+  screen: { flex: 1, backgroundColor: "#F0F4FA" },
+  fullCenter: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#F0F4FA" },
+
   header: {
-    backgroundColor: "#1A1A1A",
+    backgroundColor: "#0C2D6B",
     paddingBottom: 14,
     paddingHorizontal: 16,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  menuBtn: { width: 36, alignItems: "center", justifyContent: "center" },
-  menuIcon: { fontSize: 24, color: "#FFFFFF" },
+  headerBtn: { width: 36, alignItems: "center", justifyContent: "center" },
   headerTitle: { fontSize: 20, fontWeight: "700", color: "#FFFFFF" },
-  banner: { backgroundColor: "#8D7B6A", paddingVertical: 18, alignItems: "center" },
-  bannerText: { fontSize: 18, fontWeight: "700", color: "#FFFFFF" },
-  content: { alignItems: "center", paddingHorizontal: 32, paddingTop: 28 },
-  avatarWrapper: { position: "relative", marginBottom: 28 },
-  avatar: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: "#C8C8C8",
-    overflow: "hidden",
+
+  subHeader: {
+    backgroundColor: "#1A4DA0",
+    paddingVertical: 14,
     alignItems: "center",
-    justifyContent: "flex-end",
   },
-  avatarHead: { width: 30, height: 30, borderRadius: 15, backgroundColor: "#6B6B6B", position: "absolute", top: 16 },
-  avatarBody: { width: 54, height: 38, borderRadius: 27, backgroundColor: "#6B6B6B" },
-  editBadge: {
-    position: "absolute",
-    bottom: 0,
-    right: 0,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "#FFFFFF",
+  subHeaderText: { fontSize: 16, fontWeight: "600", color: "#FFFFFF" },
+
+  scroll: { flex: 1 },
+  content: {
     alignItems: "center",
-    justifyContent: "center",
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 3,
+    paddingHorizontal: 24,
+    paddingTop: 28,
   },
-  editBadgeIcon: { fontSize: 13 },
-  fieldLabel: { alignSelf: "flex-start", fontSize: 13, fontWeight: "600", color: "#333333", marginBottom: 6 },
+
+  fieldLabel: {
+    alignSelf: "flex-start",
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#1A4DA0",
+    marginBottom: 6,
+  },
   input: {
     width: "100%",
     backgroundColor: "#FFFFFF",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#DDDDDD",
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 15,
-    color: "#1A1A1A",
+    color: "#0C2D6B",
     marginBottom: 16,
   },
-  usernameRow: {
+  rowField: {
     width: "100%",
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#FFFFFF",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#DDDDDD",
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
     marginBottom: 16,
   },
-  usernameInput: {
+  rowInput: {
     flex: 1,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 15,
-    color: "#1A1A1A",
+    color: "#0C2D6B",
   },
-  usernameSuffix: {
+  rowFieldReadOnly: {
+    backgroundColor: "#EEF2FA",
+  },
+  rowInputReadOnly: {
+    color: "#6B87B8",
+  },
+  suffix: {
     fontSize: 13,
-    color: Colors.textMuted,
+    color: "#1A4DA0",
     paddingRight: 12,
     fontWeight: "500",
   },
-  phoneRow: {
-    width: "100%",
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#DDDDDD",
-    marginBottom: 16,
-  },
-  phonePrefix: {
+  prefix: {
     paddingHorizontal: 12,
     fontSize: 15,
-    color: "#1A1A1A",
+    color: "#0C2D6B",
     fontWeight: "600",
     borderRightWidth: 1,
-    borderRightColor: "#DDDDDD",
+    borderRightColor: "#B5D4F4",
     paddingVertical: 12,
   },
-  phoneInput: {
-    flex: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: "#1A1A1A",
-  },
+
   saveBtn: {
     marginTop: 20,
-    backgroundColor: Colors.primary,
+    backgroundColor: "#0C2D6B",
     paddingVertical: 14,
     paddingHorizontal: 64,
     borderRadius: 30,
@@ -367,10 +412,10 @@ const styles = StyleSheet.create({
   btnDisabled: { opacity: 0.5 },
   saveBtnText: { fontSize: 16, fontWeight: "700", color: "#FFFFFF" },
 
-  sectionDivider: {
+  divider: {
     width: "100%",
     height: 1,
-    backgroundColor: "#DDDDDD",
+    backgroundColor: "#B5D4F4",
     marginTop: 28,
     marginBottom: 20,
   },
@@ -378,30 +423,61 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
     fontSize: 15,
     fontWeight: "700",
-    color: "#333333",
+    color: "#0C2D6B",
     marginBottom: 16,
   },
-  pwRow: {
+
+  pwField: {
     width: "100%",
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#FFFFFF",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#DDDDDD",
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
     marginBottom: 4,
   },
-  pwRowError: { borderColor: Colors.error },
+  pwFieldError: { borderColor: "#C0392B" },
   pwInput: {
     flex: 1,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 15,
-    color: "#1A1A1A",
+    color: "#0C2D6B",
   },
   eyeBtn: { paddingHorizontal: 12, paddingVertical: 12 },
-  eyeIcon: { fontSize: 13, color: Colors.textMuted, fontWeight: "600" },
-  fieldError: { alignSelf: "flex-start", fontSize: 12, color: Colors.error, marginBottom: 4 },
-  pwHint: { alignSelf: "flex-start", fontSize: 11, color: Colors.textMuted, marginBottom: 16 },
-  changePwBtn: { marginBottom: 8 },
+  fieldError: { alignSelf: "flex-start", fontSize: 12, color: "#C0392B", marginBottom: 4 },
+  pwHint: { alignSelf: "flex-start", fontSize: 11, color: "#7AAEF0", marginBottom: 16 },
+
+  updatePwBtn: {
+    marginTop: 20,
+    backgroundColor: "#1A4DA0",
+    paddingVertical: 14,
+    paddingHorizontal: 48,
+    borderRadius: 30,
+    alignItems: "center",
+    marginBottom: 8,
+  },
+
+  toast: {
+    position: "absolute",
+    bottom: 40,
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#0C2D6B",
+    borderRadius: 24,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+  },
+  toastText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "600",
+  },
 });

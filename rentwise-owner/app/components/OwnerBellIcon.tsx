@@ -1,7 +1,8 @@
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { View, TouchableOpacity, StyleSheet } from "react-native";
 import { useEffect, useState } from "react";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { router } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
@@ -32,14 +33,8 @@ export default function OwnerBellIcon() {
       onPress={() => router.push("/notifications" as any)}
       activeOpacity={0.7}
     >
-      <Text style={styles.icon}>🔔</Text>
-      {unreadCount > 0 && (
-        <View style={styles.badge}>
-          <Text style={styles.badgeText}>
-            {unreadCount > 99 ? "99+" : String(unreadCount)}
-          </Text>
-        </View>
-      )}
+      <Ionicons name="notifications-outline" size={24} color="#E6F1FB" />
+      {unreadCount > 0 && <View style={styles.dot} />}
     </TouchableOpacity>
   );
 }
@@ -50,18 +45,13 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
     justifyContent: "center",
   },
-  icon: { fontSize: 18 },
-  badge: {
+  dot: {
     position: "absolute",
-    top: -6,
-    right: -4,
-    backgroundColor: "#E53935",
-    borderRadius: 9,
-    minWidth: 18,
-    height: 18,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 3,
+    top: -2,
+    right: -2,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#EF9F27",
   },
-  badgeText: { color: "#FFFFFF", fontSize: 10, fontWeight: "bold" },
 });

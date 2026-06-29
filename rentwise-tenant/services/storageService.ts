@@ -20,8 +20,6 @@ export async function uploadReceiptImage(base64Data: string): Promise<string> {
 
     const data = await response.json();
 
-    console.log("Cloudinary Upload Response:", data);
-
     if (!response.ok) {
       throw new Error(data.error?.message || "Cloudinary upload failed");
     }

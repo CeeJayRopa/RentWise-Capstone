@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "jsx": "react-native",
+    "strict": false,
+    "paths": {
+      "firebase/*": ["../rentwise-owner/node_modules/firebase/*"],
+      "react-native": ["../rentwise-owner/node_modules/react-native"],
+      "react-native/*": ["../rentwise-owner/node_modules/react-native/*"],
+      "@react-native-async-storage/async-storage": ["../rentwise-owner/node_modules/@react-native-async-storage/async-storage"]
+    }
+  },
+  "include": ["./**/*.ts", "./**/*.tsx"]
+}

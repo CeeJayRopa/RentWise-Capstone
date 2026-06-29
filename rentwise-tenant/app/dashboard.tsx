@@ -28,7 +28,7 @@ import {
 import { db } from "../shared/services/firestore";
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { auth } from "../shared/firebaseConfig";
 import { getTenantData } from "../services/tenantService";
@@ -38,6 +38,7 @@ import { setPendingCheckoutSession } from "../services/pendingPayment";
 import { logoutUser } from "../services/authService";
 
 import { router, useFocusEffect } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 
 const MONTHS = [
   "January",
@@ -61,30 +62,23 @@ export default function Dashboard() {
     insets.top > 0 ? insets.top : (StatusBar.currentHeight ?? 24);
 
   const [tenant, setTenant] = useState<any>(null);
-
   const [stall, setStall] = useState<any>(null);
-
   const [payments, setPayments] = useState<any[]>([]);
-
   const [loading, setLoading] = useState(true);
-
   const [selectedMonth, setSelectedMonth] = useState(
     MONTHS[new Date().getMonth()],
   );
-
   const [showMonthPicker, setShowMonthPicker] = useState(false);
-
   const [showMenu, setShowMenu] = useState(false);
-
   const [showPayModal, setShowPayModal] = useState(false);
-
   const [showReceiptModal, setShowReceiptModal] = useState(false);
-
   const [selectedPayment, setSelectedPayment] = useState<any>(null);
-
   const [payAmount, setPayAmount] = useState("");
-
   const [redirecting, setRedirecting] = useState(false);
+  const [dropdownTop, setDropdownTop] = useState(0);
+  const [dropdownLeft, setDropdownLeft] = useState(0);
+
+  const monthPillRef = useRef<View>(null);
 
   const monthlyRent = Number(stall?.price || 0);
 
@@ -138,10 +132,16 @@ export default function Dashboard() {
 
   async function handleSignOut() {
     setShowMenu(false);
-
     await logoutUser();
+    router.replace("/login");
+  }
 
-    router.replace("/");
+  function openMonthPicker() {
+    monthPillRef.current?.measure((_x, _y, _w, height, pageX, pageY) => {
+      setDropdownTop(pageY + height + 4);
+      setDropdownLeft(pageX);
+      setShowMonthPicker(true);
+    });
   }
 
   async function handlePayNow() {
@@ -156,7 +156,6 @@ export default function Dashboard() {
       setRedirecting(true);
       const tenantName = tenant ? `${tenant.firstName} ${tenant.lastName}` : "";
       const tenantEmail = tenant?.email || auth.currentUser?.email || "";
-      console.log("[PayNow] tenantName:", tenantName, "email:", tenantEmail);
       const { checkoutSessionId, checkoutUrl } = await createOnlinePayment(
         Number(payAmount),
         { name: tenantName, email: tenantEmail },
@@ -175,9 +174,7 @@ export default function Dashboard() {
 
   function formatDate(date: any) {
     if (!date) return "-";
-
     const d = date.toDate ? date.toDate() : new Date(date);
-
     return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
   }
 
@@ -205,15 +202,11 @@ export default function Dashboard() {
   const remainingBill = monthlyRent - totalPayment;
 
   const history = paymentHistory
-
     .filter((p) => {
       if (!p.date) return false;
-
       const d = p.date.toDate ? p.date.toDate() : new Date(p.date);
-
       return MONTHS[d.getMonth()] === selectedMonth;
     })
-
     .sort(
       (a, b) =>
         new Date(b.date?.toDate ? b.date.toDate() : b.date).getTime() -
@@ -223,14 +216,13 @@ export default function Dashboard() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#1A1A1A" />
+        <ActivityIndicator size="large" color="#0F6E56" />
       </View>
     );
   }
 
   function openReceipt(payment: any) {
     setSelectedPayment(payment);
-
     setShowReceiptModal(true);
   }
 
@@ -243,120 +235,77 @@ export default function Dashboard() {
       />
 
       {/* HEADER */}
-
-      <View
-        style={[
-          styles.header,
-          {
-            paddingTop: topInset,
-          },
-        ]}
-      >
-        <View style={styles.headerSpacer} />
-
+      <View style={[styles.header, { paddingTop: topInset + 14 }]}>
         <Text style={styles.headerTitle}>RentWise</Text>
-
         <BellIcon />
       </View>
 
-      {/* BODY */}
+      {/* PROFILE BANNER */}
+      <View style={styles.banner}>
+        <View style={styles.bannerInfo}>
+          <Text style={styles.bannerWelcome}>Welcome, tenant!</Text>
+          <Text style={styles.bannerName}>
+            {tenant?.firstName} {tenant?.lastName}
+          </Text>
+        </View>
+        <TouchableOpacity style={styles.menuBtn} onPress={() => setShowMenu(true)}>
+          <Ionicons name="ellipsis-horizontal" size={20} color="#E1F5EE" />
+        </TouchableOpacity>
+      </View>
 
+      {/* BODY */}
       <ScrollView
         style={styles.body}
         contentContainerStyle={[
           styles.bodyContent,
-
-          {
-            paddingBottom: insets.bottom + 16,
-          },
+          { paddingBottom: insets.bottom + 16 },
         ]}
         showsVerticalScrollIndicator={false}
       >
-        {/* TENANT BANNER */}
-
-        <View style={styles.banner}>
-          <View style={styles.avatarCircle}>
-            <View style={styles.avatarHead} />
-
-            <View style={styles.avatarBody} />
-          </View>
-
-          <View style={styles.bannerInfo}>
-            <Text style={styles.bannerWelcome}>Welcome, tenant!</Text>
-
-            <Text style={styles.bannerName}>
-              {tenant?.firstName} {tenant?.lastName}
-            </Text>
-
-            <Text style={styles.bannerContact}>{tenant?.contactNo}</Text>
-          </View>
-
-          <TouchableOpacity
-            style={styles.menuBtn}
-            onPress={() => setShowMenu(true)}
-          >
-            <Text style={styles.menuDots}>•••</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* PAYMENT INFORMATION */}
-
+        {/* CARD 1 — Rental payment information */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Rental Payment Information</Text>
+          <Text style={styles.cardTitle}>Rental payment information</Text>
 
-          <View style={styles.infoRow}>
+          <View style={[styles.infoRow, styles.infoRowBorder]}>
             <Text style={styles.infoLabel}>Payment</Text>
-
-            <Text style={styles.infoValue}>
-              ₱{totalPayment.toLocaleString()}
-            </Text>
+            <Text style={styles.infoValue}>₱{totalPayment.toLocaleString()}</Text>
           </View>
 
-          <View style={styles.divider} />
-
-          <View style={styles.infoRow}>
+          <View style={[styles.infoRow, styles.infoRowBorder]}>
             <Text style={styles.infoLabel}>Pending</Text>
-
-            <Text style={styles.infoValue}>
-              ₱{pendingPayment.toLocaleString()}
-            </Text>
+            <Text style={styles.infoValue}>₱{pendingPayment.toLocaleString()}</Text>
           </View>
-
-          <View style={styles.divider} />
 
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Remaining Bill</Text>
-
             <Text style={[styles.infoValue, styles.remaining]}>
               ₱{remainingBill.toLocaleString()}
             </Text>
           </View>
         </View>
 
-        {/* PAYMENT HISTORY */}
+        {/* CARD 2 — Monthly payment history */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Monthly payment history</Text>
 
-        <View style={styles.historyCard}>
-          <Text style={styles.cardTitle}>Monthly Payment History</Text>
-
-          <TouchableOpacity
-            style={styles.monthPickerBtn}
-            onPress={() => setShowMonthPicker(true)}
-          >
-            <Text style={styles.monthPickerLabel}>Month:</Text>
-
-            <Text style={styles.monthPickerValue}>{selectedMonth}</Text>
-
-            <Text style={styles.monthPickerArrow}>▼</Text>
-          </TouchableOpacity>
+          <View ref={monthPillRef} collapsable={false} style={styles.monthPickerWrapper}>
+            <TouchableOpacity
+              style={styles.monthPill}
+              onPress={openMonthPicker}
+            >
+              <Text style={styles.monthPillText}>Month: {selectedMonth}</Text>
+              <Ionicons
+                name={showMonthPicker ? "chevron-up" : "chevron-down"}
+                size={14}
+                color="#0F6E56"
+              />
+            </TouchableOpacity>
+          </View>
 
           <View style={styles.tableHeader}>
-            <Text style={[styles.tableHeaderCell, styles.colDate]}>Date</Text>
-
-            <Text style={[styles.tableHeaderCell, styles.colStatus]}>
-              Status
-            </Text>
-
-            <Text style={[styles.tableHeaderCell, styles.colReceipt]}>
+            <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Date</Text>
+            <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Status</Text>
+            <Text style={[styles.tableHeaderCell, { flex: 1, textAlign: "right" }]}>
               Receipt
             </Text>
           </View>
@@ -372,41 +321,47 @@ export default function Dashboard() {
               data={history}
               keyExtractor={(item, index) => item.id || index.toString()}
               scrollEnabled={false}
-              renderItem={({ item }) => (
-                <View style={styles.tableRow}>
-                  <Text style={[styles.tableCell, styles.colDate]}>
+              renderItem={({ item, index }) => (
+                <View
+                  style={[
+                    styles.tableRow,
+                    index === history.length - 1 && { borderBottomWidth: 0 },
+                  ]}
+                >
+                  <Text style={[styles.dateCell, { flex: 2 }]}>
                     {formatDate(item.date)}
                   </Text>
 
-                  <Text
-                    style={[
-                      styles.tableCell,
-
-                      styles.colStatus,
-
-                      item.status === "approved"
-                        ? styles.statusSuccess
-                        : item.status === "rejected"
-                          ? styles.statusRejected
-                          : styles.statusPending,
-                    ]}
-                  >
-                    {item.status.toUpperCase()}
-                  </Text>
-
-                  <View style={[styles.colReceipt, styles.receiptIconWrap]}>
-                    {item.receiptData || item.receipt ? (
-                      <TouchableOpacity
-                        style={styles.receiptCell}
-                        onPress={() => openReceipt(item)}
+                  <View style={{ flex: 2 }}>
+                    <View
+                      style={[
+                        styles.statusBadge,
+                        item.status === "approved"
+                          ? styles.badgeApproved
+                          : item.status === "rejected"
+                            ? styles.badgeRejected
+                            : styles.badgePending,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.statusBadgeText,
+                          item.status === "approved"
+                            ? styles.textApproved
+                            : item.status === "rejected"
+                              ? styles.textRejected
+                              : styles.textPending,
+                        ]}
                       >
-                        <View style={styles.receiptIcon}>
-                          <View style={styles.receiptLine} />
+                        {item.status.toUpperCase()}
+                      </Text>
+                    </View>
+                  </View>
 
-                          <View style={styles.receiptLine} />
-
-                          <View style={styles.receiptLine} />
-                        </View>
+                  <View style={{ flex: 1, alignItems: "flex-end" }}>
+                    {item.receiptData || item.receipt ? (
+                      <TouchableOpacity onPress={() => openReceipt(item)}>
+                        <Ionicons name="receipt-outline" size={20} color="#1D9E75" />
                       </TouchableOpacity>
                     ) : (
                       <Text style={styles.noReceipt}>—</Text>
@@ -420,27 +375,17 @@ export default function Dashboard() {
       </ScrollView>
 
       {/* MENU MODAL */}
-
       <Modal visible={showMenu} transparent animationType="fade">
         <TouchableOpacity
           style={styles.menuOverlay}
           activeOpacity={1}
           onPress={() => setShowMenu(false)}
         >
-          <View
-            style={[
-              styles.menuCard,
-              {
-                top: insets.top + 60,
-                right: 16,
-              },
-            ]}
-          >
+          <View style={[styles.menuCard, { top: insets.top + 60, right: 16 }]}>
             <TouchableOpacity
               style={styles.menuItem}
               onPress={() => {
                 setShowMenu(false);
-
                 router.push("/profile");
               }}
             >
@@ -453,7 +398,6 @@ export default function Dashboard() {
               style={styles.menuItem}
               onPress={() => {
                 setShowMenu(false);
-
                 setShowPayModal(true);
               }}
             >
@@ -472,8 +416,7 @@ export default function Dashboard() {
       </Modal>
 
       {/* PAY ONLINE MODAL */}
-
-      <Modal visible={showPayModal} transparent animationType="slide">
+      <Modal visible={showPayModal} transparent animationType="fade">
         <View style={styles.payOverlay}>
           <View style={styles.payCard}>
             <Text style={styles.payTitle}>Pay Online</Text>
@@ -523,7 +466,6 @@ export default function Dashboard() {
       </Modal>
 
       {/* RECEIPT PREVIEW MODAL */}
-
       <Modal visible={showReceiptModal} transparent animationType="fade">
         <View style={styles.receiptOverlay}>
           <View style={styles.receiptPreviewCard}>
@@ -595,9 +537,7 @@ export default function Dashboard() {
                   </View>
                   <View style={styles.receiptFieldRow}>
                     <Text style={styles.receiptFieldLabel}>Status</Text>
-                    <Text
-                      style={[styles.receiptFieldValue, styles.statusSuccess]}
-                    >
+                    <Text style={[styles.receiptFieldValue, styles.textApproved]}>
                       {selectedPayment.receiptData.status}
                     </Text>
                   </View>
@@ -623,33 +563,34 @@ export default function Dashboard() {
         </View>
       </Modal>
 
-      {/* MONTH PICKER */}
-
-      <Modal visible={showMonthPicker} transparent animationType="fade">
-        <View style={styles.pickerOverlay}>
-          <View style={styles.pickerCard}>
-            <Text style={styles.pickerTitle}>Select Month</Text>
-
-            <ScrollView>
+      {/* MONTH DROPDOWN */}
+      <Modal visible={showMonthPicker} transparent animationType="none">
+        <TouchableOpacity
+          style={{ flex: 1 }}
+          activeOpacity={1}
+          onPress={() => setShowMonthPicker(false)}
+        >
+          <View style={[styles.monthDropdown, { top: dropdownTop, left: dropdownLeft }]}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              style={styles.monthDropdownScroll}
+            >
               {MONTHS.map((m) => (
                 <TouchableOpacity
                   key={m}
                   style={[
-                    styles.pickerItem,
-
-                    m === selectedMonth && styles.pickerItemActive,
+                    styles.monthDropdownItem,
+                    m === selectedMonth && styles.monthDropdownItemActive,
                   ]}
                   onPress={() => {
                     setSelectedMonth(m);
-
                     setShowMonthPicker(false);
                   }}
                 >
                   <Text
                     style={[
-                      styles.pickerItemText,
-
-                      m === selectedMonth && styles.pickerItemTextActive,
+                      styles.monthDropdownText,
+                      m === selectedMonth && styles.monthDropdownTextActive,
                     ]}
                   >
                     {m}
@@ -658,8 +599,9 @@ export default function Dashboard() {
               ))}
             </ScrollView>
           </View>
-        </View>
+        </TouchableOpacity>
       </Modal>
+
     </View>
   );
 }
@@ -667,89 +609,40 @@ export default function Dashboard() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#1A1A1A",
+    backgroundColor: "#0F6E56",
   },
 
   center: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#E8E8E8",
+    backgroundColor: "#F1EFE8",
   },
 
+  // ── Header ──────────────────────────────────────
   header: {
-    backgroundColor: "#1A1A1A",
+    backgroundColor: "#0F6E56",
     flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-
-  headerSpacer: {
-    width: 36,
+    paddingHorizontal: 20,
+    paddingBottom: 14,
   },
 
   headerTitle: {
-    flex: 1,
-    textAlign: "center",
     color: "#fff",
-    fontSize: 20,
-    fontWeight: "bold",
-  },
-
-  bellBtn: {
-    width: 36,
-    alignItems: "flex-end",
-  },
-
-  bellIcon: {
     fontSize: 18,
+    fontWeight: "500",
   },
 
-  body: {
-    flex: 1,
-    backgroundColor: "#E8E8E8",
-  },
-
-  bodyContent: {
-    paddingHorizontal: 16,
-    paddingTop: 0,
-  },
-
+  // ── Profile banner ───────────────────────────────
   banner: {
-    backgroundColor: "#B5A89A",
+    backgroundColor: "#1D9E75",
+    paddingHorizontal: 20,
+    paddingVertical: 18,
     flexDirection: "row",
     alignItems: "center",
-    padding: 16,
-    marginHorizontal: -16,
-    marginBottom: 14,
-  },
-
-  avatarCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: "#C8C8C8",
-    overflow: "hidden",
-    alignItems: "center",
-    justifyContent: "flex-end",
-    marginRight: 12,
-  },
-
-  avatarHead: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: "#6B6B6B",
-    position: "absolute",
-    top: 10,
-  },
-
-  avatarBody: {
-    width: 40,
-    height: 28,
-    borderRadius: 20,
-    backgroundColor: "#6B6B6B",
+    gap: 14,
   },
 
   bannerInfo: {
@@ -757,124 +650,161 @@ const styles = StyleSheet.create({
   },
 
   bannerWelcome: {
-    color: "#fff",
-    fontSize: 13,
+    color: "#9FE1CB",
+    fontSize: 12,
+    fontWeight: "400",
   },
 
   bannerName: {
     color: "#fff",
-    fontSize: 16,
-    fontWeight: "bold",
-  },
-
-  bannerContact: {
-    color: "#fff",
-    fontSize: 13,
+    fontSize: 17,
+    fontWeight: "500",
   },
 
   menuBtn: {
-    paddingLeft: 12,
-    paddingVertical: 4,
+    padding: 4,
   },
 
-  menuDots: {
-    color: "#fff",
-    fontSize: 20,
+  // ── Body ────────────────────────────────────────
+  body: {
+    flex: 1,
+    backgroundColor: "#F1EFE8",
   },
 
+  bodyContent: {
+    paddingHorizontal: 16,
+    paddingTop: 20,
+    gap: 16,
+  },
+
+  // ── Cards ────────────────────────────────────────
   card: {
     backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 16,
-    marginBottom: 14,
-  },
-
-  historyCard: {
-    backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 16,
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 0.5,
+    borderColor: "#9FE1CB",
   },
 
   cardTitle: {
     fontSize: 15,
-    fontWeight: "bold",
-    marginBottom: 12,
+    fontWeight: "500",
+    color: "#085041",
+    marginBottom: 14,
   },
 
+  // ── Info rows ────────────────────────────────────
   infoRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: 8,
+    alignItems: "center",
+    paddingVertical: 12,
+  },
+
+  infoRowBorder: {
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#E1F5EE",
   },
 
   infoLabel: {
-    color: "#555",
+    fontSize: 14,
+    color: "#888780",
   },
 
   infoValue: {
-    fontWeight: "600",
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#085041",
   },
 
   remaining: {
-    color: "#C0392B",
+    color: "#E24B4A",
   },
 
-  divider: {
-    height: 1,
-    backgroundColor: "#eee",
-  },
-
-  colDate: {
-    flex: 2,
-  },
-
-  colStatus: {
-    flex: 2,
-  },
-
-  colReceipt: {
-    flex: 1,
+  // ── Month pill ───────────────────────────────────
+  monthPill: {
+    flexDirection: "row",
     alignItems: "center",
+    alignSelf: "flex-start",
+    backgroundColor: "#E1F5EE",
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    gap: 4,
+  },
+
+  monthPillText: {
+    fontSize: 13,
+    color: "#0F6E56",
+    fontWeight: "500",
+  },
+
+  // ── Table ────────────────────────────────────────
+  tableHeader: {
+    flexDirection: "row",
+    backgroundColor: "#F1EFE8",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 12,
+  },
+
+  tableHeaderCell: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: "#5F5E5A",
   },
 
   tableRow: {
     flexDirection: "row",
-    paddingVertical: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 14,
     alignItems: "center",
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#E1F5EE",
   },
 
-  tableCell: {
+  dateCell: {
+    fontSize: 14,
+    color: "#444441",
+  },
+
+  statusBadge: {
+    alignSelf: "flex-start",
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+
+  badgeApproved: { backgroundColor: "#E1F5EE" },
+  badgePending: { backgroundColor: "#FAEEDA" },
+  badgeRejected: { backgroundColor: "#FCEBEB" },
+
+  statusBadgeText: {
+    fontSize: 11,
+    fontWeight: "500",
+  },
+
+  textApproved: { color: "#0F6E56" },
+  textPending: { color: "#BA7517" },
+  textRejected: { color: "#A32D2D" },
+
+  noReceipt: {
+    color: "#B4B2A9",
     fontSize: 13,
   },
 
-  statusSuccess: {
-    color: "#27AE60",
-  },
-
-  statusPending: {
-    color: "#E67E22",
-  },
-
-  statusRejected: {
-    color: "#C0392B",
-  },
-
-  receiptLine: {
-    width: 20,
-    height: 2,
-    backgroundColor: "#555",
-    marginBottom: 3,
-  },
-
   emptyRow: {
-    padding: 20,
+    paddingVertical: 24,
     alignItems: "center",
   },
 
   emptyText: {
-    color: "#888",
+    fontSize: 14,
+    color: "#888780",
   },
 
+  // ── Menu modal ───────────────────────────────────
   menuOverlay: {
     flex: 1,
   },
@@ -882,27 +812,36 @@ const styles = StyleSheet.create({
   menuCard: {
     position: "absolute",
     backgroundColor: "#fff",
-    borderRadius: 10,
+    borderRadius: 12,
     overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 6,
+    minWidth: 160,
   },
 
   menuItem: {
-    padding: 15,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
   },
 
   menuItemText: {
-    color: "#1A1A1A",
+    fontSize: 14,
+    color: "#085041",
   },
 
   signOutText: {
-    color: "#C0392B",
+    color: "#E24B4A",
   },
 
   menuDivider: {
-    height: 1,
-    backgroundColor: "#eee",
+    height: 0.5,
+    backgroundColor: "#E1F5EE",
   },
 
+  // ── Pay modal ────────────────────────────────────
   payOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,.5)",
@@ -921,20 +860,33 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "bold",
     marginBottom: 20,
+    color: "#085041",
+  },
+
+  payLabel: {
+    fontSize: 13,
+    color: "#888780",
+    marginBottom: 6,
+    marginTop: 10,
+    fontWeight: "500",
   },
 
   payInput: {
-    borderWidth: 1,
-    borderColor: "#ccc",
+    borderWidth: 1.5,
+    borderColor: "#9FE1CB",
     padding: 12,
-    borderRadius: 8,
+    borderRadius: 10,
+    backgroundColor: "#f7fdf9",
+    color: "#085041",
+    fontSize: 15,
   },
 
   payNowBtn: {
-    backgroundColor: "#F5C518",
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 10,
+    backgroundColor: "#0F6E56",
+    padding: 14,
+    borderRadius: 10,
+    marginTop: 12,
+    alignItems: "center",
   },
 
   payNowBtnDisabled: {
@@ -942,63 +894,34 @@ const styles = StyleSheet.create({
   },
 
   payNowText: {
-    textAlign: "center",
-    fontWeight: "bold",
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 15,
   },
 
-  payDivider: {
-    height: 1,
-    backgroundColor: "#eee",
-    marginVertical: 15,
-  },
-
-  uploadBtn: {
-    backgroundColor: "#F5C518",
-    padding: 12,
-    borderRadius: 8,
-  },
-
-  uploadBtnText: {
-    textAlign: "center",
-  },
-
-  receiptNameText: {
-    textAlign: "center",
-    marginVertical: 10,
-  },
-
-  payActions: {
-    flexDirection: "row",
-    gap: 10,
+  payHint: {
+    fontSize: 12,
+    color: "#888780",
     marginTop: 10,
-  },
-
-  submitBtn: {
-    flex: 1,
-    backgroundColor: "#7CB87A",
-    padding: 12,
-    borderRadius: 8,
+    marginBottom: 8,
+    lineHeight: 17,
   },
 
   cancelBtn: {
-    backgroundColor: "#E74C3C",
+    backgroundColor: "#F1EFE8",
     paddingVertical: 14,
-    borderRadius: 8,
+    borderRadius: 10,
     alignItems: "center",
   },
 
-  submitBtnText: {
-    color: "#fff",
-    textAlign: "center",
-  },
-
   cancelBtnText: {
-    color: "#fff",
+    color: "#085041",
     fontSize: 15,
-    fontWeight: "700",
+    fontWeight: "600",
     textAlign: "center",
   },
 
+  // ── Receipt modal ────────────────────────────────
   receiptOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,.5)",
@@ -1012,139 +935,11 @@ const styles = StyleSheet.create({
     borderRadius: 14,
   },
 
-  receiptImage: {
-    width: "100%",
-    height: 350,
-    resizeMode: "contain",
-  },
-
-  pickerOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,.5)",
-    justifyContent: "center",
-    padding: 40,
-  },
-
-  pickerCard: {
-    backgroundColor: "#fff",
-    borderRadius: 14,
-    padding: 10,
-  },
-
-  pickerTitle: {
-    textAlign: "center",
-    fontWeight: "bold",
-    padding: 10,
-  },
-
-  pickerItem: {
-    padding: 12,
-  },
-
-  pickerItemActive: {
-    backgroundColor: "#E8F5E9",
-  },
-
-  pickerItemText: {
-    fontSize: 15,
-  },
-
-  pickerItemTextActive: {
-    color: "#27AE60",
-    fontWeight: "bold",
-  },
-
-  monthPickerBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#F0F0F0",
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    marginBottom: 12,
-    alignSelf: "flex-start",
-  },
-
-  monthPickerLabel: {
-    fontSize: 13,
-    color: "#555",
-  },
-
-  monthPickerValue: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#1A1A1A",
-  },
-
-  monthPickerArrow: {
-    fontSize: 10,
-    color: "#555",
-    marginLeft: 4,
-  },
-
-  tableHeader: {
-    flexDirection: "row",
-    backgroundColor: "#F5F5F5",
-    borderRadius: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 6,
-    marginBottom: 4,
-  },
-
-  tableHeaderCell: {
-    fontSize: 12,
-    fontWeight: "bold",
-    color: "#333",
-  },
-
-  receiptIconWrap: {
-    justifyContent: "center",
-  },
-
-  receiptCell: {
-    padding: 4,
-  },
-
-  receiptIcon: {
-    gap: 3,
-  },
-
-  noReceipt: {
-    color: "#AAA",
-    fontSize: 13,
-  },
-
-  payLabel: {
-    fontSize: 13,
-    color: "#555",
-    marginBottom: 6,
-    marginTop: 10,
-    fontWeight: "500",
-  },
-
-  payHint: {
-    fontSize: 12,
-    color: "#888",
-    marginBottom: 8,
-    lineHeight: 17,
-  },
-
   receiptScrollArea: {
     maxHeight: 360,
     marginBottom: 12,
   },
-  receiptCloseBtn: {
-    backgroundColor: "#E74C3C",
-    paddingVertical: 13,
-    borderRadius: 8,
-    alignItems: "center",
-  },
-  receiptCloseBtnText: {
-    color: "#fff",
-    fontSize: 15,
-    fontWeight: "600",
-    textAlign: "center",
-  },
+
   receiptFields: {
     width: "100%",
     marginBottom: 12,
@@ -1153,21 +948,86 @@ const styles = StyleSheet.create({
   receiptFieldRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: "#F0F0F0",
+    paddingVertical: 8,
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#E1F5EE",
   },
 
   receiptFieldLabel: {
     fontSize: 13,
-    color: "#555",
+    color: "#888780",
   },
 
   receiptFieldValue: {
     fontSize: 13,
     fontWeight: "600",
-    color: "#1A1A1A",
+    color: "#085041",
     flexShrink: 1,
     textAlign: "right",
+  },
+
+  receiptImage: {
+    width: "100%",
+    height: 350,
+    resizeMode: "contain",
+  },
+
+  receiptCloseBtn: {
+    backgroundColor: "#0F6E56",
+    paddingVertical: 13,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+
+  receiptCloseBtnText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+
+  // ── Month dropdown ───────────────────────────────
+  monthPickerWrapper: {
+    alignSelf: "flex-start",
+  },
+
+  monthDropdown: {
+    position: "absolute",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    borderWidth: 0.5,
+    borderColor: "#9FE1CB",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 6,
+    overflow: "hidden",
+    minWidth: 160,
+  },
+
+  monthDropdownScroll: {
+    maxHeight: 132,
+  },
+
+  monthDropdownItem: {
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#E1F5EE",
+  },
+
+  monthDropdownItemActive: {
+    backgroundColor: "#E1F5EE",
+  },
+
+  monthDropdownText: {
+    fontSize: 14,
+    color: "#444441",
+  },
+
+  monthDropdownTextActive: {
+    color: "#0F6E56",
+    fontWeight: "500",
   },
 });

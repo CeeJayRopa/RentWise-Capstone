@@ -19,21 +19,21 @@ import {
 } from "firebase/firestore";
 import { PieChart } from "react-native-chart-kit";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
-import { Colors } from "../shared/constants/color";
 import OwnerSidebar from "./components/OwnerSidebar";
 import OwnerBellIcon from "./components/OwnerBellIcon";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
-const CHART_WIDTH = SCREEN_WIDTH - 64;
+const CHART_WIDTH = SCREEN_WIDTH - 68;
 
 const CHART_CONFIG = {
-  backgroundColor: Colors.surface,
-  backgroundGradientFrom: Colors.surface,
-  backgroundGradientTo: Colors.surface,
-  color: (opacity = 1) => `rgba(26, 79, 138, ${opacity})`,
+  backgroundColor: "#ffffff",
+  backgroundGradientFrom: "#ffffff",
+  backgroundGradientTo: "#ffffff",
+  color: (opacity = 1) => `rgba(12, 45, 107, ${opacity})`,
 };
 
 type Stats = {
@@ -59,10 +59,10 @@ function formatCurrency(amount: number): string {
   return `₱${integer.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${decimal}`;
 }
 
-function StatCard({ label, value, accent = Colors.primary }: { label: string; value: string | number; accent?: string }) {
+function StatCard({ label, value, numColor }: { label: string; value: string | number; numColor: string }) {
   return (
     <View style={styles.statCard}>
-      <Text style={[styles.statValue, { color: accent }]}>{value}</Text>
+      <Text style={[styles.statValue, { color: numColor }]}>{value}</Text>
       <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
@@ -77,7 +77,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
-      if (!user) { router.replace("/"); return; }
+      if (!user) { router.replace("/login"); return; }
       setChecking(false);
       fetchData();
     });
@@ -140,48 +140,55 @@ export default function Dashboard() {
   if (checking) {
     return (
       <View style={styles.fullCenter}>
-        <ActivityIndicator color={Colors.primary} size="large" />
+        <ActivityIndicator color="#0C2D6B" size="large" />
       </View>
     );
   }
 
   const marketPieData = [
-    { name: "Occupied", population: stats.occupiedCount || 0, color: Colors.primary, legendFontColor: Colors.textSecondary, legendFontSize: 12 },
-    { name: "Unoccupied", population: stats.unoccupiedCount || 0, color: Colors.textMuted, legendFontColor: Colors.textSecondary, legendFontSize: 12 },
+    { name: "Occupied",   population: stats.occupiedCount || 0,   color: "#0C2D6B", legendFontColor: "#444441", legendFontSize: 14 },
+    { name: "Unoccupied", population: stats.unoccupiedCount || 0, color: "#B5D4F4", legendFontColor: "#444441", legendFontSize: 14 },
   ];
 
   const financePieData = [
-    { name: "Unpaid", population: stats.unpaidCount || 0, color: Colors.error, legendFontColor: Colors.textSecondary, legendFontSize: 12 },
-    { name: "Paid", population: stats.paidCount || 0, color: Colors.success, legendFontColor: Colors.textSecondary, legendFontSize: 12 },
+    { name: "Unpaid", population: stats.unpaidCount || 0, color: "#E24B4A", legendFontColor: "#444441", legendFontSize: 14 },
+    { name: "Paid",   population: stats.paidCount || 0,   color: "#1D9E75", legendFontColor: "#444441", legendFontSize: 14 },
   ];
 
-  const hasMarketData = stats.occupiedCount + stats.unoccupiedCount > 0;
+  const hasMarketData  = stats.occupiedCount + stats.unoccupiedCount > 0;
   const hasFinanceData = stats.paidCount + stats.unpaidCount > 0;
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity style={styles.menuBtn} onPress={() => setSidebarVisible(true)} activeOpacity={0.7}>
-          <Text style={styles.menuIcon}>☰</Text>
+      {/* Header */}
+      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
+        <TouchableOpacity onPress={() => setSidebarVisible(true)} activeOpacity={0.7}>
+          <Ionicons name="menu-outline" size={24} color="#E6F1FB" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>RentWise</Text>
         <OwnerBellIcon />
       </View>
 
+      {/* Market name banner */}
       <View style={styles.banner}>
         <Text style={styles.bannerText}>Ka Domeng Talipapa Wet and Dry Market</Text>
       </View>
 
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         {loading ? (
-          <ActivityIndicator color={Colors.primary} size="large" style={styles.dataLoader} />
+          <ActivityIndicator color="#0C2D6B" size="large" style={styles.dataLoader} />
         ) : (
           <>
-            <Text style={styles.sectionTitle}>Market Overview</Text>
+            {/* Market overview */}
+            <Text style={styles.sectionTitle}>Market overview</Text>
             <View style={styles.statRow}>
-              <StatCard label="Tenants" value={stats.tenantCount} />
-              <StatCard label="Occupied" value={stats.occupiedCount} />
-              <StatCard label="Unoccupied" value={stats.unoccupiedCount} accent={Colors.textMuted} />
+              <StatCard label="Tenants"    value={stats.tenantCount}    numColor="#0C2D6B" />
+              <StatCard label="Occupied"   value={stats.occupiedCount}   numColor="#0C2D6B" />
+              <StatCard label="Unoccupied" value={stats.unoccupiedCount} numColor="#B4B2A9" />
             </View>
 
             <View style={styles.chartCard}>
@@ -201,11 +208,11 @@ export default function Dashboard() {
               )}
             </View>
 
-            <Text style={styles.sectionTitle}>Financial Overview</Text>
+            {/* Financial overview */}
+            <Text style={[styles.sectionTitle, styles.financeSectionTitle]}>Financial overview</Text>
             <View style={styles.statRow}>
-              <StatCard label="Paid" value={stats.paidCount} accent={Colors.success} />
-              <StatCard label="Unpaid" value={stats.unpaidCount} accent={Colors.error} />
-              <StatCard label="Collected" value={formatCurrency(stats.collectedAmount)} accent={Colors.primary} />
+              <StatCard label="Paid"   value={stats.paidCount}   numColor="#1D9E75" />
+              <StatCard label="Unpaid" value={stats.unpaidCount} numColor="#E24B4A" />
             </View>
 
             <View style={styles.chartCard}>
@@ -224,6 +231,15 @@ export default function Dashboard() {
                 <Text style={styles.noData}>No payment data available</Text>
               )}
             </View>
+
+            {/* Collected card */}
+            <View style={styles.collectedCard}>
+              <View style={styles.collectedLeft}>
+                <Ionicons name="wallet-outline" size={22} color="#0C2D6B" style={{ marginRight: 10 }} />
+                <Text style={styles.collectedLabel}>Total collected</Text>
+              </View>
+              <Text style={styles.collectedAmount}>{formatCurrency(stats.collectedAmount)}</Text>
+            </View>
           </>
         )}
       </ScrollView>
@@ -234,51 +250,86 @@ export default function Dashboard() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: Colors.background },
-  fullCenter: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: Colors.background },
+  screen: { flex: 1, backgroundColor: "#F0F4FA" },
+  fullCenter: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#F0F4FA" },
+
   header: {
-    backgroundColor: "#1A1A1A",
+    backgroundColor: "#0C2D6B",
     paddingBottom: 14,
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  menuBtn: { width: 36, alignItems: "center", justifyContent: "center" },
-  menuIcon: { fontSize: 24, color: "#FFFFFF" },
-  headerTitle: { fontSize: 20, fontWeight: "700", color: "#FFFFFF" },
-  banner: { backgroundColor: Colors.primary, paddingVertical: 16, alignItems: "center" },
-  bannerText: { fontSize: 14, fontWeight: "600", color: "#FFFFFF", textAlign: "center", paddingHorizontal: 16 },
+  headerTitle: { fontSize: 18, fontWeight: "500", color: "#FFFFFF" },
+
+  banner: {
+    backgroundColor: "#1A4DA0",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  bannerText: { fontSize: 14, fontWeight: "500", color: "#FFFFFF", textAlign: "center" },
+
   scroll: { flex: 1 },
-  scrollContent: { padding: 16, paddingBottom: 32 },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 20,
+    paddingBottom: 40,
+  },
   dataLoader: { marginTop: 60 },
-  sectionTitle: { fontSize: 16, fontWeight: "700", color: Colors.textPrimary, marginBottom: 12, marginTop: 8 },
-  statRow: { flexDirection: "row", gap: 10, marginBottom: 12 },
+
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#0C2D6B",
+    marginBottom: 12,
+  },
+  financeSectionTitle: {
+    marginTop: 8,
+  },
+
+  statRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 16,
+  },
   statCard: {
     flex: 1,
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
     padding: 14,
     alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
   },
-  statValue: { fontSize: 20, fontWeight: "700", marginBottom: 4 },
-  statLabel: { fontSize: 11, color: Colors.textMuted, textAlign: "center" },
+  statValue: { fontSize: 24, fontWeight: "500" },
+  statLabel: { fontSize: 12, color: "#888780", marginTop: 4 },
+
   chartCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
     alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
+    marginBottom: 16,
   },
-  noData: { fontSize: 14, color: Colors.textMuted, paddingVertical: 40 },
+
+  collectedCard: {
+    backgroundColor: "#E6F1FB",
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 32,
+  },
+  collectedLeft: { flexDirection: "row", alignItems: "center" },
+  collectedLabel: { fontSize: 13, color: "#1A4DA0" },
+  collectedAmount: { fontSize: 22, fontWeight: "500", color: "#0C2D6B" },
+
+  noData: { fontSize: 14, color: "#888780", paddingVertical: 40 },
 });

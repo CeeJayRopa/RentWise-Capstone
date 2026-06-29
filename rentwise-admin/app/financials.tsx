@@ -74,7 +74,6 @@ function isSameWeek(a: Date, b: Date): boolean {
   startA.setDate(startA.getDate() - startA.getDay());
   const startB = new Date(b.getFullYear(), b.getMonth(), b.getDate());
   startB.setDate(startB.getDate() - startB.getDay());
-  console.log("WEEK CHECK", a, b, startA.getTime() === startB.getTime());
   return startA.getTime() === startB.getTime();
 }
 
@@ -126,29 +125,11 @@ export default function Financials() {
       const stall = stallMap.get(u.stallId);
       const tenantPayments = allPayments.filter((p) => p.userId === d.id);
 
-      console.log("================================");
-      console.log("TENANT DOC ID:", d.id);
-      console.log("TENANT NAME:", `${u.firstName} ${u.lastName}`);
-      console.log("STALL:", stall);
-      console.log(
-        "MATCHING PAYMENTS:",
-        tenantPayments.map((p) => ({
-          id: p.id,
-          userId: p.userId,
-          status: p.status,
-          date: p.date,
-        })),
-      );
-
       let tenantStatus: "paid" | "unpaid" | "online" = "unpaid";
       let paymentId: null | string = null;
 
       for (const p of tenantPayments) {
         const paymentDate = p.date?.toDate?.();
-
-        console.log("PAYMENT STATUS:", p.status);
-        console.log("PAYMENT DATE:", paymentDate);
-        console.log("PAYMENT SCHEDULE:", stall?.paymentSchedule);
 
         if (!paymentDate) continue;
 
@@ -160,19 +141,12 @@ export default function Financials() {
         if (stall?.paymentSchedule === "monthly")
           valid = isSameMonth(paymentDate, today);
 
-        console.log("VALID:", valid);
-        console.log("BEFORE STATUS:", tenantStatus);
-
         if (!valid) continue;
 
         paymentId = p.id;
         if (p.status === "pending") tenantStatus = "online";
         if (p.status === "approved") tenantStatus = "paid";
-
-        console.log("AFTER STATUS:", tenantStatus);
       }
-
-      console.log("FINAL TENANT STATUS:", d.id, tenantStatus);
 
       return {
         id: d.id,
@@ -237,17 +211,6 @@ export default function Financials() {
                 id: d.id,
                 ...d.data(),
               }));
-              console.log(
-                "FINANCIALS payments snapshot:",
-                allPayments.length,
-                "docs →",
-                allPayments.map((p) => ({
-                  id: p.id,
-                  userId: p.userId,
-                  status: p.status,
-                  method: p.method,
-                })),
-              );
               computeRows(allPayments);
               setLoading(false);
             },
@@ -298,19 +261,14 @@ export default function Financials() {
     </html>
     `;
 
-      console.log("Generating PDF...");
       const { base64 } = await Print.printToFileAsync({ html, base64: true });
-      console.log("PDF generated");
 
       const destFile = new File(Paths.cache, `receipt-${receiptNo}.pdf`);
       destFile.write(base64!, { encoding: "base64" });
-      console.log("PDF written to:", destFile.uri);
 
       const canShare = await Sharing.isAvailableAsync();
-      console.log("Sharing available:", canShare);
 
       if (canShare) {
-        console.log("Sharing PDF...");
         await Sharing.shareAsync(destFile.uri, {
           mimeType: "application/pdf",
           dialogTitle: "Save Receipt",
@@ -414,14 +372,9 @@ export default function Financials() {
 
       const paymentSnap = await getDoc(paymentRef);
 
-      if (!paymentSnap.exists()) {
-        console.log("Payment not found");
-        return;
-      }
+      if (!paymentSnap.exists()) return;
 
       const payment = paymentSnap.data();
-
-      console.log("ONLINE PAYMENT DATA:", payment);
 
       setSelectedTenant(row);
 
@@ -592,54 +545,15 @@ export default function Financials() {
                           if (item.status === "online") {
                             setSelectedTenant(item);
 
-                            // DEBUG: surface every pending doc for this tenant so
-                            // stale docs with wrong rentAmount are visible in logs
-                            const debugSnap = await getDocs(
-                              query(
-                                collection(db, "payments"),
-                                where("userId", "==", item.id),
-                                where("status", "==", "pending"),
-                              ),
-                            );
-                            console.log(
-                              "ADMIN DEBUG — pending docs for",
-                              item.id,
-                              "count:",
-                              debugSnap.docs.length,
-                            );
-                            debugSnap.docs.forEach((d) => {
-                              const p = d.data();
-                              console.log(
-                                "  id:", d.id,
-                                "| amount:", p.amount,
-                                "| rentAmount:", p.rentAmount,
-                                "| createdAt:", p.createdAt,
-                              );
-                            });
-
-                            // Fetch the exact payment computeRows already identified
-                            // instead of guessing via docs[0]
                             if (!item.paymentId) return;
 
                             const paymentSnap = await getDoc(
                               doc(db, "payments", item.paymentId),
                             );
 
-                            if (!paymentSnap.exists()) {
-                              console.log(
-                                "ADMIN: payment not found, id:",
-                                item.paymentId,
-                              );
-                              return;
-                            }
+                            if (!paymentSnap.exists()) return;
 
                             const onlinePayment = paymentSnap.data();
-
-                            console.log(
-                              "ADMIN: fetched paymentId:", item.paymentId,
-                              "| amount:", onlinePayment.amount,
-                              "| rentAmount:", onlinePayment.rentAmount,
-                            );
 
                             setReceiptData({
                               tenantName: item.name,

@@ -17,12 +17,14 @@ import { File, Paths } from "expo-file-system";
 import { useEffect, useState } from "react";
 import { useLocalSearchParams, router } from "expo-router";
 import {
+  addDoc,
+  collection,
   doc,
   getDoc,
-  collection,
-  query,
-  where,
   getDocs,
+  query,
+  serverTimestamp,
+  where,
 } from "firebase/firestore";
 
 import { db } from "../shared/services/firestore";
@@ -54,6 +56,7 @@ export default function TenantPreview() {
   const [stall, setStall] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     loadTenant();
@@ -109,7 +112,6 @@ export default function TenantPreview() {
         });
       });
 
-      console.log("TENANT PAYMENTS", list);
       setPayments(list);
     } catch (error) {
       console.log(error);
@@ -188,6 +190,30 @@ export default function TenantPreview() {
 
   const remaining = monthlyRent - totalPayment;
 
+  const NOTIFY_MESSAGE =
+    "The Market Administrator sent you a reminder regarding your rental account. Please check your payment status or contact the market office if you have any questions.";
+
+  const handleNotifyTenant = async () => {
+    if (!tenantId) return;
+    setSending(true);
+    try {
+      // Create in-app notification (Cloud Function trigger sends the push)
+      await addDoc(collection(db, "notifications"), {
+        userId: tenantId,
+        message: NOTIFY_MESSAGE,
+        read: false,
+        createdAt: serverTimestamp(),
+      });
+
+      Alert.alert("Success", "Notification sent successfully.");
+    } catch (err) {
+      console.error("[PUSH FAILED]", err);
+      Alert.alert("Error", "Failed to send notification. Please try again.");
+    } finally {
+      setSending(false);
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -214,7 +240,16 @@ export default function TenantPreview() {
 
         <Text style={styles.title}>RentWise Preview</Text>
 
-        <View style={{ width: 30 }} />
+        <TouchableOpacity
+          style={[styles.notifyBtn, sending && styles.notifyBtnDisabled]}
+          onPress={handleNotifyTenant}
+          disabled={sending}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.notifyBtnText}>
+            {sending ? "Sending..." : "Notify Tenant"}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -357,6 +392,21 @@ const styles = StyleSheet.create({
   back: {
     color: "#fff",
     fontSize: 24,
+  },
+
+  notifyBtn: {
+    backgroundColor: "#F5C518",
+    borderRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  notifyBtnDisabled: {
+    opacity: 0.5,
+  },
+  notifyBtnText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#1A1A1A",
   },
 
   title: {

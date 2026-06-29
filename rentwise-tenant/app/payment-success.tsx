@@ -97,7 +97,6 @@ export default function PaymentSuccess() {
         };
 
         await createPayment(newPayment);
-        console.log("[PaymentSuccess] payment recorded successfully");
       } catch (err) {
         console.log("[PaymentSuccess] error:", err);
         Alert.alert(

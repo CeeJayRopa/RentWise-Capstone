@@ -2,26 +2,80 @@ import {
   View,
   Text,
   TextInput,
-  TouchableOpacity,
-  ActivityIndicator,
   StyleSheet,
+  Animated,
+  Easing,
+  Pressable,
+  Dimensions,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
 } from "react-native";
-import { useState } from "react";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useState, useRef, useEffect } from "react";
 import { router } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 
 import { loginUser } from "../shared/services/auth";
 import { getUserByUsername } from "../shared/services/userServices";
-import { Colors } from "../shared/constants/color";
+
+const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 export default function Login() {
+  const insets = useSafeAreaInsets();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [emailFocused, setEmailFocused] = useState(false);
+  const [passwordFocused, setPasswordFocused] = useState(false);
+
+  const pulseScale = useRef(new Animated.Value(0.92)).current;
+  const pulseOpacity = useRef(new Animated.Value(0.6)).current;
+  const logoAnim = useRef(new Animated.Value(0)).current;
+  const headingAnim = useRef(new Animated.Value(0)).current;
+  const emailAnim = useRef(new Animated.Value(0)).current;
+  const passwordAnim = useRef(new Animated.Value(0)).current;
+  const buttonAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(pulseScale, { toValue: 1.04, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+          Animated.timing(pulseOpacity, { toValue: 0.15, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(pulseScale, { toValue: 0.92, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+          Animated.timing(pulseOpacity, { toValue: 0.6, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        ]),
+      ])
+    ).start();
+
+    const entrance = (anim: Animated.Value) =>
+      Animated.timing(anim, {
+        toValue: 1,
+        duration: 520,
+        easing: Easing.out(Easing.back(1.2)),
+        useNativeDriver: true,
+      });
+
+    Animated.stagger(130, [
+      entrance(logoAnim),
+      entrance(headingAnim),
+      entrance(emailAnim),
+      entrance(passwordAnim),
+      entrance(buttonAnim),
+    ]).start();
+  }, []);
+
+  const slideIn = (anim: Animated.Value) => ({
+    opacity: anim,
+    transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }) }],
+  });
 
   const handleLogin = async () => {
     setError("");
@@ -58,64 +112,125 @@ export default function Login() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      style={{ flex: 1, backgroundColor: "#0C2D6B" }}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        <View style={styles.card}>
-          <Text style={styles.title}>RentWise Owner</Text>
-          <Text style={styles.subtitle}>Sign in to your account</Text>
+      <ScrollView
+        contentContainerStyle={{ flexGrow: 1 }}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={{ flex: 1, minHeight: SCREEN_HEIGHT }}>
 
-          <View style={styles.field}>
-            <Text style={styles.label}>Email</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="example@rentwise.app"
-              placeholderTextColor={Colors.textMuted}
-              value={username}
-              onChangeText={(t) => { setUsername(t); setError(""); }}
-              autoCapitalize="none"
-              autoCorrect={false}
-              editable={!loading}
-            />
-          </View>
-
-          <View style={styles.field}>
-            <Text style={styles.label}>Password</Text>
-            <View style={styles.passwordContainer}>
-              <TextInput
-                style={styles.passwordInput}
-                placeholder="Enter your password"
-                placeholderTextColor={Colors.textMuted}
-                value={password}
-                onChangeText={(t) => { setPassword(t); setError(""); }}
-                secureTextEntry={!showPassword}
-                editable={!loading}
+          {/* Top navy section */}
+          <View style={[styles.topSection, { paddingTop: insets.top + 24 }]}>
+            <Animated.View style={[styles.logoGroup, slideIn(logoAnim)]}>
+              <Animated.View
+                style={[
+                  styles.pulseRing,
+                  { transform: [{ scale: pulseScale }], opacity: pulseOpacity },
+                ]}
               />
-              <TouchableOpacity
-                style={styles.eyeBtn}
-                onPress={() => setShowPassword((v) => !v)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.eyeIcon}>{showPassword ? "Hide" : "Show"}</Text>
-              </TouchableOpacity>
-            </View>
+              <View style={styles.logoCircle}>
+                <Ionicons name="business-outline" size={28} color="#0C2D6B" />
+              </View>
+            </Animated.View>
+            <Animated.Text style={[styles.appName, slideIn(logoAnim)]}>
+              RentWise
+            </Animated.Text>
+            <Animated.Text style={[styles.portalText, slideIn(logoAnim)]}>
+              Owner portal
+            </Animated.Text>
           </View>
 
-          {!!error && <Text style={styles.errorText}>{error}</Text>}
+          {/* White card */}
+          <View style={[styles.card, { paddingBottom: Math.max(insets.bottom, 24) }]}>
 
-          <TouchableOpacity
-            style={[styles.button, loading && styles.buttonDisabled]}
-            onPress={handleLogin}
-            disabled={loading}
-            activeOpacity={0.8}
-          >
-            {loading ? (
-              <ActivityIndicator color="#FFFFFF" size="small" />
-            ) : (
-              <Text style={styles.buttonText}>Log In</Text>
+            {/* Heading group */}
+            <Animated.View style={slideIn(headingAnim)}>
+              <Text style={styles.heading}>Welcome back</Text>
+              <Text style={styles.subheading}>Sign in to manage your market</Text>
+            </Animated.View>
+
+            {/* Email field */}
+            <Animated.View style={[{ marginTop: 24 }, slideIn(emailAnim)]}>
+              <Text style={styles.fieldLabel}>Email</Text>
+              <View style={styles.inputWrapper}>
+                <Ionicons name="mail-outline" size={17} color="#2E6FD9" style={styles.leftIcon} />
+                <TextInput
+                  style={[styles.textInput, emailFocused && styles.textInputFocused]}
+                  value={username}
+                  onChangeText={(t) => { setUsername(t); setError(""); }}
+                  placeholder="owner@rentwise.app"
+                  placeholderTextColor="#B4B2A9"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="email-address"
+                  editable={!loading}
+                  onFocus={() => setEmailFocused(true)}
+                  onBlur={() => setEmailFocused(false)}
+                />
+              </View>
+            </Animated.View>
+
+            {/* Password field */}
+            <Animated.View style={[{ marginTop: 16 }, slideIn(passwordAnim)]}>
+              <Text style={styles.fieldLabel}>Password</Text>
+              <View style={styles.inputWrapper}>
+                <Ionicons name="lock-closed-outline" size={17} color="#2E6FD9" style={styles.leftIcon} />
+                <TextInput
+                  style={[styles.textInput, passwordFocused && styles.textInputFocused]}
+                  value={password}
+                  onChangeText={(t) => { setPassword(t); setError(""); }}
+                  secureTextEntry={!showPassword}
+                  placeholder="Enter your password"
+                  placeholderTextColor="#B4B2A9"
+                  editable={!loading}
+                  onFocus={() => setPasswordFocused(true)}
+                  onBlur={() => setPasswordFocused(false)}
+                />
+                <TouchableOpacity
+                  style={styles.rightIcon}
+                  onPress={() => setShowPassword((v) => !v)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={showPassword ? "eye-outline" : "eye-off-outline"}
+                    size={17}
+                    color="#B4B2A9"
+                  />
+                </TouchableOpacity>
+              </View>
+            </Animated.View>
+
+            {/* Error banner */}
+            {!!error && (
+              <View style={styles.errorBanner}>
+                <Ionicons name="alert-circle-outline" size={16} color="#A32D2D" style={{ marginRight: 8 }} />
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
             )}
-          </TouchableOpacity>
+
+            {/* Sign in button */}
+            <Animated.View style={[{ marginTop: 28 }, slideIn(buttonAnim)]}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.signInBtn,
+                  loading && styles.signInBtnDisabled,
+                  pressed && !loading && { backgroundColor: "#091f4a", transform: [{ scale: 0.98 }] },
+                ]}
+                onPress={handleLogin}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={styles.signInText}>Sign in</Text>
+                )}
+              </Pressable>
+            </Animated.View>
+
+          </View>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -123,66 +238,159 @@ export default function Login() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
-  scroll: { flexGrow: 1, justifyContent: "center", alignItems: "center", padding: 24 },
-  card: {
-    width: "100%",
-    maxWidth: 400,
-    backgroundColor: Colors.surface,
-    borderRadius: 16,
-    padding: 32,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 4,
-  },
-  title: { fontSize: 26, fontWeight: "700", color: Colors.textPrimary, textAlign: "center", marginBottom: 6 },
-  subtitle: { fontSize: 14, color: Colors.textSecondary, textAlign: "center", marginBottom: 32 },
-  field: { marginBottom: 16 },
-  label: { fontSize: 13, fontWeight: "600", color: Colors.textSecondary, marginBottom: 6 },
-  input: {
-    backgroundColor: Colors.inputBackground,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: Colors.textPrimary,
-  },
-  errorText: { fontSize: 13, color: Colors.error, textAlign: "center", marginBottom: 12 },
-  button: {
-    backgroundColor: Colors.primary,
-    borderRadius: 10,
-    paddingVertical: 14,
+  topSection: {
+    height: SCREEN_HEIGHT * 0.38,
+    backgroundColor: "#0C2D6B",
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
     alignItems: "center",
-    marginTop: 8,
+    justifyContent: "center",
+    paddingBottom: 32,
   },
-  buttonDisabled: { backgroundColor: Colors.disabled },
-  buttonText: { color: "#FFFFFF", fontSize: 15, fontWeight: "600" },
-  passwordContainer: {
+
+  logoGroup: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+
+  pulseRing: {
+    position: "absolute",
+    width: 84,
+    height: 84,
+    borderRadius: 999,
+    backgroundColor: "#7AAEF0",
+  },
+
+  logoCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: "#E6F1FB",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  appName: {
+    color: "#FFFFFF",
+    fontSize: 26,
+    fontWeight: "500",
+  },
+
+  portalText: {
+    color: "#B5D4F4",
+    fontSize: 13,
+    marginTop: 4,
+  },
+
+  card: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 24,
+    marginTop: -16,
+    paddingHorizontal: 28,
+    paddingTop: 28,
+  },
+
+  heading: {
+    fontSize: 22,
+    fontWeight: "500",
+    color: "#0C2D6B",
+  },
+
+  subheading: {
+    fontSize: 14,
+    color: "#888780",
+    marginTop: 2,
+  },
+
+  fieldLabel: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: "#1A4DA0",
+    marginBottom: 6,
+  },
+
+  labelRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+
+  forgotText: {
+    fontSize: 12,
+    color: "#2E6FD9",
+  },
+
+  inputWrapper: {
+    position: "relative",
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: Colors.inputBackground,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 10,
   },
-  passwordInput: {
+
+  leftIcon: {
+    position: "absolute",
+    left: 13,
+    zIndex: 1,
+  },
+
+  rightIcon: {
+    position: "absolute",
+    right: 13,
+    zIndex: 1,
+    padding: 2,
+  },
+
+  textInput: {
     flex: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
+    backgroundColor: "#F0F4FA",
+    paddingVertical: 13,
+    paddingLeft: 40,
+    paddingRight: 40,
+    color: "#0C2D6B",
     fontSize: 15,
-    color: Colors.textPrimary,
   },
-  eyeBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 12,
+
+  textInputFocused: {
+    borderColor: "#2E6FD9",
   },
-  eyeIcon: {
+
+  errorBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 12,
+    backgroundColor: "#FCEBEB",
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+
+  errorText: {
     fontSize: 13,
-    color: Colors.textMuted,
-    fontWeight: "600",
+    color: "#A32D2D",
+    flex: 1,
+  },
+
+  signInBtn: {
+    width: "100%",
+    borderRadius: 14,
+    backgroundColor: "#0C2D6B",
+    paddingVertical: 15,
+    alignItems: "center",
+  },
+
+  signInBtnDisabled: {
+    opacity: 0.5,
+  },
+
+  signInText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "500",
+    textAlign: "center",
   },
 });

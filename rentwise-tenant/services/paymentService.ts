@@ -32,17 +32,7 @@ export async function createPayment(data: any) {
   const ref = collection(db, "payments");
   const payload = { ...data, date: serverTimestamp() };
 
-  console.log("TENANT createPayment — writing to Firestore:", {
-    userId: payload.userId,
-    amount: payload.amount,
-    method: payload.method,
-    status: payload.status,
-    hasReceipt: !!payload.receipt,
-  });
-
   const docRef = await addDoc(ref, payload);
-
-  console.log("TENANT createPayment — doc created, ID:", docRef.id);
 
   return docRef.id;
 }

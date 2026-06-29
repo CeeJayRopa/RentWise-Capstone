@@ -1,4 +1,1 @@
-import { getStorage } from "firebase/storage";
-import { firebaseApp } from "../firebaseConfig";
-
-export const storage = getStorage(firebaseApp);
+export * from "../../../shared/services/storage";
