@@ -76,7 +76,11 @@ module.exports = async function handler(req, res) {
     const method = await methodRes.json();
 
     // 3. Attach the Payment Method to the Payment Intent
-    const returnUrl = `rentwise://payment-success?amount=${amountInCentavos}&pi=${paymentIntentId}`;
+    // PayMongo requires a real http(s) return_url for gcash/paymaya (a
+    // custom rentwise:// scheme is rejected with parameter_format_invalid),
+    // so this points at our own status-checking redirector instead of the
+    // deep link directly — see api/payment-return.js.
+    const returnUrl = `https://rentwise-paymongo-api.vercel.app/api/payment-return?amount=${amountInCentavos}&pi=${paymentIntentId}`;
     const attachRes = await fetch(
       `https://api.paymongo.com/v1/payment_intents/${paymentIntentId}/attach`,
       {
