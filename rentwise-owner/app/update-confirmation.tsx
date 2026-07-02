@@ -118,6 +118,16 @@ export default function UpdateConfirmation() {
         approvalStatus: "approved",
       });
       await markLinkedNotifications(update.id, "Approved");
+      if (update.changedBy) {
+        const label =
+          update.type ?? update.module ?? categoryLabel(update.category ?? "archive");
+        await addDoc(collection(db, "notifications"), {
+          userId: update.changedBy,
+          message: `Your "${label}" update was approved by the owner.`,
+          read: false,
+          createdAt: serverTimestamp(),
+        });
+      }
       await addDoc(collection(db, "dailyReports"), {
         type: update.module
           ? (update.type ?? update.module ?? "Update")
@@ -148,6 +158,16 @@ export default function UpdateConfirmation() {
         approvalStatus: "rejected",
       });
       await markLinkedNotifications(update.id, "Rejected");
+      if (update.changedBy) {
+        const label =
+          update.type ?? update.module ?? categoryLabel(update.category ?? "archive");
+        await addDoc(collection(db, "notifications"), {
+          userId: update.changedBy,
+          message: `Your "${label}" update was rejected by the owner.`,
+          read: false,
+          createdAt: serverTimestamp(),
+        });
+      }
       Alert.alert("Rejected", "Update has been rejected.", [
         { text: "OK", onPress: () => router.back() },
       ]);

@@ -1,10 +1,12 @@
 const PAYMONGO_API_URL =
-  "https://rentwise-paymongo-api.vercel.app/api/create-checkout";
+  "https://rentwise-paymongo-api.vercel.app/api/create-payment-intent";
 const API_KEY = "rwpay_RentWise2025Capstone";
 
-interface CheckoutResult {
-  checkoutSessionId: string;
-  checkoutUrl: string;
+export type PaymentMethodType = "gcash" | "paymaya";
+
+interface PaymentIntentResult {
+  redirectUrl: string;
+  paymentIntentId: string;
 }
 
 interface CustomerInfo {
@@ -12,10 +14,11 @@ interface CustomerInfo {
   email: string;
 }
 
-export async function createPaymongoCheckout(
+export async function createPaymongoPaymentIntent(
   amount: number,
+  paymentMethod: PaymentMethodType,
   customer?: CustomerInfo,
-): Promise<CheckoutResult> {
+): Promise<PaymentIntentResult> {
   const response = await fetch(PAYMONGO_API_URL, {
     method: "POST",
     headers: {
@@ -24,6 +27,7 @@ export async function createPaymongoCheckout(
     },
     body: JSON.stringify({
       amount,
+      paymentMethod,
       customerName: customer?.name ?? "",
       customerEmail: customer?.email ?? "",
     }),
@@ -32,8 +36,8 @@ export async function createPaymongoCheckout(
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
     console.error("PayMongo API error:", err);
-    throw new Error("Failed to create checkout session");
+    throw new Error("Failed to start payment");
   }
 
-  return response.json() as Promise<CheckoutResult>;
+  return response.json() as Promise<PaymentIntentResult>;
 }

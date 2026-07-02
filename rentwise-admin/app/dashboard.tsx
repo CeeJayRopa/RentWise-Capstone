@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -19,22 +19,22 @@ import {
 } from "firebase/firestore";
 import { PieChart } from "react-native-chart-kit";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Menu, Wallet } from "lucide-react-native";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
-import { Colors } from "../shared/constants/color";
 import { getPaidTenantUserIds } from "../shared/services/financeServices";
 import Sidebar from "./components/Sidebar";
+import NotificationBell from "./components/NotificationBell";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
-// Accounts for 16px scroll padding + 16px card padding on each side
-const CHART_WIDTH = SCREEN_WIDTH - 64;
+const CHART_WIDTH = SCREEN_WIDTH - 68;
 
 const CHART_CONFIG = {
-  backgroundColor: Colors.surface,
-  backgroundGradientFrom: Colors.surface,
-  backgroundGradientTo: Colors.surface,
-  color: (opacity = 1) => `rgba(26, 79, 138, ${opacity})`,
+  backgroundColor: "#ffffff",
+  backgroundGradientFrom: "#ffffff",
+  backgroundGradientTo: "#ffffff",
+  color: (opacity = 1) => `rgba(12, 45, 107, ${opacity})`,
 };
 
 type Stats = {
@@ -57,22 +57,13 @@ const ZERO_STATS: Stats = {
 
 function formatCurrency(amount: number): string {
   const [integer, decimal] = amount.toFixed(2).split(".");
-  const formatted = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return `₱${formatted}.${decimal}`;
+  return `₱${integer.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${decimal}`;
 }
 
-function StatCard({
-  label,
-  value,
-  accent = Colors.primary,
-}: {
-  label: string;
-  value: number;
-  accent?: string;
-}) {
+function StatCard({ label, value, numColor }: { label: string; value: string | number; numColor: string }) {
   return (
     <View style={styles.statCard}>
-      <Text style={[styles.statValue, { color: accent }]}>{value}</Text>
+      <Text style={[styles.statValue, { color: numColor }]}>{value}</Text>
       <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
@@ -86,73 +77,50 @@ export default function Dashboard() {
   const [sidebarVisible, setSidebarVisible] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (!user) {
-        router.replace("/");
-        return;
-      }
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (!user) { router.replace("/"); return; }
       setChecking(false);
       fetchData();
     });
-    return unsubscribe;
+    return unsub;
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      if (!checking) {
-        fetchData();
-      }
-    }, [checking])
+      if (!checking) fetchData();
+    }, [checking]),
   );
+
   const fetchData = async () => {
     setLoading(true);
     try {
       const now = new Date();
-      const startTS = Timestamp.fromDate(
-        new Date(now.getFullYear(), now.getMonth(), 1),
-      );
-      const endTS = Timestamp.fromDate(
-        new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999),
-      );
+      const startTS = Timestamp.fromDate(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0));
+      const endTS = Timestamp.fromDate(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999));
 
       const [usersSnap, stallsSnap, paymentsSnap] = await Promise.all([
         getDocs(query(collection(db, "users"), where("role", "==", "tenant"))),
         getDocs(collection(db, "stalls")),
-        getDocs(
-          query(collection(db, "payments"), where("status", "==", "approved")),
-        ),
+        getDocs(query(collection(db, "payments"), where("status", "==", "approved"))),
       ]);
 
-      // Active tenants only (role already filtered by query)
-      const activeTenants = usersSnap.docs.filter(
-        (d) => d.data().status === "active",
-      );
+      const activeTenants = usersSnap.docs.filter((d) => d.data().status === "active");
+      const occupiedCount = stallsSnap.docs.filter((d) => d.data().status === "occupied").length;
+      const unoccupiedCount = stallsSnap.docs.filter((d) => d.data().status === "unoccupied").length;
 
-      // Stall counts — maintenance stalls are excluded from both buckets
-      const occupiedCount = stallsSnap.docs.filter(
-        (d) => d.data().status === "occupied",
-      ).length;
-      const unoccupiedCount = stallsSnap.docs.filter(
-        (d) => d.data().status === "unoccupied",
-      ).length;
-
-      // Approved payments within the current calendar month (filtered in memory)
       const startMs = startTS.toMillis();
       const endMs = endTS.toMillis();
       const monthPayments = paymentsSnap.docs.filter((d) => {
         const date = d.data().date as Timestamp | undefined;
         if (!date?.toMillis) return false;
-        const ms = date.toMillis();
-        return ms >= startMs && ms <= endMs;
+        return date.toMillis() >= startMs && date.toMillis() <= endMs;
       });
 
       const paidUids = getPaidTenantUserIds(monthPayments);
       const collectedAmount = monthPayments.reduce(
-        (sum, d) =>
-          sum + ((d.data().amount ?? d.data().paymentAmount ?? 0) as number),
+        (sum, d) => sum + ((d.data().amount ?? d.data().paymentAmount ?? 0) as number),
         0,
       );
-
       const paidCount = activeTenants.filter((d) => paidUids.has(d.id)).length;
 
       setStats({
@@ -173,94 +141,55 @@ export default function Dashboard() {
   if (checking) {
     return (
       <View style={styles.fullCenter}>
-        <ActivityIndicator color={Colors.primary} size="large" />
+        <ActivityIndicator color="#0C2D6B" size="large" />
       </View>
     );
   }
 
   const marketPieData = [
-    {
-      name: "Occupied",
-      population: stats.occupiedCount,
-      color: Colors.primary,
-      legendFontColor: Colors.textSecondary,
-      legendFontSize: 12,
-    },
-    {
-      name: "Unoccupied",
-      population: stats.unoccupiedCount,
-      color: Colors.textMuted,
-      legendFontColor: Colors.textSecondary,
-      legendFontSize: 12,
-    },
+    { name: "Occupied",   population: stats.occupiedCount || 0,   color: "#0C2D6B", legendFontColor: "#444441", legendFontSize: 14 },
+    { name: "Unoccupied", population: stats.unoccupiedCount || 0, color: "#B5D4F4", legendFontColor: "#444441", legendFontSize: 14 },
   ];
 
   const financePieData = [
-    {
-      name: "Unpaid",
-      population: stats.unpaidCount,
-      color: Colors.error,
-      legendFontColor: Colors.textSecondary,
-      legendFontSize: 12,
-    },
-    {
-      name: "Paid",
-      population: stats.paidCount,
-      color: Colors.primary,
-      legendFontColor: Colors.textSecondary,
-      legendFontSize: 12,
-    },
+    { name: "Unpaid", population: stats.unpaidCount || 0, color: "#E24B4A", legendFontColor: "#444441", legendFontSize: 14 },
+    { name: "Paid",   population: stats.paidCount || 0,   color: "#1D9E75", legendFontColor: "#444441", legendFontSize: 14 },
   ];
 
-  const hasMarketData = stats.occupiedCount + stats.unoccupiedCount > 0;
+  const hasMarketData  = stats.occupiedCount + stats.unoccupiedCount > 0;
   const hasFinanceData = stats.paidCount + stats.unpaidCount > 0;
 
   return (
     <View style={styles.screen}>
-      {/* Header bar */}
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity
-          style={styles.menuBtn}
-          activeOpacity={0.7}
-          onPress={() => setSidebarVisible(true)}
-        >
-          <Text style={styles.menuIcon}>☰</Text>
+      {/* Header */}
+      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
+        <TouchableOpacity onPress={() => setSidebarVisible(true)} activeOpacity={0.7}>
+          <Menu size={24} color="#E6F1FB" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>RentWise</Text>
-        {/* Spacer keeps title visually centered */}
-        <View style={styles.menuBtn} />
+        <NotificationBell />
       </View>
 
-      {/* Banner */}
+      {/* Market name banner */}
       <View style={styles.banner}>
-        <Text style={styles.bannerText}>
-          Ka Domeng Talipapa Wet and Dry Market
-        </Text>
+        <Text style={styles.bannerText}>Ka Domeng Talipapa Wet and Dry Market</Text>
       </View>
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
         showsVerticalScrollIndicator={false}
       >
         {loading ? (
-          <ActivityIndicator
-            color={Colors.primary}
-            size="large"
-            style={styles.dataLoader}
-          />
+          <ActivityIndicator color="#0C2D6B" size="large" style={styles.dataLoader} />
         ) : (
           <>
-            {/* ── Market Overview ─────────────────────────────── */}
-            <Text style={styles.sectionTitle}>Market Overview</Text>
-
+            {/* Market overview */}
+            <Text style={styles.sectionTitle}>Market overview</Text>
             <View style={styles.statRow}>
-              <StatCard label="Tenants" value={stats.tenantCount} />
-              <StatCard label="Occupied Space" value={stats.occupiedCount} />
-              <StatCard
-                label="Unoccupied Space"
-                value={stats.unoccupiedCount}
-              />
+              <StatCard label="Tenants"    value={stats.tenantCount}    numColor="#0C2D6B" />
+              <StatCard label="Occupied"   value={stats.occupiedCount}   numColor="#0C2D6B" />
+              <StatCard label="Unoccupied" value={stats.unoccupiedCount} numColor="#B4B2A9" />
             </View>
 
             <View style={styles.chartCard}>
@@ -280,18 +209,11 @@ export default function Dashboard() {
               )}
             </View>
 
-            {/* ── Finances Overview ────────────────────────────── */}
-            <Text style={[styles.sectionTitle, styles.sectionGap]}>
-              Finances Overview
-            </Text>
-
+            {/* Financial overview */}
+            <Text style={[styles.sectionTitle, styles.financeSectionTitle]}>Financial overview</Text>
             <View style={styles.statRow}>
-              <StatCard
-                label="Unpaid Tenants"
-                value={stats.unpaidCount}
-                accent={Colors.error}
-              />
-              <StatCard label="Paid Tenants" value={stats.paidCount} />
+              <StatCard label="Paid"   value={stats.paidCount}   numColor="#1D9E75" />
+              <StatCard label="Unpaid" value={stats.unpaidCount} numColor="#E24B4A" />
             </View>
 
             <View style={styles.chartCard}>
@@ -307,162 +229,107 @@ export default function Dashboard() {
                   absolute
                 />
               ) : (
-                <Text style={styles.noData}>
-                  No payments recorded this month
-                </Text>
+                <Text style={styles.noData}>No payment data available</Text>
               )}
             </View>
 
-            <View style={styles.collectionCard}>
-              <Text style={styles.collectionLabel}>
-                Collected Payment This Month
-              </Text>
-              <Text style={styles.collectionAmount}>
-                {formatCurrency(stats.collectedAmount)}
-              </Text>
+            {/* Collected card */}
+            <View style={styles.collectedCard}>
+              <View style={styles.collectedLeft}>
+                <Wallet size={22} color="#0C2D6B" style={{ marginRight: 10 }} />
+                <Text style={styles.collectedLabel}>Total collected</Text>
+              </View>
+              <Text style={styles.collectedAmount}>{formatCurrency(stats.collectedAmount)}</Text>
             </View>
           </>
         )}
       </ScrollView>
 
-      <Sidebar
-        visible={sidebarVisible}
-        onClose={() => setSidebarVisible(false)}
-      />
+      <Sidebar visible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  fullCenter: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: Colors.background,
-  },
+  screen: { flex: 1, backgroundColor: "#F0F4FA" },
+  fullCenter: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#F0F4FA" },
+
   header: {
-    backgroundColor: Colors.primary,
+    backgroundColor: "#0C2D6B",
     paddingBottom: 14,
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  menuBtn: {
-    width: 36,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  menuIcon: {
-    fontSize: 22,
-    color: "#FFFFFF",
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#FFFFFF",
-  },
+  headerTitle: { fontSize: 18, fontWeight: "500", color: "#FFFFFF" },
+
   banner: {
-    backgroundColor: Colors.primaryDark,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    backgroundColor: "#1A4DA0",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    alignItems: "center",
   },
-  bannerText: {
-    fontSize: 13,
-    fontWeight: "500",
-    color: "#FFFFFF",
-    textAlign: "center",
-  },
-  scroll: {
-    flex: 1,
-  },
+  bannerText: { fontSize: 14, fontWeight: "500", color: "#FFFFFF", textAlign: "center" },
+
+  scroll: { flex: 1 },
   scrollContent: {
-    padding: 16,
-    paddingBottom: 32,
+    paddingHorizontal: 16,
+    paddingTop: 20,
   },
-  dataLoader: {
-    paddingVertical: 48,
-  },
+  dataLoader: { marginTop: 60 },
+
   sectionTitle: {
     fontSize: 16,
-    fontWeight: "700",
-    color: Colors.textPrimary,
+    fontWeight: "500",
+    color: "#0C2D6B",
     marginBottom: 12,
   },
-  sectionGap: {
-    marginTop: 24,
+  financeSectionTitle: {
+    marginTop: 8,
   },
+
   statRow: {
     flexDirection: "row",
-    gap: 8,
-    marginBottom: 12,
+    gap: 10,
+    marginBottom: 16,
   },
   statCard: {
     flex: 1,
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 8,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    padding: 14,
     alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
   },
-  statValue: {
-    fontSize: 26,
-    fontWeight: "700",
-  },
-  statLabel: {
-    fontSize: 10,
-    color: Colors.textSecondary,
-    textAlign: "center",
-    marginTop: 4,
-  },
+  statValue: { fontSize: 24, fontWeight: "500" },
+  statLabel: { fontSize: 12, color: "#888780", marginTop: 4 },
+
   chartCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    paddingVertical: 8,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
     alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
-    overflow: "hidden",
-    marginBottom: 4,
+    marginBottom: 16,
   },
-  noData: {
-    fontSize: 13,
-    color: Colors.textMuted,
-    paddingVertical: 32,
-  },
-  collectionCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    padding: 20,
+
+  collectedCard: {
+    backgroundColor: "#E6F1FB",
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
+    flexDirection: "row",
     alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
-    marginTop: 12,
+    justifyContent: "space-between",
+    marginBottom: 32,
   },
-  collectionLabel: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: Colors.textSecondary,
-    marginBottom: 8,
-  },
-  collectionAmount: {
-    fontSize: 28,
-    fontWeight: "700",
-    color: Colors.primary,
-  },
+  collectedLeft: { flexDirection: "row", alignItems: "center" },
+  collectedLabel: { fontSize: 13, color: "#1A4DA0" },
+  collectedAmount: { fontSize: 22, fontWeight: "500", color: "#0C2D6B" },
+
+  noData: { fontSize: 14, color: "#888780", paddingVertical: 40 },
 });

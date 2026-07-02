@@ -54,3 +54,17 @@ export const updateUserProfile = async (
 ) => {
   await updateDoc(doc(db, "users", uid), data);
 };
+
+export const isUsernameTaken = async (
+  username: string,
+  role: string,
+  excludeUid: string,
+): Promise<boolean> => {
+  const q = query(
+    collection(db, "users"),
+    where("username", "==", username),
+    where("role", "==", role),
+  );
+  const snap = await getDocs(q);
+  return snap.docs.some((d: any) => d.id !== excludeUid);
+};

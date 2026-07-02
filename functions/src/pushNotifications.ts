@@ -1,8 +1,6 @@
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { getFirestore } from "firebase-admin/firestore";
 
-const db = getFirestore();
-
 // Triggers whenever a new document is added to the notifications collection.
 // Looks up the target user's Expo push token and sends a push notification
 // via the Expo Push API. This runs in addition to the existing in-app
@@ -21,7 +19,7 @@ export const sendPushOnNotification = onDocumentCreated(
     let expoPushToken: string | undefined;
 
     try {
-      const userDoc = await db.collection("users").doc(userId).get();
+      const userDoc = await getFirestore().collection("users").doc(userId).get();
       if (!userDoc.exists) return;
       expoPushToken = userDoc.data()?.expoPushToken;
     } catch (err) {

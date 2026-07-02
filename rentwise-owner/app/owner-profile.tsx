@@ -17,13 +17,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 
 import { auth } from "../shared/services/auth";
-import { getUserById, updateUserProfile } from "../shared/services/userServices";
+import { getUserById, updateUserProfile, isUsernameTaken } from "../shared/services/userServices";
 
 export default function OwnerProfile() {
   const insets = useSafeAreaInsets();
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [username, setUsername] = useState("");
@@ -57,7 +58,7 @@ export default function OwnerProfile() {
       if (data) {
         const fn = data.firstName ?? "";
         const ln = data.lastName ?? "";
-        const un = data.userName ?? "";
+        const un = data.username ?? "";
         const cn = data.contactNo ?? "";
         setFirstName(fn);
         setLastName(ln);
@@ -86,14 +87,29 @@ export default function OwnerProfile() {
   const handleSave = async () => {
     const user = auth.currentUser;
     if (!user) return;
+
+    const fn = firstName.trim();
+    const ln = lastName.trim();
+    const un = username.trim();
+    const cn = contactNo.trim();
+
+    if (!fn || !ln || !un || !cn) {
+      Alert.alert("Missing Information", "All fields are required.");
+      return;
+    }
+
     setSaving(true);
     try {
-      const fn = firstName.trim();
-      const ln = lastName.trim();
-      const un = username.trim();
-      const cn = contactNo.trim();
+      if (un !== original.username) {
+        const taken = await isUsernameTaken(un, "owner", user.uid);
+        if (taken) {
+          Alert.alert("Username Taken", "This username is already in use. Please choose another.");
+          return;
+        }
+      }
       await updateUserProfile(user.uid, { firstName: fn, lastName: ln, username: un, contactNo: cn });
       setOriginal({ firstName: fn, lastName: ln, username: un, contactNo: cn });
+      setIsEditing(false);
       showToast("Profile saved!");
     } catch (err) {
       console.error(err);
@@ -102,6 +118,15 @@ export default function OwnerProfile() {
       setSaving(false);
     }
   };
+
+  const hasChanges =
+    firstName !== original.firstName ||
+    lastName !== original.lastName ||
+    username !== original.username ||
+    contactNo !== original.contactNo;
+
+  const hasEmptyField =
+    !firstName.trim() || !lastName.trim() || !username.trim() || !contactNo.trim();
 
   const handleChangePassword = async () => {
     const pwRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
@@ -178,62 +203,66 @@ export default function OwnerProfile() {
         {/* Last Name */}
         <Text style={styles.fieldLabel}>Last Name</Text>
         <TextInput
-          style={styles.input}
+          style={[styles.input, !isEditing && styles.inputReadOnly]}
           value={lastName}
           onChangeText={setLastName}
           placeholder="Last Name"
           placeholderTextColor="#B5D4F4"
+          editable={isEditing}
         />
 
         {/* First Name */}
         <Text style={styles.fieldLabel}>First Name</Text>
         <TextInput
-          style={styles.input}
+          style={[styles.input, !isEditing && styles.inputReadOnly]}
           value={firstName}
           onChangeText={setFirstName}
           placeholder="First Name"
           placeholderTextColor="#B5D4F4"
+          editable={isEditing}
         />
 
         {/* Username */}
         <Text style={styles.fieldLabel}>Username</Text>
-        <View style={styles.rowField}>
+        <View style={[styles.rowField, !isEditing && styles.rowFieldReadOnly]}>
           <TextInput
-            style={styles.rowInput}
+            style={[styles.rowInput, !isEditing && styles.rowInputReadOnly]}
             value={username}
             onChangeText={setUsername}
             placeholder="username"
             placeholderTextColor="#B5D4F4"
             autoCapitalize="none"
+            editable={isEditing}
           />
           <Text style={styles.suffix}>@rentwise.app</Text>
         </View>
 
         {/* Contact */}
         <Text style={styles.fieldLabel}>Contact No.</Text>
-        <View style={styles.rowField}>
+        <View style={[styles.rowField, !isEditing && styles.rowFieldReadOnly]}>
           <Text style={styles.prefix}>+63</Text>
           <TextInput
-            style={styles.rowInput}
+            style={[styles.rowInput, !isEditing && styles.rowInputReadOnly]}
             value={contactNo}
             onChangeText={(t) => setContactNo(t.replace(/\D/g, "").slice(0, 11))}
             placeholder="09XXXXXXXXX"
             placeholderTextColor="#B5D4F4"
             keyboardType="phone-pad"
             maxLength={11}
+            editable={isEditing}
           />
         </View>
 
-        {/* Save Button */}
+        {/* Edit / Save Button */}
         <TouchableOpacity
-          style={[styles.saveBtn, (saving || (firstName === original.firstName && lastName === original.lastName && username === original.username && contactNo === original.contactNo)) && styles.btnDisabled]}
-          onPress={handleSave}
-          disabled={saving || (firstName === original.firstName && lastName === original.lastName && username === original.username && contactNo === original.contactNo)}
+          style={[styles.saveBtn, isEditing && (saving || hasEmptyField || !hasChanges) && styles.btnDisabled]}
+          onPress={isEditing ? handleSave : () => setIsEditing(true)}
+          disabled={isEditing && (saving || hasEmptyField || !hasChanges)}
           activeOpacity={0.8}
         >
           {saving
             ? <ActivityIndicator color="#FFFFFF" size="small" />
-            : <Text style={styles.saveBtnText}>Save</Text>
+            : <Text style={styles.saveBtnText}>{isEditing ? "Save changes" : "Edit Profile"}</Text>
           }
         </TouchableOpacity>
 
@@ -244,7 +273,7 @@ export default function OwnerProfile() {
 
         {/* New Password */}
         <Text style={styles.fieldLabel}>New Password</Text>
-        <View style={[styles.pwField, !!pwError && styles.pwFieldError]}>
+        <View style={[styles.pwField, !isEditing && styles.pwFieldReadOnly, !!pwError && styles.pwFieldError]}>
           <TextInput
             style={styles.pwInput}
             value={newPassword}
@@ -254,6 +283,7 @@ export default function OwnerProfile() {
             placeholderTextColor="#B5D4F4"
             autoCapitalize="none"
             maxLength={12}
+            editable={isEditing}
           />
           <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowNewPass((v) => !v)} activeOpacity={0.7}>
             <Ionicons name={showNewPass ? "eye-outline" : "eye-off-outline"} size={18} color="#1A4DA0" />
@@ -264,7 +294,7 @@ export default function OwnerProfile() {
 
         {/* Confirm Password */}
         <Text style={styles.fieldLabel}>Confirm Password</Text>
-        <View style={[styles.pwField, !!confirmError && styles.pwFieldError]}>
+        <View style={[styles.pwField, !isEditing && styles.pwFieldReadOnly, !!confirmError && styles.pwFieldError]}>
           <TextInput
             style={styles.pwInput}
             value={confirmPassword}
@@ -274,6 +304,7 @@ export default function OwnerProfile() {
             placeholderTextColor="#B5D4F4"
             autoCapitalize="none"
             maxLength={12}
+            editable={isEditing}
           />
           <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowConfirmPass((v) => !v)} activeOpacity={0.7}>
             <Ionicons name={showConfirmPass ? "eye-outline" : "eye-off-outline"} size={18} color="#1A4DA0" />
@@ -281,18 +312,20 @@ export default function OwnerProfile() {
         </View>
         {!!confirmError && <Text style={styles.fieldError}>{confirmError}</Text>}
 
-        {/* Update Password Button */}
-        <TouchableOpacity
-          style={[styles.updatePwBtn, (changingPw || newPassword.length < 8 || confirmPassword.length < 8) && styles.btnDisabled]}
-          onPress={handleChangePassword}
-          disabled={changingPw || newPassword.length < 8 || confirmPassword.length < 8}
-          activeOpacity={0.8}
-        >
-          {changingPw
-            ? <ActivityIndicator color="#FFFFFF" size="small" />
-            : <Text style={styles.saveBtnText}>Update Password</Text>
-          }
-        </TouchableOpacity>
+        {/* Update Password Button — only appears once Edit Profile has been tapped */}
+        {isEditing && (
+          <TouchableOpacity
+            style={[styles.updatePwBtn, (changingPw || newPassword.length < 8 || confirmPassword.length < 8) && styles.btnDisabled]}
+            onPress={handleChangePassword}
+            disabled={changingPw || newPassword.length < 8 || confirmPassword.length < 8}
+            activeOpacity={0.8}
+          >
+            {changingPw
+              ? <ActivityIndicator color="#FFFFFF" size="small" />
+              : <Text style={styles.saveBtnText}>Update Password</Text>
+            }
+          </TouchableOpacity>
+        )}
       </ScrollView>
 
       {/* Toast */}
@@ -361,6 +394,10 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: "#0C2D6B",
     marginBottom: 16,
+  },
+  inputReadOnly: {
+    backgroundColor: "#EEF2FA",
+    color: "#6B87B8",
   },
   rowField: {
     width: "100%",
@@ -438,6 +475,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   pwFieldError: { borderColor: "#C0392B" },
+  pwFieldReadOnly: { backgroundColor: "#EEF2FA" },
   pwInput: {
     flex: 1,
     paddingHorizontal: 14,

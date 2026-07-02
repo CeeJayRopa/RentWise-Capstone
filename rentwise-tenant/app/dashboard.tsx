@@ -11,8 +11,11 @@ import {
   ScrollView,
   Image,
   StatusBar,
+  Animated,
+  Easing,
   Linking,
 } from "react-native";
+import { WebView } from "react-native-webview";
 
 import BellIcon from "./components/BellIcon";
 
@@ -22,8 +25,10 @@ import {
   getDoc,
   onSnapshot,
   query,
+  updateDoc,
   where,
 } from "firebase/firestore";
+import { updatePassword } from "firebase/auth";
 
 import { db } from "../shared/services/firestore";
 
@@ -32,8 +37,12 @@ import { useCallback, useRef, useState } from "react";
 
 import { auth } from "../shared/firebaseConfig";
 import { getTenantData } from "../services/tenantService";
-import { createOnlinePayment } from "../services/paymentService";
-import { setPendingCheckoutSession } from "../services/pendingPayment";
+import { createOnlinePayment, createPayment, notifyAdminsOfOnlinePayment } from "../services/paymentService";
+import {
+  setPendingCheckoutSession,
+  getPendingCheckoutSession,
+  clearPendingCheckoutSession,
+} from "../services/pendingPayment";
 
 import { logoutUser } from "../services/authService";
 
@@ -74,9 +83,24 @@ export default function Dashboard() {
   const [showReceiptModal, setShowReceiptModal] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState<any>(null);
   const [payAmount, setPayAmount] = useState("");
+  const [selectedMethod, setSelectedMethod] = useState<"gcash" | "paymaya" | null>(null);
   const [redirecting, setRedirecting] = useState(false);
   const [dropdownTop, setDropdownTop] = useState(0);
   const [dropdownLeft, setDropdownLeft] = useState(0);
+  const [showWebView, setShowWebView] = useState(false);
+  const [webViewUrl, setWebViewUrl] = useState("");
+  const [webViewLoading, setWebViewLoading] = useState(false);
+  const [toastMsg, setToastMsg] = useState("");
+  const [showToast, setShowToast] = useState(false);
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+
+  const [mustChangePassword, setMustChangePassword] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
+  const [changePwError, setChangePwError] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
 
   const monthPillRef = useRef<View>(null);
 
@@ -119,6 +143,7 @@ export default function Dashboard() {
       const tenantData = await getTenantData(uid);
       if (!tenantData) return;
       setTenant(tenantData);
+      setMustChangePassword(!!tenantData.mustChangePassword);
       if (tenantData.stallId) {
         const stallSnap = await getDoc(doc(db, "stalls", tenantData.stallId));
         if (stallSnap.exists()) {
@@ -127,6 +152,117 @@ export default function Dashboard() {
       }
     } catch (error) {
       console.log("PROFILE ERROR:", error);
+    }
+  }
+
+  function triggerToast(msg: string) {
+    setToastMsg(msg);
+    toastOpacity.setValue(0);
+    setShowToast(true);
+    Animated.sequence([
+      Animated.timing(toastOpacity, { toValue: 1, duration: 350, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      Animated.delay(1800),
+      Animated.timing(toastOpacity, { toValue: 0, duration: 350, easing: Easing.in(Easing.ease), useNativeDriver: true }),
+    ]).start(() => setShowToast(false));
+  }
+
+  async function handlePaymentSuccess(amountCentavos: number) {
+    setShowWebView(false);
+    try {
+      const user = auth.currentUser;
+      if (!user) return;
+      const paymentAmount = amountCentavos / 100;
+      const sessionId = getPendingCheckoutSession();
+      clearPendingCheckoutSession();
+      const receiptNo = "RW-ONLINE-" + Date.now().toString().slice(-8);
+      const tenantName = tenant ? `${tenant.firstName} ${tenant.lastName}` : "";
+      const scheduleRent = (() => {
+        const price = stall?.price ?? 0;
+        const schedule = stall?.paymentSchedule ?? "monthly";
+        if (schedule === "daily") {
+          const now = new Date();
+          const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+          return Math.round(price / days);
+        }
+        if (schedule === "weekly") return Math.round(price / 4);
+        if (schedule === "semi-monthly") return Math.round(price / 2);
+        return price;
+      })();
+      const receiptData = {
+        receiptNo,
+        tenantName,
+        buildingNumber: stall?.buildingNumber ?? "",
+        spaceId: stall?.spaceId ?? "",
+        paymentMethod: "GCash/Maya",
+        date: new Date().toISOString(),
+        rentAmount: scheduleRent,
+        payment: paymentAmount,
+        change: 0,
+        status: "PENDING",
+      };
+      await createPayment({
+        userId: user.uid,
+        amount: paymentAmount,
+        rentAmount: scheduleRent,
+        method: "online",
+        status: "pending",
+        tenantName,
+        buildingNumber: stall?.buildingNumber ?? "",
+        spaceId: stall?.spaceId ?? "",
+        stallId: tenant?.stallId ?? "",
+        receiptNo,
+        checkoutSessionId: sessionId ?? null,
+        paymentMethod: "GCash/Maya",
+        receiptData,
+        receipt: null,
+        paymentId: null,
+        cashReceived: null,
+        change: 0,
+      });
+      notifyAdminsOfOnlinePayment(tenantName, paymentAmount, stall?.spaceId ?? "").catch((err) => {
+        console.log("[notifyAdminsOfOnlinePayment] error:", err);
+      });
+      triggerToast("Payment submitted successfully!");
+    } catch (err) {
+      console.log("[handlePaymentSuccess] error:", err);
+      Alert.alert("Error", "Payment received but could not be recorded. Contact support.");
+    }
+  }
+
+  function handlePaymentCancel() {
+    setShowWebView(false);
+    triggerToast("Payment cancelled.");
+  }
+
+  async function handleForcedPasswordChange() {
+    const pwRegex = /^(?=.*[a-zA-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
+    if (!pwRegex.test(newPassword)) {
+      setChangePwError("8–12 characters with letters, numbers, and special characters.");
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setChangePwError("Passwords do not match.");
+      return;
+    }
+    const user = auth.currentUser;
+    if (!user) return;
+    setChangingPassword(true);
+    setChangePwError("");
+    try {
+      await updatePassword(user, newPassword);
+      await updateDoc(doc(db, "users", user.uid), { mustChangePassword: false });
+      setMustChangePassword(false);
+      setNewPassword("");
+      setConfirmNewPassword("");
+      triggerToast("Password updated!");
+    } catch (err: any) {
+      if (err?.code === "auth/requires-recent-login") {
+        setChangePwError("Please log out and log in again, then try changing your password.");
+      } else {
+        setChangePwError("Failed to update password. Please try again.");
+      }
+    } finally {
+      setChangingPassword(false);
     }
   }
 
@@ -149,6 +285,10 @@ export default function Dashboard() {
       Alert.alert("Error", "Please enter a valid amount");
       return;
     }
+    if (!selectedMethod) {
+      Alert.alert("Error", "Please choose GCash or Maya");
+      return;
+    }
     const user = auth.currentUser;
     if (!user) return;
 
@@ -156,14 +296,17 @@ export default function Dashboard() {
       setRedirecting(true);
       const tenantName = tenant ? `${tenant.firstName} ${tenant.lastName}` : "";
       const tenantEmail = tenant?.email || auth.currentUser?.email || "";
-      const { checkoutSessionId, checkoutUrl } = await createOnlinePayment(
+      const { paymentIntentId, redirectUrl } = await createOnlinePayment(
         Number(payAmount),
+        selectedMethod,
         { name: tenantName, email: tenantEmail },
       );
-      setPendingCheckoutSession(checkoutSessionId);
+      setPendingCheckoutSession(paymentIntentId);
       setShowPayModal(false);
       setPayAmount("");
-      await Linking.openURL(checkoutUrl);
+      setSelectedMethod(null);
+      setWebViewUrl(redirectUrl);
+      setShowWebView(true);
     } catch (error) {
       console.log("PAYMONGO ERROR:", error);
       Alert.alert("Error", "Unable to start payment. Please try again.");
@@ -272,8 +415,12 @@ export default function Dashboard() {
           </View>
 
           <View style={[styles.infoRow, styles.infoRowBorder]}>
-            <Text style={styles.infoLabel}>Pending</Text>
-            <Text style={styles.infoValue}>₱{pendingPayment.toLocaleString()}</Text>
+            <Text style={styles.infoLabel}>Payment Schedule</Text>
+            <Text style={styles.infoValue}>
+              {stall?.paymentSchedule
+                ? stall.paymentSchedule.charAt(0).toUpperCase() + stall.paymentSchedule.slice(1)
+                : "—"}
+            </Text>
           </View>
 
           <View style={styles.infoRow}>
@@ -374,6 +521,71 @@ export default function Dashboard() {
         </View>
       </ScrollView>
 
+      {/* FORCED PASSWORD CHANGE MODAL */}
+      <Modal visible={mustChangePassword} transparent animationType="fade" onRequestClose={() => {}}>
+        <View style={styles.payOverlay}>
+          <View style={styles.payCard}>
+            <Text style={styles.payTitle}>Set a new password</Text>
+            <Text style={styles.payHint}>
+              Your account is using the default password. Please set a new
+              password to continue.
+            </Text>
+
+            <Text style={styles.payLabel}>New Password</Text>
+            <View style={styles.pwRow}>
+              <TextInput
+                style={styles.pwRowInput}
+                value={newPassword}
+                onChangeText={(t) => { setNewPassword(t); setChangePwError(""); }}
+                secureTextEntry={!showNewPassword}
+                placeholder="New password"
+                placeholderTextColor="#B4B2A9"
+                autoCapitalize="none"
+                maxLength={12}
+                editable={!changingPassword}
+              />
+              <TouchableOpacity onPress={() => setShowNewPassword((v) => !v)}>
+                <Ionicons name={showNewPassword ? "eye-outline" : "eye-off-outline"} size={18} color="#1D9E75" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.payLabel}>Confirm Password</Text>
+            <View style={styles.pwRow}>
+              <TextInput
+                style={styles.pwRowInput}
+                value={confirmNewPassword}
+                onChangeText={(t) => { setConfirmNewPassword(t); setChangePwError(""); }}
+                secureTextEntry={!showConfirmNewPassword}
+                placeholder="Confirm new password"
+                placeholderTextColor="#B4B2A9"
+                autoCapitalize="none"
+                maxLength={12}
+                editable={!changingPassword}
+              />
+              <TouchableOpacity onPress={() => setShowConfirmNewPassword((v) => !v)}>
+                <Ionicons name={showConfirmNewPassword ? "eye-outline" : "eye-off-outline"} size={18} color="#1D9E75" />
+              </TouchableOpacity>
+            </View>
+
+            {changePwError ? (
+              <Text style={styles.pwErrorText}>{changePwError}</Text>
+            ) : null}
+
+            <TouchableOpacity
+              style={[styles.payNowBtn, changingPassword && styles.payNowBtnDisabled]}
+              disabled={changingPassword}
+              onPress={handleForcedPasswordChange}
+            >
+              {changingPassword ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.payNowText}>Change Password</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* MENU MODAL */}
       <Modal visible={showMenu} transparent animationType="fade">
         <TouchableOpacity
@@ -431,25 +643,59 @@ export default function Dashboard() {
               onChangeText={setPayAmount}
             />
 
+            <Text style={styles.payLabel}>Payment Method</Text>
+            <View style={styles.methodRow}>
+              <TouchableOpacity
+                style={[
+                  styles.methodOption,
+                  selectedMethod === "gcash" && styles.methodOptionSelected,
+                ]}
+                onPress={() => setSelectedMethod("gcash")}
+              >
+                <Text
+                  style={[
+                    styles.methodOptionText,
+                    selectedMethod === "gcash" && styles.methodOptionTextSelected,
+                  ]}
+                >
+                  GCash
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.methodOption,
+                  selectedMethod === "paymaya" && styles.methodOptionSelected,
+                ]}
+                onPress={() => setSelectedMethod("paymaya")}
+              >
+                <Text
+                  style={[
+                    styles.methodOptionText,
+                    selectedMethod === "paymaya" && styles.methodOptionTextSelected,
+                  ]}
+                >
+                  Maya
+                </Text>
+              </TouchableOpacity>
+            </View>
+
             <TouchableOpacity
               style={[
                 styles.payNowBtn,
-                redirecting && styles.payNowBtnDisabled,
+                (redirecting || !selectedMethod) && styles.payNowBtnDisabled,
               ]}
-              disabled={redirecting}
+              disabled={redirecting || !selectedMethod}
               onPress={handlePayNow}
             >
               <Text style={styles.payNowText}>
-                {redirecting
-                  ? "Redirecting to PayMongo..."
-                  : "Pay Now via GCash/Maya"}
+                {redirecting ? "Opening payment..." : "Pay Now"}
               </Text>
             </TouchableOpacity>
 
             <Text style={styles.payHint}>
-              You will be redirected to PayMongo to complete your payment via
-              GCash or Maya. A receipt will be generated automatically after
-              successful payment.
+              Complete your payment via GCash or Maya in the secure payment
+              page. A receipt will be generated automatically after successful
+              payment.
             </Text>
 
             <TouchableOpacity
@@ -457,6 +703,7 @@ export default function Dashboard() {
               onPress={() => {
                 setShowPayModal(false);
                 setPayAmount("");
+                setSelectedMethod(null);
               }}
             >
               <Text style={styles.cancelBtnText}>Close</Text>
@@ -563,6 +810,55 @@ export default function Dashboard() {
         </View>
       </Modal>
 
+      {/* WEBVIEW PAYMENT MODAL */}
+      <Modal visible={showWebView} animationType="slide" onRequestClose={handlePaymentCancel}>
+        <View style={styles.webViewContainer}>
+          <View style={[styles.webViewHeader, { paddingTop: insets.top + 6 }]}>
+            <Text style={styles.webViewTitle}>Pay Online</Text>
+            <TouchableOpacity style={styles.webViewClose} onPress={handlePaymentCancel} activeOpacity={0.7}>
+              <Ionicons name="close" size={22} color="#fff" />
+            </TouchableOpacity>
+          </View>
+          <WebView
+            source={{ uri: webViewUrl }}
+            style={{ flex: 1 }}
+            onLoadStart={() => setWebViewLoading(true)}
+            onLoadEnd={() => setWebViewLoading(false)}
+            onShouldStartLoadWithRequest={(req) => {
+              const url = req.url;
+              if (url.startsWith("rentwise://")) {
+                if (url.includes("payment-success")) {
+                  const match = url.match(/[?&]amount=(\d+)/);
+                  const centavos = match ? parseInt(match[1], 10) : 0;
+                  handlePaymentSuccess(centavos);
+                } else {
+                  handlePaymentCancel();
+                }
+                return false;
+              }
+              // GCash hands off to its own app via a gcash:// scheme URL when
+              // installed — a WebView can't load that directly, so open it
+              // via the OS instead (PayMongo's documented fix for this).
+              if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                Linking.openURL(url).catch(() => {
+                  Alert.alert(
+                    "App not found",
+                    "Please install the GCash or Maya app, or complete payment using the web option shown on the page.",
+                  );
+                });
+                return false;
+              }
+              return true;
+            }}
+          />
+          {webViewLoading && (
+            <View style={styles.webViewSpinner}>
+              <ActivityIndicator size="large" color="#0F6E56" />
+            </View>
+          )}
+        </View>
+      </Modal>
+
       {/* MONTH DROPDOWN */}
       <Modal visible={showMonthPicker} transparent animationType="none">
         <TouchableOpacity
@@ -602,6 +898,14 @@ export default function Dashboard() {
         </TouchableOpacity>
       </Modal>
 
+      {showToast && (
+        <Animated.View style={[styles.toastOverlay, { opacity: toastOpacity }]}>
+          <View style={styles.toastBox}>
+            <Ionicons name="checkmark-circle" size={20} color="#0F6E56" style={{ marginRight: 8 }} />
+            <Text style={styles.toastText}>{toastMsg}</Text>
+          </View>
+        </Animated.View>
+      )}
     </View>
   );
 }
@@ -881,6 +1185,32 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
 
+  methodRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  methodOption: {
+    flex: 1,
+    borderWidth: 1.5,
+    borderColor: "#9FE1CB",
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+    backgroundColor: "#f7fdf9",
+  },
+  methodOptionSelected: {
+    borderColor: "#0F6E56",
+    backgroundColor: "#0F6E56",
+  },
+  methodOptionText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#085041",
+  },
+  methodOptionTextSelected: {
+    color: "#fff",
+  },
+
   payNowBtn: {
     backgroundColor: "#0F6E56",
     padding: 14,
@@ -919,6 +1249,27 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
     textAlign: "center",
+  },
+
+  pwRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1.5,
+    borderColor: "#9FE1CB",
+    borderRadius: 10,
+    backgroundColor: "#f7fdf9",
+    paddingHorizontal: 12,
+  },
+  pwRowInput: {
+    flex: 1,
+    paddingVertical: 12,
+    color: "#085041",
+    fontSize: 15,
+  },
+  pwErrorText: {
+    color: "#A32D2D",
+    fontSize: 12,
+    marginTop: 8,
   },
 
   // ── Receipt modal ────────────────────────────────
@@ -1029,5 +1380,61 @@ const styles = StyleSheet.create({
   monthDropdownTextActive: {
     color: "#0F6E56",
     fontWeight: "500",
+  },
+
+  // ── WebView modal ────────────────────────────────
+  webViewContainer: {
+    flex: 1,
+    backgroundColor: "#fff",
+  },
+  webViewHeader: {
+    backgroundColor: "#0F6E56",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  webViewTitle: {
+    flex: 1,
+    textAlign: "center",
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  webViewClose: {
+    padding: 4,
+  },
+  webViewSpinner: {
+    ...StyleSheet.absoluteFill,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.75)",
+  },
+
+  // ── Toast ─────────────────────────────────────────
+  toastOverlay: {
+    position: "absolute",
+    bottom: 48,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+  },
+  toastBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fff",
+    borderRadius: 24,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  toastText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#085041",
   },
 });

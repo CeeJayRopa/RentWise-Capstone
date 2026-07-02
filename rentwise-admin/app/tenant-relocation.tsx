@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import {
   View,
   Text,
-  FlatList,
+  ScrollView,
+  Pressable,
   TouchableOpacity,
   ActivityIndicator,
   Alert,
@@ -11,9 +12,9 @@ import {
 import { router, useLocalSearchParams } from "expo-router";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 
 import { db } from "../shared/services/firestore";
-import { Colors } from "../shared/constants/color";
 import { restoreTenantToNewStall } from "../shared/services/accountServices";
 
 type StallOption = {
@@ -31,13 +32,13 @@ export default function TenantRelocation() {
     uid: string;
     firstName: string;
     lastName: string;
-    userName: string;
+    username: string;
     buildingNumber: string;
     spaceId: string;
     stallId: string;
   }>();
 
-  const { uid, firstName, lastName, userName, buildingNumber, spaceId } = params;
+  const { uid, firstName, lastName, username, buildingNumber, spaceId } = params;
   const fullName = `${firstName} ${lastName}`.trim();
 
   const [stalls, setStalls] = useState<StallOption[]>([]);
@@ -107,71 +108,66 @@ export default function TenantRelocation() {
 
   return (
     <View style={styles.screen}>
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+      {/* HEADER */}
+      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
         <TouchableOpacity
-          style={styles.navBtn}
           onPress={() => router.back()}
           activeOpacity={0.7}
           disabled={restoring}
         >
-          <Text style={styles.navIcon}>←</Text>
+          <Ionicons name="arrow-back" size={22} color="#E6F1FB" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Tenant Relocation</Text>
-        <View style={styles.navBtn} />
+        <View style={{ width: 22 }} />
       </View>
 
-      {/* Tenant info card */}
-      <View style={styles.infoCard}>
-        <Text style={styles.infoLabel}>Archived Tenant</Text>
-        <Text style={styles.infoName}>{fullName}</Text>
-        <Text style={styles.infoSub}>@{userName}</Text>
-        <View style={styles.infoDivider} />
-        <Text style={styles.infoNotice}>
-          Previous stall{" "}
-          <Text style={styles.infoBold}>
-            Building {buildingNumber} · Space {spaceId}
-          </Text>{" "}
-          is currently occupied. Select a new available stall below.
-        </Text>
-      </View>
-
-      <Text style={styles.sectionTitle}>Available Stalls</Text>
-
-      {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={Colors.primary} size="large" />
+      {/* SCROLLABLE BODY */}
+      <ScrollView
+        style={styles.body}
+        contentContainerStyle={styles.bodyContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* ARCHIVED TENANT CARD */}
+        <View style={styles.infoCard}>
+          <Text style={styles.cardLabel}>Archived tenant</Text>
+          <Text style={styles.infoName}>{fullName}</Text>
+          <Text style={styles.infoUsername}>{username}@rentwise.app</Text>
+          <View style={styles.infoDivider} />
+          <Text style={styles.infoNotice}>
+            Previous stall{" "}
+            <Text style={styles.infoBold}>
+              Building {buildingNumber} {"·"} Space {spaceId}
+            </Text>
+            {" "}is currently occupied. Select a new available stall below.
+          </Text>
         </View>
-      ) : stalls.length === 0 ? (
-        <View style={styles.center}>
+
+        {/* AVAILABLE STALLS */}
+        <Text style={styles.sectionLabel}>Available stalls</Text>
+
+        {loading ? (
+          <View style={styles.center}>
+            <ActivityIndicator color="#0C2D6B" size="large" />
+          </View>
+        ) : stalls.length === 0 ? (
           <Text style={styles.emptyText}>No available stalls at the moment.</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={stalls}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={[
-            styles.listContent,
-            { paddingBottom: insets.bottom + 100 },
-          ]}
-          renderItem={({ item }) => {
+        ) : (
+          stalls.map((item) => {
             const selected = selectedStall?.id === item.id;
             return (
               <TouchableOpacity
+                key={item.id}
                 style={[styles.stallCard, selected && styles.stallCardSelected]}
                 onPress={() => setSelectedStall(item)}
                 activeOpacity={0.75}
                 disabled={restoring}
               >
                 <View style={styles.stallInfo}>
-                  <Text style={[styles.stallTitle, selected && styles.stallTitleSelected]}>
-                    Building {item.buildingNumber} · Space {item.spaceId}
+                  <Text style={styles.stallTitle}>
+                    Building {item.buildingNumber} {"·"} Space {item.spaceId}
                   </Text>
-                  {item.name ? (
-                    <Text style={styles.stallSub}>{item.name}</Text>
-                  ) : null}
                   <Text style={styles.stallSub}>
-                    ₱{item.price.toLocaleString()} · {item.paymentSchedule}
+                    ₱{item.price.toLocaleString()} {"·"} {item.paymentSchedule}
                   </Text>
                 </View>
                 <View style={[styles.radioOuter, selected && styles.radioOuterSelected]}>
@@ -179,162 +175,235 @@ export default function TenantRelocation() {
                 </View>
               </TouchableOpacity>
             );
-          }}
-        />
-      )}
+          })
+        )}
+      </ScrollView>
 
-      {/* Restore button */}
-      <View style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}>
-        <TouchableOpacity
-          style={[
+      {/* FOOTER — RESTORE BUTTON */}
+      <View style={[styles.footer, { paddingBottom: insets.bottom + 28 }]}>
+        <Pressable
+          style={({ pressed }) => [
             styles.restoreBtn,
             (!selectedStall || restoring) && styles.restoreBtnDisabled,
+            pressed && !!selectedStall && !restoring && styles.restoreBtnPressed,
           ]}
           onPress={handleRestore}
-          activeOpacity={0.85}
           disabled={!selectedStall || restoring}
         >
           {restoring ? (
-            <ActivityIndicator color="#FFFFFF" size="small" />
+            <ActivityIndicator color="#fff" size="small" />
           ) : (
-            <Text style={styles.restoreBtnText}>Restore Account</Text>
+            <Text style={styles.restoreBtnText}>Restore account</Text>
           )}
-        </TouchableOpacity>
+        </Pressable>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: Colors.background },
+  screen: {
+    flex: 1,
+    backgroundColor: "#F0F4FA",
+  },
 
-  // Header
+  // ── Header ────────────────────────────────────────────────────────────────────
+
   header: {
-    backgroundColor: Colors.primary,
+    backgroundColor: "#0C2D6B",
+    paddingHorizontal: 20,
     paddingBottom: 14,
-    paddingHorizontal: 16,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
   },
-  navBtn: { width: 36, alignItems: "center", justifyContent: "center" },
-  navIcon: { fontSize: 22, color: "#FFFFFF" },
-  headerTitle: { fontSize: 18, fontWeight: "700", color: "#FFFFFF" },
 
-  // Info card
+  headerTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "500",
+    flex: 1,
+    textAlign: "center",
+  },
+
+  // ── Body ─────────────────────────────────────────────────────────────────────
+
+  body: {
+    flex: 1,
+  },
+
+  bodyContent: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 100,
+  },
+
+  // ── Archived tenant card ──────────────────────────────────────────────────────
+
   infoCard: {
-    margin: 16,
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    padding: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
+    marginBottom: 24,
   },
-  infoLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: Colors.textMuted,
-    textTransform: "uppercase",
-    letterSpacing: 0.6,
-    marginBottom: 6,
-  },
-  infoName: { fontSize: 18, fontWeight: "700", color: Colors.textPrimary },
-  infoSub: { fontSize: 13, color: Colors.textSecondary, marginTop: 2 },
-  infoDivider: { height: 1, backgroundColor: Colors.border, marginVertical: 12 },
-  infoNotice: { fontSize: 13, color: Colors.textSecondary, lineHeight: 19 },
-  infoBold: { fontWeight: "700", color: Colors.textPrimary },
 
-  // Section title
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: Colors.textSecondary,
+  cardLabel: {
+    fontSize: 11,
+    fontWeight: "500",
+    color: "#2E6FD9",
+    letterSpacing: 0.8,
     textTransform: "uppercase",
-    letterSpacing: 0.6,
-    marginHorizontal: 16,
     marginBottom: 8,
   },
 
-  // Stall list
-  listContent: { paddingHorizontal: 16, gap: 10 },
+  infoName: {
+    fontSize: 18,
+    fontWeight: "500",
+    color: "#0C2D6B",
+  },
+
+  infoUsername: {
+    fontSize: 14,
+    color: "#2E6FD9",
+    marginTop: 2,
+  },
+
+  infoDivider: {
+    height: 0.5,
+    backgroundColor: "#E6F1FB",
+    marginVertical: 14,
+  },
+
+  infoNotice: {
+    fontSize: 14,
+    color: "#444441",
+    lineHeight: 20,
+  },
+
+  infoBold: {
+    fontWeight: "500",
+    color: "#0C2D6B",
+  },
+
+  // ── Section label ─────────────────────────────────────────────────────────────
+
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: "500",
+    color: "#2E6FD9",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginBottom: 12,
+  },
+
+  // ── Stall option card ─────────────────────────────────────────────────────────
+
   stallCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    padding: 14,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
+    marginBottom: 10,
     flexDirection: "row",
     alignItems: "center",
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 3,
-    elevation: 1,
   },
+
   stallCardSelected: {
-    borderColor: Colors.primary,
-    backgroundColor: "#EEF4FB",
+    borderColor: "#0C2D6B",
   },
-  stallInfo: { flex: 1 },
+
+  stallInfo: {
+    flex: 1,
+  },
+
   stallTitle: {
     fontSize: 15,
-    fontWeight: "700",
-    color: Colors.textPrimary,
-    marginBottom: 3,
+    fontWeight: "500",
+    color: "#0C2D6B",
   },
-  stallTitleSelected: { color: Colors.primary },
-  stallSub: { fontSize: 12, color: Colors.textSecondary, marginTop: 1 },
 
-  // Radio button
+  stallSub: {
+    fontSize: 13,
+    color: "#888780",
+    marginTop: 4,
+  },
+
+  // ── Radio button ──────────────────────────────────────────────────────────────
+
   radioOuter: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     borderWidth: 2,
-    borderColor: Colors.border,
+    borderColor: "#B5D4F4",
+    backgroundColor: "transparent",
     alignItems: "center",
     justifyContent: "center",
-    marginLeft: 12,
   },
-  radioOuterSelected: { borderColor: Colors.primary },
+
+  radioOuterSelected: {
+    borderColor: "#0C2D6B",
+    backgroundColor: "#0C2D6B",
+  },
+
   radioInner: {
     width: 10,
     height: 10,
     borderRadius: 5,
-    backgroundColor: Colors.primary,
+    backgroundColor: "#fff",
   },
 
-  // Empty / center
-  center: { flex: 1, justifyContent: "center", alignItems: "center" },
-  emptyText: { fontSize: 14, color: Colors.textMuted },
+  // ── Empty / loading ───────────────────────────────────────────────────────────
 
-  // Footer
+  center: {
+    alignItems: "center",
+    paddingTop: 40,
+  },
+
+  emptyText: {
+    fontSize: 14,
+    color: "#888780",
+    textAlign: "center",
+    marginTop: 20,
+  },
+
+  // ── Footer restore button ─────────────────────────────────────────────────────
+
   footer: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: Colors.surface,
+    backgroundColor: "#F0F4FA",
     paddingHorizontal: 16,
     paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 6,
   },
+
   restoreBtn: {
-    backgroundColor: Colors.primary,
-    borderRadius: 12,
-    paddingVertical: 14,
+    width: "100%",
+    backgroundColor: "#0C2D6B",
+    borderRadius: 14,
+    paddingVertical: 15,
     alignItems: "center",
     justifyContent: "center",
+    transform: [{ scale: 1 }],
   },
-  restoreBtnDisabled: { backgroundColor: Colors.disabled },
-  restoreBtnText: { fontSize: 16, fontWeight: "700", color: "#FFFFFF" },
+
+  restoreBtnPressed: {
+    backgroundColor: "#091f4a",
+    transform: [{ scale: 0.97 }],
+  },
+
+  restoreBtnDisabled: {
+    backgroundColor: "#B5D4F4",
+  },
+
+  restoreBtnText: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#fff",
+    textAlign: "center",
+  },
 });

@@ -8,163 +8,149 @@ import {
   Modal,
   ActivityIndicator,
   StyleSheet,
+  Alert,
 } from "react-native";
 import { router } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, doc, getDoc, getDocs } from "firebase/firestore";
-import type { Timestamp } from "firebase/firestore";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
 import {
-  restoreTenant,
-  deleteArchivedTenant,
+  archiveTenant,
+  resetTenantPasswordToDefault,
+  DEFAULT_TENANT_PASSWORD,
 } from "../shared/services/accountServices";
 import Sidebar from "./components/Sidebar";
 import UpdatesReportFAB from "./components/UpdatesReportFAB";
 import NotificationBell from "./components/NotificationBell";
 
-type ArchiveEntry = {
+type Tenant = {
   uid: string;
   firstName: string;
   lastName: string;
   username: string;
   contactNo: string;
+  stallId: string;
   buildingNumber: string;
   spaceId: string;
-  stallId: string;
-  archivedAt: Timestamp | null;
 };
 
-const formatDate = (ts: Timestamp | null): string => {
-  if (!ts) return "—";
-  const d = ts.toDate();
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${dd}/${mm}/${d.getFullYear()}`;
-};
-
-export default function Archives() {
+export default function TenantManagement() {
   const insets = useSafeAreaInsets();
 
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [archives, setArchives] = useState<ArchiveEntry[]>([]);
-
+  const [tenants, setTenants] = useState<Tenant[]>([]);
   const [sidebarVisible, setSidebarVisible] = useState(false);
-  const [confirmTarget, setConfirmTarget] = useState<ArchiveEntry | null>(null);
-  const [checkingStall, setCheckingStall] = useState(false);
-  const [restoring, setRestoring] = useState(false);
-  const [restoreError, setRestoreError] = useState("");
 
-  const [deleteTarget, setDeleteTarget] = useState<ArchiveEntry | null>(null);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState("");
+  // Archive modal state
+  const [archiveTarget, setArchiveTarget] = useState<Tenant | null>(null);
+  const [archiving, setArchiving] = useState(false);
+  const [archiveError, setArchiveError] = useState("");
+
+  // Reset password modal state
+  const [resetTarget, setResetTarget] = useState<Tenant | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState("");
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const snap = await getDocs(collection(db, "archives"));
-      const entries: ArchiveEntry[] = snap.docs.map((d) => {
+      const [usersSnap, stallsSnap] = await Promise.all([
+        getDocs(
+          query(
+            collection(db, "users"),
+            where("role", "==", "tenant"),
+            where("status", "==", "active"),
+          ),
+        ),
+        getDocs(collection(db, "stalls")),
+      ]);
+
+      const stallMap = new Map<string, { buildingNumber: string; spaceId: string }>();
+      stallsSnap.docs.forEach((d) => {
+        const sd = d.data();
+        stallMap.set(d.id, {
+          buildingNumber: String(sd.buildingNumber ?? ""),
+          spaceId: (sd.spaceId as string) ?? "",
+        });
+      });
+
+      const list: Tenant[] = usersSnap.docs.map((d) => {
         const data = d.data();
+        const stall = stallMap.get(data.stallId as string) ?? {
+          buildingNumber: "",
+          spaceId: "",
+        };
         return {
           uid: d.id,
           firstName: (data.firstName as string) ?? "",
           lastName: (data.lastName as string) ?? "",
-          username: (data.username as string) ?? (data.userName as string) ?? "",
+          username: (data.username as string) ?? "",
           contactNo: (data.contactNo as string) ?? "",
-          buildingNumber: (data.buildingNumber as string) ?? "",
-          spaceId: (data.spaceId as string) ?? "",
           stallId: (data.stallId as string) ?? "",
-          archivedAt: (data.archivedAt as Timestamp) ?? null,
+          buildingNumber: stall.buildingNumber,
+          spaceId: stall.spaceId,
         };
       });
-      // Most recently archived first
-      entries.sort((a, b) => {
-        if (!a.archivedAt) return 1;
-        if (!b.archivedAt) return -1;
-        return b.archivedAt.seconds - a.archivedAt.seconds;
-      });
-      setArchives(entries);
+
+      list.sort((a, b) =>
+        `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`),
+      );
+
+      setTenants(list);
     } catch (err) {
-      console.error("ARCHIVES FETCH ERROR:", err);
+      console.error("TENANT MANAGEMENT FETCH ERROR:", err);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsub = onAuthStateChanged(auth, (user) => {
       if (!user) { router.replace("/"); return; }
       setChecking(false);
       fetchData();
     });
-    return unsubscribe;
+    return unsub;
   }, [fetchData]);
 
-  const handleRestorePress = async (item: ArchiveEntry) => {
-    setRestoreError("");
-    if (item.stallId) {
-      setCheckingStall(true);
-      try {
-        const stallSnap = await getDoc(doc(db, "stalls", item.stallId));
-        if (stallSnap.exists() && stallSnap.data().status === "occupied") {
-          router.push({
-            pathname: "/tenant-relocation",
-            params: {
-              uid: item.uid,
-              firstName: item.firstName,
-              lastName: item.lastName,
-              username: item.username,
-              buildingNumber: item.buildingNumber,
-              spaceId: item.spaceId,
-              stallId: item.stallId,
-            },
-          } as any);
-          return;
-        }
-      } catch {
-        setRestoreError("Could not check stall availability. Try again.");
-        return;
-      } finally {
-        setCheckingStall(false);
-      }
-    }
-    setConfirmTarget(item);
-  };
-
-  const handleRestore = async () => {
-    if (!confirmTarget) return;
-    setRestoring(true);
-    setRestoreError("");
+  const handleArchive = async () => {
+    if (!archiveTarget) return;
+    setArchiving(true);
+    setArchiveError("");
     try {
-      await restoreTenant(confirmTarget.uid);
-      setConfirmTarget(null);
+      await archiveTenant(archiveTarget.uid);
+      setArchiveTarget(null);
       fetchData();
     } catch {
-      setRestoreError("Failed to restore. Please try again.");
+      setArchiveError("Failed to archive tenant. Please try again.");
     } finally {
-      setRestoring(false);
+      setArchiving(false);
     }
   };
 
-  const handleDelete = async () => {
-    if (!deleteTarget) return;
-    setDeleting(true);
-    setDeleteError("");
+  const handleResetPassword = async () => {
+    if (!resetTarget) return;
+    setResetting(true);
+    setResetError("");
     try {
-      await deleteArchivedTenant(deleteTarget.uid);
-      setDeleteTarget(null);
-      fetchData();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : JSON.stringify(err);
-      setDeleteError(msg);
+      await resetTenantPasswordToDefault(resetTarget.uid);
+      setResetTarget(null);
+      Alert.alert(
+        "Password Reset",
+        `${resetTarget.firstName} ${resetTarget.lastName}'s password has been reset to ${DEFAULT_TENANT_PASSWORD}.`,
+      );
+    } catch {
+      setResetError("Failed to reset password. Please try again.");
     } finally {
-      setDeleting(false);
+      setResetting(false);
     }
   };
+
 
   if (checking) {
     return (
@@ -181,7 +167,7 @@ export default function Archives() {
         <TouchableOpacity onPress={() => setSidebarVisible(true)} activeOpacity={0.7}>
           <Ionicons name="menu" size={24} color="#E6F1FB" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Account Archives</Text>
+        <Text style={styles.headerTitle}>Tenant Management</Text>
         <NotificationBell />
       </View>
 
@@ -198,64 +184,65 @@ export default function Archives() {
           <View style={styles.fullCenter}>
             <ActivityIndicator color="#0C2D6B" size="large" />
           </View>
-        ) : archives.length === 0 ? (
+        ) : tenants.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons
-              name="archive-outline"
+              name="people-outline"
               size={40}
               color="#B5D4F4"
               style={{ marginBottom: 10 }}
             />
-            <Text style={styles.emptyText}>No archived accounts.</Text>
+            <Text style={styles.emptyText}>No tenants found.</Text>
           </View>
         ) : (
           <ScrollView
             showsVerticalScrollIndicator={false}
             contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 40 }]}
           >
-            {archives.map((item) => (
+            {tenants.map((item) => (
               <View key={item.uid} style={styles.card}>
                 {/* LEFT INFO */}
                 <View style={styles.cardInfo}>
                   <Text style={styles.cardName}>
                     {item.firstName} {item.lastName}
                   </Text>
-                  <Text style={styles.cardUsername}>
-                    {item.username}@rentwise.app
-                  </Text>
-                  <Text style={styles.cardStall}>
-                    Building {item.buildingNumber} {"·"} Space {item.spaceId}
-                  </Text>
-                  <Text style={styles.cardDate}>
-                    Archived: {formatDate(item.archivedAt)}
-                  </Text>
+                  <Text style={styles.cardUsername}>{item.username}@rentwise.app</Text>
+                  {item.buildingNumber ? (
+                    <Text style={styles.cardStall}>
+                      Building {item.buildingNumber} {"·"} Space {item.spaceId}
+                    </Text>
+                  ) : null}
+                  {item.contactNo ? (
+                    <Text style={styles.cardContact}>{item.contactNo}</Text>
+                  ) : null}
                 </View>
 
                 {/* RIGHT ACTIONS */}
                 <View style={styles.cardActions}>
                   <Pressable
                     style={({ pressed }) => [
-                      styles.restoreBtn,
-                      pressed && styles.restoreBtnPressed,
+                      styles.resetBtn,
+                      pressed && styles.resetBtnPressed,
                     ]}
-                    onPress={() => handleRestorePress(item)}
-                    disabled={checkingStall}
+                    onPress={() => {
+                      setResetError("");
+                      setResetTarget(item);
+                    }}
                   >
-                    {checkingStall ? (
-                      <ActivityIndicator color="#fff" size="small" />
-                    ) : (
-                      <Text style={styles.restoreBtnText}>Restore</Text>
-                    )}
+                    <Text style={styles.resetBtnText}>Reset password</Text>
                   </Pressable>
 
                   <Pressable
                     style={({ pressed }) => [
-                      styles.deleteBtn,
-                      pressed && styles.deleteBtnPressed,
+                      styles.archiveBtn,
+                      pressed && styles.archiveBtnPressed,
                     ]}
-                    onPress={() => { setDeleteError(""); setDeleteTarget(item); }}
+                    onPress={() => {
+                      setArchiveError("");
+                      setArchiveTarget(item);
+                    }}
                   >
-                    <Text style={styles.deleteBtnText}>Delete</Text>
+                    <Text style={styles.archiveBtnText}>Archive</Text>
                   </Pressable>
                 </View>
               </View>
@@ -266,121 +253,113 @@ export default function Archives() {
 
       <UpdatesReportFAB disabled={sidebarVisible} />
 
-      {/* RESTORE CONFIRMATION MODAL */}
-      <Modal
-        visible={!!confirmTarget}
-        transparent
-        animationType="fade"
-        onRequestClose={() => { if (!restoring) setConfirmTarget(null); }}
-      >
-        <View style={styles.modalOverlay}>
-          <TouchableOpacity
-            style={StyleSheet.absoluteFill}
-            activeOpacity={1}
-            onPress={() => { if (!restoring) setConfirmTarget(null); }}
-          />
-          {confirmTarget && (
-            <View style={styles.modalCard}>
-              <View style={styles.modalTitleBar}>
-                <Text style={styles.modalTitle}>Restore account?</Text>
-              </View>
-              <View style={styles.modalBody}>
-                <Text style={styles.modalMessage}>
-                  This will restore the tenant's account and they will regain access to the app.
-                </Text>
-                {restoreError ? (
-                  <Text style={styles.modalError}>{restoreError}</Text>
-                ) : null}
-                <View style={styles.modalBtns}>
-                  <TouchableOpacity
-                    style={[styles.modalBtn, styles.modalBtnOutline]}
-                    onPress={() => setConfirmTarget(null)}
-                    activeOpacity={0.7}
-                    disabled={restoring}
-                  >
-                    <Text style={styles.modalBtnOutlineText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.modalBtn,
-                      styles.modalBtnPrimary,
-                      restoring && styles.modalBtnDisabled,
-                    ]}
-                    onPress={handleRestore}
-                    activeOpacity={0.8}
-                    disabled={restoring}
-                  >
-                    {restoring ? (
-                      <ActivityIndicator color="#fff" size="small" />
-                    ) : (
-                      <Text style={styles.modalBtnPrimaryText}>Restore</Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-          )}
-        </View>
-      </Modal>
-
-      {/* DELETE CONFIRMATION MODAL */}
-      <Modal
-        visible={!!deleteTarget}
-        transparent
-        animationType="fade"
-        onRequestClose={() => { if (!deleting) setDeleteTarget(null); }}
-      >
-        <View style={styles.modalOverlay}>
-          <TouchableOpacity
-            style={StyleSheet.absoluteFill}
-            activeOpacity={1}
-            onPress={() => { if (!deleting) setDeleteTarget(null); }}
-          />
-          {deleteTarget && (
-            <View style={styles.modalCard}>
-              <View style={styles.modalTitleBar}>
-                <Text style={styles.modalTitle}>Permanently delete?</Text>
-              </View>
-              <View style={styles.modalBody}>
-                <Text style={styles.modalMessage}>
-                  This action cannot be undone. The tenant's account and all data will be permanently removed.
-                </Text>
-                {deleteError ? (
-                  <Text style={styles.modalError}>{deleteError}</Text>
-                ) : null}
-                <View style={styles.modalBtns}>
-                  <TouchableOpacity
-                    style={[styles.modalBtn, styles.modalBtnOutline]}
-                    onPress={() => setDeleteTarget(null)}
-                    activeOpacity={0.7}
-                    disabled={deleting}
-                  >
-                    <Text style={styles.modalBtnOutlineText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.modalBtn,
-                      styles.modalBtnDanger,
-                      deleting && styles.modalBtnDisabled,
-                    ]}
-                    onPress={handleDelete}
-                    activeOpacity={0.8}
-                    disabled={deleting}
-                  >
-                    {deleting ? (
-                      <ActivityIndicator color="#fff" size="small" />
-                    ) : (
-                      <Text style={styles.modalBtnDangerText}>Delete</Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-          )}
-        </View>
-      </Modal>
-
       <Sidebar visible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
+
+      {/* RESET PASSWORD CONFIRMATION MODAL */}
+      <Modal
+        visible={!!resetTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!resetting) setResetTarget(null); }}
+      >
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => { if (!resetting) setResetTarget(null); }}
+          />
+          {resetTarget && (
+            <View style={styles.modalCard}>
+              <View style={styles.modalTitleBar}>
+                <Text style={styles.modalTitle}>Reset password?</Text>
+              </View>
+              <View style={styles.modalBody}>
+                <Text style={styles.modalMessage}>
+                  This will reset the tenant's password to {DEFAULT_TENANT_PASSWORD}.
+                </Text>
+                {resetError ? (
+                  <Text style={styles.modalError}>{resetError}</Text>
+                ) : null}
+                <View style={styles.modalBtns}>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, styles.modalBtnOutline]}
+                    onPress={() => setResetTarget(null)}
+                    activeOpacity={0.7}
+                    disabled={resetting}
+                  >
+                    <Text style={styles.modalBtnOutlineText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, styles.modalBtnPrimary, resetting && styles.modalBtnDisabled]}
+                    onPress={handleResetPassword}
+                    activeOpacity={0.8}
+                    disabled={resetting}
+                  >
+                    {resetting ? (
+                      <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                      <Text style={styles.modalBtnPrimaryText}>Reset</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+        </View>
+      </Modal>
+
+      {/* ARCHIVE CONFIRMATION MODAL */}
+      <Modal
+        visible={!!archiveTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!archiving) setArchiveTarget(null); }}
+      >
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => { if (!archiving) setArchiveTarget(null); }}
+          />
+          {archiveTarget && (
+            <View style={styles.modalCard}>
+              <View style={styles.modalTitleBar}>
+                <Text style={styles.modalTitle}>Archive tenant?</Text>
+              </View>
+              <View style={styles.modalBody}>
+                <Text style={styles.modalMessage}>
+                  This will archive the tenant's account. They will no longer have access to the app.
+                </Text>
+                {archiveError ? (
+                  <Text style={styles.modalError}>{archiveError}</Text>
+                ) : null}
+                <View style={styles.modalBtns}>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, styles.modalBtnOutline]}
+                    onPress={() => setArchiveTarget(null)}
+                    activeOpacity={0.7}
+                    disabled={archiving}
+                  >
+                    <Text style={styles.modalBtnOutlineText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, styles.modalBtnDanger, archiving && styles.modalBtnDisabled]}
+                    onPress={handleArchive}
+                    activeOpacity={0.8}
+                    disabled={archiving}
+                  >
+                    {archiving ? (
+                      <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                      <Text style={styles.modalBtnDangerText}>Archive</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -457,7 +436,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
-  // ── Archive card ──────────────────────────────────────────────────────────────
+  // ── Tenant card ───────────────────────────────────────────────────────────────
 
   card: {
     backgroundColor: "#fff",
@@ -492,8 +471,8 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  cardDate: {
-    fontSize: 12,
+  cardContact: {
+    fontSize: 13,
     color: "#B4B2A9",
     marginTop: 4,
   },
@@ -503,35 +482,35 @@ const styles = StyleSheet.create({
     alignItems: "stretch",
   },
 
-  // ── Restore button ────────────────────────────────────────────────────────────
+  // ── Reset Password button ─────────────────────────────────────────────────────
 
-  restoreBtn: {
+  resetBtn: {
     backgroundColor: "#0C2D6B",
     borderRadius: 10,
-    paddingHorizontal: 18,
+    paddingHorizontal: 14,
     paddingVertical: 9,
     alignItems: "center",
     transform: [{ scale: 1 }],
   },
 
-  restoreBtnPressed: {
+  resetBtnPressed: {
     backgroundColor: "#091f4a",
     transform: [{ scale: 0.97 }],
   },
 
-  restoreBtnText: {
+  resetBtnText: {
     color: "#fff",
     fontSize: 13,
     fontWeight: "500",
     textAlign: "center",
   },
 
-  // ── Delete button ─────────────────────────────────────────────────────────────
+  // ── Archive button ────────────────────────────────────────────────────────────
 
-  deleteBtn: {
+  archiveBtn: {
     backgroundColor: "#FCEBEB",
     borderRadius: 10,
-    paddingHorizontal: 18,
+    paddingHorizontal: 14,
     paddingVertical: 9,
     alignItems: "center",
     borderWidth: 1,
@@ -539,12 +518,12 @@ const styles = StyleSheet.create({
     transform: [{ scale: 1 }],
   },
 
-  deleteBtnPressed: {
+  archiveBtnPressed: {
     backgroundColor: "#F5C2C2",
     transform: [{ scale: 0.97 }],
   },
 
-  deleteBtnText: {
+  archiveBtnText: {
     color: "#A32D2D",
     fontSize: 13,
     fontWeight: "500",

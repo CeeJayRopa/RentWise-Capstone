@@ -3,8 +3,9 @@ import {
   View,
   Text,
   TextInput,
-  FlatList,
+  ScrollView,
   TouchableOpacity,
+  Pressable,
   Modal,
   ActivityIndicator,
   StyleSheet,
@@ -26,18 +27,19 @@ import {
   where,
 } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Menu } from "lucide-react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
 import { Colors } from "../shared/constants/color";
 import { logDetailedUpdate } from "../shared/services/updatesService";
 import Sidebar from "./components/Sidebar";
+import NotificationBell from "./components/NotificationBell";
 import UpdatesReportFAB from "./components/UpdatesReportFAB";
 import { File, Paths } from "expo-file-system";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 
-type StatusFilter = "All" | "Paid" | "Unpaid" | "Online Payment";
+type StatusFilter = "All" | "Paid" | "Unpaid" | "Pending";
 
 type TenantRow = {
   id: string;
@@ -75,6 +77,10 @@ function isSameWeek(a: Date, b: Date): boolean {
   const startB = new Date(b.getFullYear(), b.getMonth(), b.getDate());
   startB.setDate(startB.getDate() - startB.getDay());
   return startA.getTime() === startB.getTime();
+}
+function isSameSemiMonth(a: Date, b: Date): boolean {
+  const halfOf = (d: Date) => (d.getDate() <= 15 ? 0 : 1);
+  return isSameMonth(a, b) && halfOf(a) === halfOf(b);
 }
 
 export default function Financials() {
@@ -138,6 +144,8 @@ export default function Financials() {
           valid = isSameDay(paymentDate, today);
         if (stall?.paymentSchedule === "weekly")
           valid = isSameWeek(paymentDate, today);
+        if (stall?.paymentSchedule === "semi-monthly")
+          valid = isSameSemiMonth(paymentDate, today);
         if (stall?.paymentSchedule === "monthly")
           valid = isSameMonth(paymentDate, today);
 
@@ -361,6 +369,9 @@ export default function Financials() {
     if (schedule === "weekly") {
       return Math.round(monthlyRent / 4);
     }
+    if (schedule === "semi-monthly") {
+      return Math.round(monthlyRent / 2);
+    }
     return monthlyRent;
   };
 
@@ -407,7 +418,7 @@ export default function Financials() {
       : rows.filter((r) => {
           if (filter === "Paid") return r.status === "paid";
 
-          if (filter === "Online Payment") return r.status === "online";
+          if (filter === "Pending") return r.status === "online";
 
           return r.status === "unpaid";
         });
@@ -424,15 +435,15 @@ export default function Financials() {
       <StatusBar style="light" />
 
       {/* HEADER */}
-      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
+      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
         <TouchableOpacity
           style={styles.iconBtn}
           onPress={() => setSidebarVisible(true)}
         >
-          <Menu size={24} color="#FFFFFF" />
+          <Ionicons name="menu" size={24} color="#E6F1FB" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>RentWise</Text>
-        <View style={styles.iconBtn} />
+        <NotificationBell />
       </View>
 
       {/* BANNER */}
@@ -441,94 +452,92 @@ export default function Financials() {
         <Text style={styles.bannerLine2}>Wet and Dry Market</Text>
       </View>
 
-      {/* FILTER */}
-      <View style={[styles.filterRow, dropdownOpen && { zIndex: 150 }]}>
-        <Text style={styles.filterLabel}>Status:</Text>
-        <View style={styles.filterBtnWrapper}>
-          <TouchableOpacity
-            style={styles.filterBtn}
-            onPress={() => setDropdownOpen((v) => !v)}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.filterBtnText}>{filter}</Text>
-            <Text style={styles.filterArrow}> ▽</Text>
-          </TouchableOpacity>
-          {dropdownOpen && (
-            <View style={styles.dropdown}>
-              {(
-                ["All", "Paid", "Unpaid", "Online Payment"] as StatusFilter[]
-              ).map((opt) => (
-                <TouchableOpacity
-                  key={opt}
-                  style={[
-                    styles.dropdownItem,
-                    filter === opt && styles.dropdownItemActive,
-                  ]}
-                  onPress={() => {
-                    setFilter(opt);
-                    setDropdownOpen(false);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text
+      {/* BODY */}
+      <View style={styles.body}>
+        {/* FILTER */}
+        <View style={[styles.filterRow, dropdownOpen && { zIndex: 150 }]}>
+          <Text style={styles.filterLabel}>Status:</Text>
+          <View style={styles.filterBtnWrapper}>
+            <TouchableOpacity
+              style={styles.filterBtn}
+              onPress={() => setDropdownOpen((v) => !v)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.filterBtnText}>{filter}</Text>
+              <Ionicons name="chevron-down" size={14} color="#2E6FD9" />
+            </TouchableOpacity>
+            {dropdownOpen && (
+              <View style={styles.dropdown}>
+                {(
+                  ["All", "Paid", "Unpaid", "Pending"] as StatusFilter[]
+                ).map((opt) => (
+                  <TouchableOpacity
+                    key={opt}
                     style={[
-                      styles.dropdownItemText,
-                      filter === opt && styles.dropdownItemTextActive,
+                      styles.dropdownItem,
+                      filter === opt && styles.dropdownItemActive,
                     ]}
+                    onPress={() => {
+                      setFilter(opt);
+                      setDropdownOpen(false);
+                    }}
+                    activeOpacity={0.7}
                   >
-                    {opt}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
+                    <Text
+                      style={[
+                        styles.dropdownItemText,
+                        filter === opt && styles.dropdownItemTextActive,
+                      ]}
+                    >
+                      {opt}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
         </View>
-      </View>
 
-      {/* TABLE */}
-      <View style={styles.tableArea}>
+        {/* TENANT INFO CARD */}
         {loading ? (
           <View style={styles.centeredBox}>
             <ActivityIndicator size="large" color={Colors.primary} />
           </View>
         ) : (
-          <View style={styles.tableCard}>
-            <View style={styles.colHeader}>
-              <Text style={styles.colHeaderText}>Tenant Info</Text>
-
-
+          <View style={styles.card}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardHeaderText}>Tenant info</Text>
             </View>
 
             {filteredRows.length === 0 ? (
               <View style={styles.emptyBox}>
+                <Ionicons name="people-outline" size={40} color="#B5D4F4" style={styles.emptyIcon} />
                 <Text style={styles.emptyText}>No tenants found.</Text>
               </View>
             ) : (
-              <FlatList
-                data={filteredRows}
-                keyExtractor={(item) => item.id}
-                renderItem={({ item, index }) => (
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
+              >
+                {filteredRows.map((item, index) => (
                   <View
+                    key={item.id}
                     style={[
                       styles.row,
-                      index < filteredRows.length - 1 && styles.rowDivider,
+                      index < filteredRows.length - 1 && styles.rowBorder,
                     ]}
                   >
                     {/* TENANT INFO */}
                     <View style={styles.rowLeft}>
                       <Text style={styles.rowText}>
-                        Building Number: {item.buildingNumber}
+                        Building number: {item.buildingNumber}
                       </Text>
 
-                      <Text style={styles.rowText}>
+                      <Text style={styles.rowTextSpaced}>
                         Space ID: {item.spaceId}
                       </Text>
 
-                      <Text style={styles.rowText}>Name: {item.name}</Text>
-
-                      <Text style={styles.rowText}>
-                        Rent: ₱{item.rent.toLocaleString()}
-                      </Text>
+                      <Text style={styles.rowName}>Name: {item.name}</Text>
                     </View>
 
                     <View style={styles.rowDividerVertical} />
@@ -536,10 +545,11 @@ export default function Financials() {
                     {/* ACTION BUTTONS — Set to Paid on top, View Info below */}
                     <View style={styles.actionBtns}>
                       {/* PAYMENT BUTTON */}
-                      <TouchableOpacity
-                        style={[
-                          styles.toggleBtn,
-                          item.status !== "unpaid" && styles.toggleBtnPaid,
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.setPaidBtn,
+                          item.status !== "unpaid" && styles.setPaidBtnPaid,
+                          pressed && styles.btnPressed,
                         ]}
                         onPress={async () => {
                           if (item.status === "online") {
@@ -579,8 +589,8 @@ export default function Financials() {
                       >
                         <Text
                           style={[
-                            styles.toggleBtnText,
-                            item.status !== "unpaid" && styles.toggleBtnTextPaid,
+                            styles.setPaidBtnText,
+                            item.status !== "unpaid" && styles.setPaidBtnTextPaid,
                           ]}
                         >
                           {item.status === "unpaid"
@@ -589,11 +599,14 @@ export default function Financials() {
                               ? "Confirm"
                               : "Paid"}
                         </Text>
-                      </TouchableOpacity>
+                      </Pressable>
 
                       {/* VIEW INFO BUTTON */}
-                      <TouchableOpacity
-                        style={styles.profileBtn}
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.viewInfoBtn,
+                          pressed && styles.btnPressed,
+                        ]}
                         onPress={() => {
                           router.push({
                             pathname: "/tenant-preview",
@@ -601,17 +614,17 @@ export default function Financials() {
                           });
                         }}
                       >
-                        <Text style={styles.profileBtnText}>View Info</Text>
-                      </TouchableOpacity>
+                        <Text style={styles.viewInfoBtnText}>View info</Text>
+                      </Pressable>
                     </View>
                   </View>
-                )}
-              />
+                ))}
+              </ScrollView>
             )}
           </View>
         )}
       </View>
-      <UpdatesReportFAB />
+      <UpdatesReportFAB disabled={sidebarVisible} />
 
       {/* CASH PAYMENT MODAL */}
       <Modal visible={paymentModal} transparent animationType="fade">
@@ -1010,88 +1023,111 @@ export default function Financials() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#F5F5F5" },
+  screen: { flex: 1, backgroundColor: "#F0F4FA" },
   fullCenter: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#F5F5F5",
+    backgroundColor: "#F0F4FA",
   },
   actionBtns: {
     flexDirection: "column",
     alignItems: "stretch",
-    gap: 6,
+    gap: 8,
     marginLeft: 8,
     flexShrink: 0,
   },
-  profileBtn: {
-    borderWidth: 1,
-    borderColor: "#2D6A4F",
+  viewInfoBtn: {
     borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: "#2E6FD9",
+    paddingHorizontal: 16,
     paddingVertical: 8,
-    paddingHorizontal: 12,
     alignItems: "center",
   },
-
-  profileBtnText: {
-    color: "#2D6A4F",
-    fontWeight: "600",
+  viewInfoBtnText: {
     fontSize: 13,
+    fontWeight: "500",
+    color: "#2E6FD9",
+    textAlign: "center",
   },
 
   header: {
-    backgroundColor: "#1A1A1A",
-    paddingBottom: 14,
-    paddingHorizontal: 16,
+    backgroundColor: "#0C2D6B",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
   },
   iconBtn: {
-    width: 36,
-    height: 36,
+    width: 24,
+    height: 24,
     justifyContent: "center",
     alignItems: "center",
   },
-  headerTitle: { fontSize: 20, fontWeight: "700", color: "#FFFFFF" },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: "500",
+    color: "#FFFFFF",
+    flex: 1,
+    textAlign: "center",
+  },
 
   banner: {
-    backgroundColor: "#8FD4A8",
-    paddingVertical: 18,
-    alignItems: "center",
+    backgroundColor: "#1A4DA0",
+    paddingHorizontal: 20,
+    paddingVertical: 20,
   },
-  bannerLine1: { fontSize: 20, fontWeight: "700", color: "#1A1A1A" },
-  bannerLine2: { fontSize: 18, fontWeight: "700", color: "#1A1A1A" },
+  bannerLine1: {
+    fontSize: 20,
+    fontWeight: "500",
+    color: "#FFFFFF",
+    textAlign: "center",
+  },
+  bannerLine2: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#B5D4F4",
+    textAlign: "center",
+    marginTop: 2,
+  },
+
+  body: {
+    flex: 1,
+    backgroundColor: "#F0F4FA",
+    paddingHorizontal: 16,
+    paddingTop: 18,
+  },
 
   filterRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    gap: 10,
+    marginBottom: 16,
   },
-  filterLabel: { fontSize: 14, color: "#1A1A1A", marginRight: 10 },
+  filterLabel: { fontSize: 14, fontWeight: "500", color: "#0C2D6B" },
   filterBtnWrapper: { position: "relative" },
   filterBtn: {
     flexDirection: "row",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#AAAAAA",
-    borderRadius: 5,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    gap: 6,
     backgroundColor: "#FFFFFF",
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
+    paddingHorizontal: 14,
+    paddingVertical: 9,
   },
-  filterBtnText: { fontSize: 13, fontWeight: "600" },
-  filterArrow: { fontSize: 12, color: "#555555" },
+  filterBtnText: { fontSize: 14, fontWeight: "500", color: "#0C2D6B" },
 
   dropdown: {
     position: "absolute",
-    top: 36,
+    top: 44,
     left: 0,
     backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#AAAAAA",
-    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
+    borderRadius: 10,
     minWidth: 150,
     zIndex: 200,
     elevation: 8,
@@ -1099,76 +1135,70 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
     shadowRadius: 4,
-  },
-  dropdownItem: { paddingVertical: 11, paddingHorizontal: 14 },
-  dropdownItemActive: { backgroundColor: "#F0F0F0" },
-  dropdownItemText: { fontSize: 13, color: "#1A1A1A" },
-  dropdownItemTextActive: { fontWeight: "700", color: Colors.primary },
-  dropdownBackdrop: { zIndex: 100 },
-
-  tableArea: { flex: 1, padding: 14 },
-  centeredBox: { flex: 1, justifyContent: "center", alignItems: "center" },
-  tableCard: {
-    flex: 1,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#BBBBBB",
-    borderRadius: 6,
     overflow: "hidden",
   },
-  colHeader: {
-    flexDirection: "row",
-    backgroundColor: "#F0F0F0",
-    padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#BBBBBB",
+  dropdownItem: { paddingVertical: 11, paddingHorizontal: 14 },
+  dropdownItemActive: { backgroundColor: "#E6F1FB" },
+  dropdownItemText: { fontSize: 13, color: "#0C2D6B" },
+  dropdownItemTextActive: { fontWeight: "700", color: "#0C2D6B" },
+  dropdownBackdrop: { zIndex: 100 },
+
+  centeredBox: { flex: 1, justifyContent: "center", alignItems: "center" },
+  card: {
+    flex: 1,
+    marginBottom: 16,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
+    overflow: "hidden",
   },
-  colHeaderText: { fontWeight: "700", fontSize: 14, flex: 1 },
-  colHeaderAction: { width: 110 },
+  cardHeader: {
+    backgroundColor: "#E6F1FB",
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+  },
+  cardHeaderText: { fontSize: 15, fontWeight: "500", color: "#0C2D6B" },
 
   row: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
   },
-  rowDivider: { borderBottomWidth: 1, borderBottomColor: "#EBEBEB" },
+  rowBorder: { borderBottomWidth: 0.5, borderBottomColor: "#E6F1FB" },
   rowDividerVertical: {
-    width: 2,
-    backgroundColor: "#E0E0E0",
-    alignSelf: "stretch",
-    marginHorizontal: 5,
+    width: 1,
+    height: "100%",
+    backgroundColor: "#E6F1FB",
+    marginHorizontal: 14,
   },
   rowLeft: { flex: 1, flexShrink: 1 },
-  rowText: { fontSize: 13, color: "#1A1A1A", lineHeight: 20 },
+  rowText: { fontSize: 14, color: "#444441" },
+  rowTextSpaced: { fontSize: 14, color: "#444441", marginTop: 2 },
+  rowName: { fontSize: 14, fontWeight: "500", color: "#0C2D6B", marginTop: 2 },
 
-  toggleBtn: {
-    borderWidth: 1,
-    borderColor: "#1A1A1A",
+  setPaidBtn: {
     borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: "#0C2D6B",
+    paddingHorizontal: 16,
     paddingVertical: 8,
-    paddingHorizontal: 14,
     alignItems: "center",
-    backgroundColor: "#FFFFFF",
   },
-  toggleBtnPaid: { backgroundColor: "#EBF5EB", borderColor: "#2D6A4F" },
-  toggleBtnText: { fontSize: 13, fontWeight: "600", color: "#1A1A1A" },
-  toggleBtnTextPaid: { color: "#2D6A4F" },
-
-  emptyBox: { flex: 1, justifyContent: "center", alignItems: "center" },
-  emptyText: { color: "#999" },
-
-  fab: {
-    position: "absolute",
-    right: 20,
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: "#F4C430",
-    justifyContent: "center",
-    alignItems: "center",
-    elevation: 6,
+  setPaidBtnPaid: { borderColor: "#0C2D6B" },
+  setPaidBtnText: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: "#0C2D6B",
+    textAlign: "center",
   },
+  setPaidBtnTextPaid: { color: "#0C2D6B" },
+  btnPressed: { backgroundColor: "#E6F1FB" },
+
+  emptyBox: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60 },
+  emptyIcon: { marginBottom: 10 },
+  emptyText: { fontSize: 15, color: "#888780", textAlign: "center" },
 
   modalBg: {
     flex: 1,
@@ -1219,22 +1249,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   modalBtnPrimaryText: { fontSize: 14, fontWeight: "600", color: "#FFFFFF" },
-
-  rentBox: {
-    borderWidth: 1,
-    borderColor: "#2D6A4F",
-    borderRadius: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    marginLeft: 8,
-    backgroundColor: "#FFFFFF",
-  },
-
-  rentText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#2D6A4F",
-  },
 
   cashInput: {
     borderWidth: 1,

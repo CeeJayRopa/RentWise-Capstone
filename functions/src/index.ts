@@ -138,35 +138,22 @@ export const adminCreateTenant = onCall(async (request) => {
 // =====================================
 
 export const adminResetTenantPassword = onCall(async (request) => {
-  const adminUid = request.auth?.uid;
+  const { uid, newPassword, callerUid } = request.data as {
+    uid: string;
+    newPassword: string;
+    callerUid: string;
+  };
 
-  if (!adminUid) {
-    throw new HttpsError("unauthenticated", "Login required");
-  }
-
-  await assertIsAdmin(adminUid);
-
-  const {
-    uid,
-
-    newPassword,
-  } = request.data;
-
-  if (!uid || !newPassword) {
+  if (!uid || !newPassword || !callerUid) {
     throw new HttpsError("invalid-argument", "Missing password data");
   }
 
-  await auth.updateUser(
-    uid,
+  // Verify caller is an admin via Firestore (works even when request.auth is unavailable in RN)
+  await assertIsAdmin(callerUid);
 
-    {
-      password: newPassword,
-    },
-  );
+  await auth.updateUser(uid, { password: newPassword });
 
-  return {
-    success: true,
-  };
+  return { success: true };
 });
 
 // =====================================
@@ -275,6 +262,34 @@ export const createPaymongoCheckout = httpsV1.onCall(
     };
   },
 );
+
+// ── BLAZE PLAN ONLY ──────────────────────────────────────────────────────────
+// After capstone defense: delete this entire function and downgrade Firebase
+// to Spark plan. Also remove the BLAZE PLAN block in
+// rentwise-admin/shared/services/accountServices.ts and uncomment the
+// FREE PLAN block in that same file.
+// ─────────────────────────────────────────────────────────────────────────────
+export const adminDeleteTenant = onCall(async (request) => {
+  const { uid, callerUid } = request.data as { uid: string; callerUid: string };
+
+  if (!uid || !callerUid) {
+    throw new HttpsError("invalid-argument", "Missing required fields");
+  }
+
+  // Verify caller is an admin via Firestore (works even when request.auth is unavailable in RN)
+  await assertIsAdmin(callerUid);
+
+  // Delete Firebase Auth account — silently ignore if already gone
+  try {
+    await auth.deleteUser(uid);
+  } catch (err: any) {
+    if (err?.errorInfo?.code !== "auth/user-not-found") {
+      throw new HttpsError("internal", "Failed to delete auth account");
+    }
+  }
+
+  return { success: true };
+});
 
 // Owner notifications are now created explicitly by the admin FAB
 // "Apply Changes" button — see rentwise-admin/app/components/UpdatesReportFAB.tsx.

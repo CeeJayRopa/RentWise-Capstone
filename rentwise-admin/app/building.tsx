@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
-  FlatList,
+  ScrollView,
+  Pressable,
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
@@ -12,19 +13,19 @@ import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
-import { Colors } from "../shared/constants/color";
 import Sidebar from "./components/Sidebar";
 import UpdatesReportFAB from "./components/UpdatesReportFAB";
+import NotificationBell from "./components/NotificationBell";
 
 type StallDoc = {
   id: string;
   buildingNumber: number;
   spaceId: string;
   name: string;
-  tenantName?: string;
   price: number;
   paymentSchedule: string;
   status: "occupied" | "unoccupied" | "maintenance";
@@ -172,116 +173,137 @@ export default function Building() {
   if (checking) {
     return (
       <View style={styles.fullCenter}>
-        <ActivityIndicator size="large" color={Colors.primary} />
+        <ActivityIndicator size="large" color="#0C2D6B" />
       </View>
     );
   }
 
   return (
     <View style={styles.screen}>
+      {/* HEADER */}
       <View
-        style={[
-          styles.header,
-          {
-            paddingTop: insets.top + 8,
-          },
-        ]}
+        style={[styles.header, { paddingTop: insets.top + 14 }]}
       >
-        <TouchableOpacity
-          style={styles.menuBtn}
-          onPress={() => setSidebarVisible(true)}
-        >
-          <Text style={styles.menuIcon}>☰</Text>
+        <TouchableOpacity onPress={() => setSidebarVisible(true)}>
+          <Ionicons name="menu" size={24} color="#E6F1FB" />
         </TouchableOpacity>
 
         <Text style={styles.headerTitle}>Building Management</Text>
 
-        <View style={styles.menuBtn} />
+        <NotificationBell />
       </View>
 
+      {/* BANNER */}
       <View style={styles.banner}>
         <Text style={styles.bannerText}>
           Ka Domeng Talipapa Wet and Dry Market
         </Text>
       </View>
 
-      <View style={[styles.controls, sheetVisible && { zIndex: 150 }]}>
-        <View style={styles.dropdownWrapper}>
-          <TouchableOpacity
-            style={styles.dropdownTrigger}
-            onPress={() => setSheetVisible((v) => !v)}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.dropdownTriggerText}>
-              {selectedBuilding !== null
-                ? `Building ${selectedBuilding}`
-                : "Select Building"}
-            </Text>
-            <Text style={styles.dropdownArrow}> ▽</Text>
-          </TouchableOpacity>
+      {/* BODY */}
+      <View style={styles.body}>
+        {/* DROPDOWN + FILTER — elevated when dropdown is open */}
+        <View style={sheetVisible ? { zIndex: 150 } : undefined}>
+          {/* BUILDING DROPDOWN */}
+          <View style={styles.dropdownWrapper}>
+            <TouchableOpacity
+              style={styles.dropdownTrigger}
+              onPress={() => setSheetVisible((v) => !v)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.dropdownTriggerText}>
+                {selectedBuilding !== null
+                  ? `Building ${selectedBuilding}`
+                  : "Select Building"}
+              </Text>
+              <Ionicons name="chevron-down" size={14} color="#2E6FD9" />
+            </TouchableOpacity>
 
-          {sheetVisible && (
-            <View style={styles.dropdown}>
-              {buildingNumbers.map((num) => (
-                <TouchableOpacity
-                  key={num}
-                  style={[
-                    styles.dropdownItem,
-                    selectedBuilding === num && styles.dropdownItemActive,
-                  ]}
-                  onPress={() => {
-                    setSelectedBuilding(num);
-                    setSheetVisible(false);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text
+            {sheetVisible && (
+              <View style={styles.dropdown}>
+                {buildingNumbers.map((num) => (
+                  <TouchableOpacity
+                    key={num}
                     style={[
-                      styles.dropdownItemText,
-                      selectedBuilding === num && styles.dropdownItemTextActive,
+                      styles.dropdownItem,
+                      selectedBuilding === num && styles.dropdownItemActive,
                     ]}
+                    onPress={() => {
+                      setSelectedBuilding(num);
+                      setSheetVisible(false);
+                    }}
+                    activeOpacity={0.7}
                   >
-                    Building {num}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
+                    <Text
+                      style={[
+                        styles.dropdownItemText,
+                        selectedBuilding === num &&
+                          styles.dropdownItemTextActive,
+                      ]}
+                    >
+                      Building {num}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+
+          {/* FILTER TABS */}
+          <View style={styles.filterRow}>
+            {(["All", "Unoccupied", "Occupied"] as const).map((item) => (
+              <TouchableOpacity
+                key={item}
+                style={[
+                  styles.filterTab,
+                  filter === item && styles.filterTabActive,
+                ]}
+                onPress={() => setFilter(item)}
+              >
+                <Text
+                  style={[
+                    styles.filterTabText,
+                    filter === item && styles.filterTabTextActive,
+                  ]}
+                >
+                  {item}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
 
-        <View style={styles.filterRow}>
-          {(["All", "Unoccupied", "Occupied"] as const).map((item) => (
-            <TouchableOpacity
-              key={item}
-              style={[
-                styles.filterTab,
-                filter === item && styles.filterTabActive,
-              ]}
-              onPress={() => setFilter(item)}
-            >
-              <Text>{item}</Text>
-            </TouchableOpacity>
-          ))}
+        {/* STALL LIST — all spaces live in one card; the card itself scrolls
+            internally as more stalls get added over time */}
+        <View style={[styles.listCard, { marginBottom: insets.bottom + 40 }]}>
+          {loading ? (
+            <View style={styles.listCardCenteredBox}>
+              <ActivityIndicator size="large" color="#0C2D6B" />
+            </View>
+          ) : displayedStalls.length === 0 ? (
+            <View style={styles.listCardCenteredBox}>
+              <Ionicons
+                name="business-outline"
+                size={40}
+                color="#B5D4F4"
+                style={{ marginBottom: 10 }}
+              />
+              <Text style={styles.emptyText}>No stalls found.</Text>
+            </View>
+          ) : (
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {displayedStalls.map((item) => (
+                <StallRow key={item.id} stall={item} tenantMap={tenantMap} />
+              ))}
+            </ScrollView>
+          )}
         </View>
       </View>
 
-      {loading ? (
-        <View style={styles.fullCenter}>
-          <ActivityIndicator size="large" color={Colors.primary} />
-        </View>
-      ) : (
-        <FlatList
-          data={displayedStalls}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <StallRow stall={item} tenantMap={tenantMap} />
-          )}
-        />
-      )}
-
+      {/* DROPDOWN BACKDROP */}
       {sheetVisible && (
         <TouchableOpacity
-          style={[StyleSheet.absoluteFill, styles.dropdownBackdrop]}
+          style={[StyleSheet.absoluteFill, { zIndex: 100 }]}
           onPress={() => setSheetVisible(false)}
           activeOpacity={1}
         />
@@ -292,7 +314,7 @@ export default function Building() {
         onClose={() => setSidebarVisible(false)}
       />
 
-      <UpdatesReportFAB />
+      <UpdatesReportFAB disabled={sidebarVisible} />
     </View>
   );
 }
@@ -304,19 +326,17 @@ function StallRow({
   stall: StallDoc;
   tenantMap: Map<string, TenantInfo>;
 }) {
-  const tenant =
-    stall.status === "occupied" && stall.tenantId
-      ? tenantMap.get(stall.tenantId)
-      : null;
+  const tenant = stall.tenantId ? tenantMap.get(stall.tenantId) : undefined;
+  const tenantName = tenant ? `${tenant.firstName} ${tenant.lastName}`.trim() : "";
 
   return (
     <View style={styles.row}>
       <View style={styles.rowInfo}>
-        <Text>Building: {stall.buildingNumber}</Text>
-
-        <Text>Space: {stall.spaceId}</Text>
-
-        {stall.tenantName && <Text>{stall.tenantName}</Text>}
+        <Text style={styles.rowBuilding}>Building: {stall.buildingNumber}</Text>
+        <Text style={styles.rowSpace}>Space: {stall.spaceId}</Text>
+        {tenantName && (
+          <Text style={styles.rowTenantName}>Name: {tenantName}</Text>
+        )}
       </View>
 
       <View style={styles.rowDividerVertical} />
@@ -324,8 +344,11 @@ function StallRow({
       <View style={styles.stallBtns}>
         {/* UNOCCUPIED */}
         {stall.status === "unoccupied" && (
-          <TouchableOpacity
-            style={styles.button}
+          <Pressable
+            style={({ pressed }) => [
+              styles.btnRegister,
+              pressed && styles.btnRegisterPressed,
+            ]}
             onPress={() =>
               router.push({
                 pathname: "/account",
@@ -336,16 +359,19 @@ function StallRow({
               } as any)
             }
           >
-            <Text style={styles.buttonText}>Register</Text>
-          </TouchableOpacity>
+            <Text style={styles.btnText}>Register</Text>
+          </Pressable>
         )}
 
         {/* OCCUPIED */}
         {stall.status === "occupied" && (
           <>
             {/* MANAGE ACCOUNT */}
-            <TouchableOpacity
-              style={styles.button}
+            <Pressable
+              style={({ pressed }) => [
+                styles.btnManage,
+                pressed && styles.btnManagePressed,
+              ]}
               onPress={() =>
                 router.push({
                   pathname: "/account",
@@ -356,12 +382,15 @@ function StallRow({
                 } as any)
               }
             >
-              <Text style={styles.buttonText}>Manage</Text>
-            </TouchableOpacity>
+              <Text style={styles.btnText}>Manage</Text>
+            </Pressable>
 
             {/* EDIT RENTAL INFO */}
-            <TouchableOpacity
-              style={styles.button}
+            <Pressable
+              style={({ pressed }) => [
+                styles.btnEditRental,
+                pressed && styles.btnEditRentalPressed,
+              ]}
               onPress={() =>
                 router.push({
                   pathname: "/edit-rental-info",
@@ -371,8 +400,8 @@ function StallRow({
                 } as any)
               }
             >
-              <Text style={styles.buttonText}>Edit Rental</Text>
-            </TouchableOpacity>
+              <Text style={styles.btnText}>Edit Rental</Text>
+            </Pressable>
           </>
         )}
       </View>
@@ -383,7 +412,7 @@ function StallRow({
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: "#F0F4FA",
   },
 
   fullCenter: {
@@ -392,128 +421,166 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
 
+  // ── Header ────────────────────────────────────────────────────────────────────
+
   header: {
-    backgroundColor: Colors.primary,
-    paddingBottom: 15,
+    backgroundColor: "#0C2D6B",
+    paddingHorizontal: 20,
+    paddingBottom: 14,
     flexDirection: "row",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-  },
-
-  menuBtn: {
-    width: 40,
-  },
-
-  menuIcon: {
-    color: "#fff",
-    fontSize: 24,
+    alignItems: "center",
   },
 
   headerTitle: {
     color: "#fff",
-    fontWeight: "700",
+    fontSize: 18,
+    fontWeight: "500",
+    flex: 1,
+    textAlign: "center",
   },
 
+  // ── Banner ────────────────────────────────────────────────────────────────────
+
   banner: {
-    backgroundColor: Colors.primaryDark,
-    padding: 10,
+    backgroundColor: "#1A4DA0",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
   },
 
   bannerText: {
     color: "#fff",
+    fontSize: 14,
+    fontWeight: "500",
     textAlign: "center",
   },
 
-  controls: {
-    padding: 15,
+  // ── Body ─────────────────────────────────────────────────────────────────────
+
+  body: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 16,
   },
+
+  // ── Building dropdown ─────────────────────────────────────────────────────────
 
   dropdownWrapper: {
     position: "relative",
+    marginBottom: 14,
   },
 
   dropdownTrigger: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: 12,
-    borderWidth: 1,
-    borderColor: "#AAAAAA",
-    borderRadius: 8,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
+    paddingHorizontal: 16,
+    paddingVertical: 13,
   },
 
   dropdownTriggerText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#1A1A1A",
-  },
-
-  dropdownArrow: {
-    fontSize: 12,
-    color: "#555555",
+    flex: 1,
+    fontSize: 15,
+    fontWeight: "500",
+    color: "#0C2D6B",
   },
 
   dropdown: {
     position: "absolute",
-    top: 46,
+    top: 50,
     left: 0,
     right: 0,
     backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#AAAAAA",
-    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
+    borderRadius: 10,
     zIndex: 200,
     elevation: 8,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
+    shadowOpacity: 0.12,
     shadowRadius: 4,
   },
 
   dropdownItem: {
     paddingVertical: 12,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
   },
 
   dropdownItemActive: {
-    backgroundColor: "#F0F0F0",
+    backgroundColor: "#E6F1FB",
   },
 
   dropdownItemText: {
-    fontSize: 13,
-    color: "#1A1A1A",
+    fontSize: 14,
+    color: "#444441",
   },
 
   dropdownItemTextActive: {
-    fontWeight: "700",
-    color: Colors.primary,
+    fontWeight: "600",
+    color: "#0C2D6B",
   },
 
-  dropdownBackdrop: {
-    zIndex: 100,
-  },
+  // ── Filter tabs ───────────────────────────────────────────────────────────────
 
   filterRow: {
     flexDirection: "row",
     gap: 8,
-    marginTop: 10,
+    marginBottom: 16,
   },
 
   filterTab: {
-    padding: 10,
-    borderWidth: 1,
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
   },
 
   filterTabActive: {
-    backgroundColor: Colors.primary,
+    backgroundColor: "#0C2D6B",
+    borderColor: "#0C2D6B",
   },
 
-  row: {
-    paddingVertical: 14,
-    paddingHorizontal: 15,
+  filterTabText: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: "#888780",
+  },
+
+  filterTabTextActive: {
+    color: "#fff",
+  },
+
+  // ── Stall list card ──────────────────────────────────────────────────────────
+
+  listCard: {
+    maxHeight: 430,
     backgroundColor: "#fff",
-    marginVertical: 5,
+    borderRadius: 16,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
+    overflow: "hidden",
+  },
+
+  listCardCenteredBox: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 60,
+  },
+
+  // ── Stall row ─────────────────────────────────────────────────────────────────
+
+  row: {
+    backgroundColor: "#fff",
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderBottomWidth: 0.5,
+    borderColor: "#E6F1FB",
     flexDirection: "row",
     alignItems: "center",
   },
@@ -522,33 +589,94 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
+  rowBuilding: {
+    fontSize: 14,
+    color: "#888780",
+  },
+
+  rowSpace: {
+    fontSize: 15,
+    fontWeight: "500",
+    color: "#0C2D6B",
+    marginTop: 2,
+  },
+
+  rowTenantName: {
+    fontSize: 13,
+    color: "#444441",
+    marginTop: 2,
+  },
+
   rowDividerVertical: {
     width: 1,
-    backgroundColor: "#E0E0E0",
-    alignSelf: "stretch",
-    marginHorizontal: 12,
+    height: "100%",
+    backgroundColor: "#E6F1FB",
+    marginHorizontal: 14,
   },
 
   stallBtns: {
     flexDirection: "column",
     alignItems: "stretch",
-    gap: 6,
+    gap: 8,
     width: 110,
   },
 
-  button: {
-    backgroundColor: Colors.primary,
-    paddingVertical: 10,
-    paddingHorizontal: 6,
-    borderRadius: 6,
-    alignItems: "center",
-  },
+  // ── Action buttons ────────────────────────────────────────────────────────────
 
-  buttonText: {
-    color: "#fff",
+  btnText: {
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: "500",
+    color: "#fff",
     textAlign: "center",
   },
 
+  btnManage: {
+    backgroundColor: "#0C2D6B",
+    borderRadius: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 9,
+    alignItems: "center",
+    transform: [{ scale: 1 }],
+  },
+
+  btnManagePressed: {
+    backgroundColor: "#091f4a",
+    transform: [{ scale: 0.97 }],
+  },
+
+  btnEditRental: {
+    backgroundColor: "#1A4DA0",
+    borderRadius: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 9,
+    alignItems: "center",
+    transform: [{ scale: 1 }],
+  },
+
+  btnEditRentalPressed: {
+    backgroundColor: "#0C2D6B",
+    transform: [{ scale: 0.97 }],
+  },
+
+  btnRegister: {
+    backgroundColor: "#2E6FD9",
+    borderRadius: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 9,
+    alignItems: "center",
+    transform: [{ scale: 1 }],
+  },
+
+  btnRegisterPressed: {
+    backgroundColor: "#1A4DA0",
+    transform: [{ scale: 0.97 }],
+  },
+
+  // ── Empty state ───────────────────────────────────────────────────────────────
+
+  emptyText: {
+    fontSize: 15,
+    color: "#888780",
+    textAlign: "center",
+  },
 });

@@ -1,7 +1,5 @@
 import { getFirestore } from 'firebase-admin/firestore';
 
-const db = getFirestore();
-
 // ─────────────────────────────────────────────────────────────────────────────
 // PERIOD HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -30,6 +28,13 @@ function isSameMonth(a: Date, b: Date): boolean {
   );
 }
 
+// Semi-monthly periods split each calendar month into two halves: 1st–15th
+// and 16th–end of month.
+function isSameSemiMonth(a: Date, b: Date): boolean {
+  const halfOf = (d: Date) => (d.getDate() <= 15 ? 0 : 1);
+  return isSameMonth(a, b) && halfOf(a) === halfOf(b);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PAYMENT DUE CHECK
 // Returns true  → no approved/pending payment found for the current period
@@ -40,7 +45,7 @@ export async function isPaymentDue(
   schedule: string,
 ): Promise<boolean> {
   // Composite index required in Firestore: userId ASC, status ASC
-  const snap = await db
+  const snap = await getFirestore()
     .collection('payments')
     .where('userId', '==', tenantId)
     .where('status', 'in', ['approved', 'pending'])
@@ -57,6 +62,7 @@ export async function isPaymentDue(
     let coveredByThisPeriod = false;
     if (schedule === 'daily') coveredByThisPeriod = isSameDay(paymentDate, now);
     if (schedule === 'weekly') coveredByThisPeriod = isSameWeek(paymentDate, now);
+    if (schedule === 'semi-monthly') coveredByThisPeriod = isSameSemiMonth(paymentDate, now);
     if (schedule === 'monthly') coveredByThisPeriod = isSameMonth(paymentDate, now);
 
     if (coveredByThisPeriod) return false; // payment exists → NOT due
@@ -82,13 +88,15 @@ export async function hasReminderBeenSent(
     periodStart = new Date(now);
     periodStart.setDate(periodStart.getDate() - periodStart.getDay());
     periodStart.setHours(0, 0, 0, 0);
+  } else if (schedule === 'semi-monthly') {
+    periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() <= 15 ? 1 : 16);
   } else {
     // monthly
     periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
   }
 
   // Composite index required: tenantId ASC, schedule ASC, sentAt ASC
-  const snap = await db
+  const snap = await getFirestore()
     .collection('reminder_logs')
     .where('tenantId', '==', tenantId)
     .where('schedule', '==', schedule)

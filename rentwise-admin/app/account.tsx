@@ -8,21 +8,17 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  Modal,
   StyleSheet,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
-import { Colors } from "../shared/constants/color";
-import {
-  createTenantAccount,
-  archiveTenant,
-} from "../shared/services/accountServices";
+import { createTenantAccount, DEFAULT_TENANT_PASSWORD } from "../shared/services/accountServices";
 
 type StallInfo = {
   buildingNumber: string;
@@ -34,7 +30,7 @@ type TenantInfo = {
   uid: string;
   firstName: string;
   lastName: string;
-  userName: string;
+  username: string;
   contactNo: string;
 };
 
@@ -56,27 +52,18 @@ export default function Account() {
   // Create mode form fields
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
-  const [userName, setUserName] = useState("");
+  const [username, setUsername] = useState("");
   const [contactNo, setContactNo] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
 
   // Field errors (create mode)
   const [firstNameError, setFirstNameError] = useState("");
   const [lastNameError, setLastNameError] = useState("");
-  const [userNameError, setUserNameError] = useState("");
-  const [passwordError, setPasswordError] = useState("");
-  const [confirmPasswordError, setConfirmPasswordError] = useState("");
+  const [usernameError, setUsernameError] = useState("");
 
   // Shared submit state
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [submitSuccess, setSubmitSuccess] = useState("");
-
-  // Archive confirmation modal
-  const [archiveModalVisible, setArchiveModalVisible] = useState(false);
-  const [archiving, setArchiving] = useState(false);
-  const [archiveError, setArchiveError] = useState("");
 
   useEffect(() => {
     return () => {
@@ -128,7 +115,7 @@ export default function Account() {
               uid: userSnap.id,
               firstName: (ud.firstName as string) ?? "",
               lastName: (ud.lastName as string) ?? "",
-              userName: (ud.userName as string) ?? "",
+              username: (ud.username as string) ?? "",
               contactNo: (ud.contactNo as string) ?? "",
             });
           }
@@ -153,27 +140,15 @@ export default function Account() {
       setLastNameError("Required.");
       valid = false;
     } else setLastNameError("");
-    if (!userName.trim()) {
-      setUserNameError("Required.");
+    if (!username.trim()) {
+      setUsernameError("Required.");
       valid = false;
-    } else if (!/^[a-zA-Z0-9_]+$/.test(userName.trim())) {
-      setUserNameError("Letters, numbers, and _ only.");
+    } else if (!/^[a-zA-Z0-9_]+$/.test(username.trim())) {
+      setUsernameError("Letters, numbers, and _ only.");
       valid = false;
     } else {
-      setUserNameError("");
+      setUsernameError("");
     }
-    const pwRegex = /^(?=.*[a-zA-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
-    if (!pwRegex.test(password)) {
-      setPasswordError("8–12 characters with letters, numbers, and special characters.");
-      valid = false;
-    } else setPasswordError("");
-    if (!confirmPassword) {
-      setConfirmPasswordError("Please confirm your password.");
-      valid = false;
-    } else if (password !== confirmPassword) {
-      setConfirmPasswordError("Passwords do not match");
-      valid = false;
-    } else setConfirmPasswordError("");
     return valid;
   };
 
@@ -185,14 +160,13 @@ export default function Account() {
       await createTenantAccount({
         firstName: firstName.trim(),
         lastName: lastName.trim(),
-        userName: userName.trim().toLowerCase(),
+        username: username.trim().toLowerCase(),
         contactNo: contactNo.trim(),
-        password,
         stallId,
       });
       setSubmitSuccess("Tenant account created successfully.");
       setTimeout(() => {
-        if (mountedRef.current) router.back();
+        if (mountedRef.current) router.replace("/building");
       }, 1200);
     } catch (err: unknown) {
       const e = err as { message?: string; code?: string };
@@ -201,6 +175,11 @@ export default function Account() {
         e.code === "auth/email-already-in-use"
       ) {
         setSubmitError("Username is already taken.");
+      } else if (
+        e.message?.includes("registered by another admin") ||
+        e.message === "Stall not found."
+      ) {
+        setSubmitError(e.message);
       } else {
         setSubmitError("Failed to create account. Please try again.");
       }
@@ -209,51 +188,25 @@ export default function Account() {
     }
   };
 
-  const handleArchive = async () => {
-    if (!tenantInfo) return;
-    setArchiving(true);
-    setArchiveError("");
-    try {
-      await archiveTenant(tenantInfo.uid);
-      setArchiveModalVisible(false);
-      setSubmitSuccess("Tenant archived.");
-      setTimeout(() => {
-        if (mountedRef.current) router.back();
-      }, 1200);
-    } catch {
-      setArchiveError("Failed to archive tenant. Please try again.");
-    } finally {
-      setArchiving(false);
-    }
-  };
-
-  // ── Auth spinner ─────────────────────────────────────────────────────────
-
   if (checking) {
     return (
       <View style={styles.fullCenter}>
-        <ActivityIndicator color={Colors.primary} size="large" />
+        <ActivityIndicator color="#0C2D6B" size="large" />
       </View>
     );
   }
 
-  // ── Render ───────────────────────────────────────────────────────────────
-
   return (
     <View style={styles.screen}>
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity
-          style={styles.navBtn}
-          onPress={() => router.back()}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.navIcon}>←</Text>
+      {/* HEADER */}
+      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
+        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+          <Ionicons name="arrow-back" size={22} color="#E6F1FB" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>
           {isCreate ? "Register Tenant" : "Manage Account"}
         </Text>
-        <View style={styles.navBtn} />
+        <View style={{ width: 22 }} />
       </View>
 
       <KeyboardAvoidingView
@@ -269,7 +222,7 @@ export default function Account() {
         >
           {loading ? (
             <View style={styles.centeredBox}>
-              <ActivityIndicator color={Colors.primary} size="large" />
+              <ActivityIndicator color="#0C2D6B" size="large" />
             </View>
           ) : loadError ? (
             <View style={styles.centeredBox}>
@@ -284,11 +237,17 @@ export default function Account() {
             </View>
           ) : (
             <>
-              {/* Stall context badge */}
+              {/* STALL ID PILL */}
               {stallInfo && (
-                <View style={styles.contextBox}>
-                  <Text style={styles.contextText}>
-                    Building {stallInfo.buildingNumber} · Space ID:{" "}
+                <View style={styles.stallPill}>
+                  <Ionicons
+                    name="storefront-outline"
+                    size={16}
+                    color="#0C2D6B"
+                    style={{ marginRight: 10 }}
+                  />
+                  <Text style={styles.stallPillText}>
+                    Building {stallInfo.buildingNumber} {"·"} Space ID:{" "}
                     {stallInfo.spaceId}
                   </Text>
                 </View>
@@ -321,57 +280,56 @@ export default function Account() {
                   <View style={styles.field}>
                     <Text style={styles.fieldLabel}>Username</Text>
                     <Text style={styles.fieldHint}>Used for tenant login</Text>
-                    <View style={[styles.usernameRow, !!userNameError && styles.inputError]}>
+                    <View style={[styles.usernameRow, !!usernameError && styles.inputError]}>
                       <TextInput
                         style={styles.usernameInput}
-                        value={userName}
+                        value={username}
                         onChangeText={(t) => {
-                          setUserName(t);
-                          setUserNameError("");
+                          setUsername(t);
+                          setUsernameError("");
                         }}
                         placeholder="username"
                         autoCapitalize="none"
                         editable={!submitting && !submitSuccess}
-                        placeholderTextColor={Colors.textMuted}
+                        placeholderTextColor="#B4B2A9"
                       />
                       <Text style={styles.usernameSuffix}>@rentwise.app</Text>
                     </View>
-                    {userNameError ? <Text style={styles.fieldError}>{userNameError}</Text> : null}
+                    {usernameError ? <Text style={styles.fieldError}>{usernameError}</Text> : null}
                   </View>
 
-                  <Field
-                    label="Contact No."
-                    value={contactNo}
-                    onChange={(t) => setContactNo(t.replace(/\D/g, "").slice(0, 11))}
-                    keyboardType="phone-pad"
-                    maxLength={11}
-                    disabled={submitting || !!submitSuccess}
-                  />
-                  <Field
-                    label="Password"
-                    value={password}
-                    onChange={(t) => {
-                      setPassword(t);
-                      setPasswordError("");
-                    }}
-                    error={passwordError}
-                    hint="8–12 characters, include letters, numbers & special characters"
-                    secure
-                    showToggle
-                    disabled={submitting || !!submitSuccess}
-                  />
-                  <Field
-                    label="Confirm Password"
-                    value={confirmPassword}
-                    onChange={(t) => {
-                      setConfirmPassword(t);
-                      setConfirmPasswordError("");
-                    }}
-                    error={confirmPasswordError}
-                    secure
-                    showToggle
-                    disabled={submitting || !!submitSuccess}
-                  />
+                  <View style={styles.field}>
+                    <Text style={styles.fieldLabel}>Contact No.</Text>
+                    <View style={styles.phoneRow}>
+                      <View style={styles.phonePrefix}>
+                        <Text style={styles.phonePrefixText}>+63</Text>
+                      </View>
+                      <TextInput
+                        style={styles.phoneInput}
+                        value={contactNo}
+                        onChangeText={(t) => setContactNo(t.replace(/\D/g, "").slice(0, 10))}
+                        placeholder="9XXXXXXXXX"
+                        placeholderTextColor="#B4B2A9"
+                        keyboardType="phone-pad"
+                        maxLength={10}
+                        editable={!submitting && !submitSuccess}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.defaultPasswordNote}>
+                    <Ionicons
+                      name="information-circle-outline"
+                      size={16}
+                      color="#0C2D6B"
+                      style={{ marginRight: 8 }}
+                    />
+                    <Text style={styles.defaultPasswordNoteText}>
+                      The tenant's login password will be set to{" "}
+                      <Text style={styles.defaultPasswordNoteBold}>{DEFAULT_TENANT_PASSWORD}</Text>.
+                      Share the username and this password with the tenant.
+                    </Text>
+                  </View>
 
                   {submitError ? (
                     <Text style={styles.submitError}>{submitError}</Text>
@@ -408,10 +366,10 @@ export default function Account() {
                           label="Name"
                           value={`${tenantInfo.firstName} ${tenantInfo.lastName}`}
                         />
-                        <InfoRow label="Username" value={tenantInfo.userName} />
+                        <InfoRow label="Username" value={tenantInfo.username} />
                         <InfoRow
-                          label="Contact No."
-                          value={tenantInfo.contactNo || "—"}
+                          label="Contact no."
+                          value={tenantInfo.contactNo ? `+63 ${tenantInfo.contactNo}` : "—"}
                           last
                         />
                       </View>
@@ -421,31 +379,20 @@ export default function Account() {
                       ) : null}
                       {submitSuccess ? (
                         <View style={styles.successBox}>
-                          <Text style={styles.successText}>
-                            {submitSuccess}
-                          </Text>
+                          <Text style={styles.successText}>{submitSuccess}</Text>
                         </View>
                       ) : null}
-
-                      <TouchableOpacity
-                        style={[
-                          styles.dangerBtn,
-                          submitting && styles.btnDisabled,
-                        ]}
-                        onPress={() => {
-                          setArchiveError("");
-                          setArchiveModalVisible(true);
-                        }}
-                        activeOpacity={0.8}
-                        disabled={submitting}
-                      >
-                        <Text style={styles.dangerBtnText}>Archive Tenant</Text>
-                      </TouchableOpacity>
                     </>
                   ) : (
-                    <View style={styles.centeredBox}>
-                      <Text style={styles.loadErrorText}>
-                        No tenant found for this stall.
+                    <View style={styles.emptyState}>
+                      <Ionicons
+                        name="person-outline"
+                        size={40}
+                        color="#B5D4F4"
+                        style={{ marginBottom: 10 }}
+                      />
+                      <Text style={styles.emptyText}>
+                        Tenant information not found.
                       </Text>
                     </View>
                   )}
@@ -455,62 +402,6 @@ export default function Account() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
-
-      {/* Archive confirmation modal */}
-      <Modal
-        visible={archiveModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
-          if (!archiving) setArchiveModalVisible(false);
-        }}
-      >
-        <View style={styles.modalOverlay}>
-          <TouchableOpacity
-            style={StyleSheet.absoluteFill}
-            activeOpacity={1}
-            onPress={() => {
-              if (!archiving) setArchiveModalVisible(false);
-            }}
-          />
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Archive Tenant</Text>
-            <Text style={styles.modalBody}>
-              This will mark the tenant as archived and free up their stall. The
-              account remains in Firebase but will be inactive.
-            </Text>
-            {archiveError ? (
-              <Text style={styles.submitError}>{archiveError}</Text>
-            ) : null}
-            <View style={styles.modalBtns}>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.outlineBtn]}
-                onPress={() => setArchiveModalVisible(false)}
-                activeOpacity={0.7}
-                disabled={archiving}
-              >
-                <Text style={styles.outlineBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.modalBtn,
-                  styles.modalDangerBtn,
-                  archiving && styles.btnDisabled,
-                ]}
-                onPress={handleArchive}
-                activeOpacity={0.8}
-                disabled={archiving}
-              >
-                {archiving ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
-                ) : (
-                  <Text style={styles.dangerBtnText}>Archive</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -524,8 +415,6 @@ function Field({
   error,
   hint,
   disabled,
-  secure,
-  showToggle,
   autoCapitalize,
   keyboardType,
   maxLength,
@@ -536,53 +425,24 @@ function Field({
   error?: string;
   hint?: string;
   disabled?: boolean;
-  secure?: boolean;
-  showToggle?: boolean;
   autoCapitalize?: "none" | "sentences" | "words" | "characters";
   keyboardType?: "default" | "numeric" | "email-address" | "phone-pad";
   maxLength?: number;
 }) {
-  const [visible, setVisible] = useState(false);
-  const isSecure = secure && !visible;
-
   return (
     <View style={styles.field}>
       <Text style={styles.fieldLabel}>{label}</Text>
       {hint ? <Text style={styles.fieldHint}>{hint}</Text> : null}
-      {secure && showToggle ? (
-        <View style={[styles.fieldInputRow, error ? styles.inputError : null]}>
-          <TextInput
-            style={styles.fieldInputFlex}
-            value={value}
-            onChangeText={onChange}
-            secureTextEntry={isSecure}
-            autoCapitalize={autoCapitalize ?? "none"}
-            keyboardType={keyboardType ?? "default"}
-            maxLength={maxLength}
-            editable={!disabled}
-            placeholderTextColor={Colors.textMuted}
-          />
-          <TouchableOpacity
-            style={styles.fieldEyeBtn}
-            onPress={() => setVisible((v) => !v)}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.fieldEyeIcon}>{visible ? "🙈" : "👁"}</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <TextInput
-          style={[styles.input, error ? styles.inputError : null]}
-          value={value}
-          onChangeText={onChange}
-          secureTextEntry={isSecure}
-          autoCapitalize={autoCapitalize ?? "sentences"}
-          keyboardType={keyboardType ?? "default"}
-          maxLength={maxLength}
-          editable={!disabled}
-          placeholderTextColor={Colors.textMuted}
-        />
-      )}
+      <TextInput
+        style={[styles.input, error ? styles.inputError : null]}
+        value={value}
+        onChangeText={onChange}
+        autoCapitalize={autoCapitalize ?? "sentences"}
+        keyboardType={keyboardType ?? "default"}
+        maxLength={maxLength}
+        editable={!disabled}
+        placeholderTextColor="#B4B2A9"
+      />
       {error ? <Text style={styles.fieldError}>{error}</Text> : null}
     </View>
   );
@@ -608,111 +468,164 @@ function InfoRow({
 // ── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: Colors.background },
+  screen: {
+    flex: 1,
+    backgroundColor: "#F0F4FA",
+  },
+
   fullCenter: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: Colors.background,
   },
 
-  // Header
+  // ── Header ────────────────────────────────────────────────────────────────────
+
   header: {
-    backgroundColor: Colors.primary,
+    backgroundColor: "#0C2D6B",
+    paddingHorizontal: 20,
     paddingBottom: 14,
-    paddingHorizontal: 16,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
   },
-  navBtn: { width: 36, alignItems: "center", justifyContent: "center" },
-  navIcon: { fontSize: 22, color: "#FFFFFF" },
-  headerTitle: { fontSize: 18, fontWeight: "700", color: "#FFFFFF" },
 
-  // Scroll
-  scrollContent: { padding: 20 },
-  centeredBox: { paddingVertical: 60, alignItems: "center" },
+  headerTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "500",
+    flex: 1,
+    textAlign: "center",
+  },
 
-  // Load error
+  // ── Body ─────────────────────────────────────────────────────────────────────
+
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+  },
+
+  centeredBox: {
+    paddingVertical: 60,
+    alignItems: "center",
+  },
+
   loadErrorText: {
     fontSize: 15,
-    color: Colors.error,
+    color: "#A32D2D",
     textAlign: "center",
     marginBottom: 16,
   },
+
   backLink: { paddingVertical: 8, paddingHorizontal: 16 },
-  backLinkText: { fontSize: 14, fontWeight: "600", color: Colors.primary },
+  backLinkText: { fontSize: 14, fontWeight: "600", color: "#0C2D6B" },
 
-  // Context badge (mirrors edit-rental-info.tsx)
-  contextBox: {
-    backgroundColor: Colors.surface,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 22,
-    borderLeftWidth: 3,
-    borderLeftColor: Colors.primary,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 1,
+  // ── Stall ID pill ─────────────────────────────────────────────────────────────
+
+  stallPill: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
+    borderLeftWidth: 4,
+    borderLeftColor: "#0C2D6B",
+    marginBottom: 20,
+    flexDirection: "row",
+    alignItems: "center",
   },
-  contextText: { fontSize: 14, fontWeight: "600", color: Colors.textPrimary },
 
-  // Form fields
+  stallPillText: {
+    fontSize: 15,
+    fontWeight: "500",
+    color: "#0C2D6B",
+  },
+
+  // ── Tenant info card (manage mode) ────────────────────────────────────────────
+
+  infoCard: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
+    overflow: "hidden",
+    marginBottom: 22,
+  },
+
+  infoRow: {
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#E6F1FB",
+  },
+
+  infoRowLast: {
+    borderBottomWidth: 0,
+  },
+
+  infoLabel: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: "#B5D4F4",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: 4,
+  },
+
+  infoValue: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#0C2D6B",
+  },
+
+  // ── Empty state (manage mode) ─────────────────────────────────────────────────
+
+  emptyState: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingTop: 60,
+  },
+
+  emptyText: {
+    fontSize: 15,
+    color: "#888780",
+    textAlign: "center",
+  },
+
+  // ── Create mode — form fields ─────────────────────────────────────────────────
+
   field: { marginBottom: 18 },
+
   fieldLabel: {
     fontSize: 13,
     fontWeight: "600",
-    color: Colors.textSecondary,
+    color: "#444441",
     marginBottom: 4,
   },
-  fieldHint: { fontSize: 11, color: Colors.textMuted, marginBottom: 5 },
+
+  fieldHint: { fontSize: 11, color: "#888780", marginBottom: 5 },
+
   input: {
-    backgroundColor: Colors.inputBackground,
+    backgroundColor: "#fff",
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: "#B5D4F4",
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 15,
-    color: Colors.textPrimary,
-  },
-  inputError: { borderColor: Colors.error },
-  fieldError: { fontSize: 12, color: Colors.error, marginTop: 4 },
-
-  // Password show/hide row inside Field
-  fieldInputRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: Colors.inputBackground,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 10,
-  },
-  fieldInputFlex: {
-    flex: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: Colors.textPrimary,
-  },
-  fieldEyeBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-  },
-  fieldEyeIcon: {
-    fontSize: 18,
+    color: "#0C2D6B",
   },
 
-  // Username with @rentwise.app suffix
+  inputError: { borderColor: "#A32D2D" },
+  fieldError: { fontSize: 12, color: "#A32D2D", marginTop: 4 },
+
   usernameRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: Colors.inputBackground,
+    backgroundColor: "#fff",
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: "#B5D4F4",
     borderRadius: 10,
   },
   usernameInput: {
@@ -720,43 +633,72 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 15,
-    color: Colors.textPrimary,
+    color: "#0C2D6B",
   },
   usernameSuffix: {
     fontSize: 13,
-    color: Colors.textMuted,
+    color: "#888780",
     paddingRight: 12,
     fontWeight: "500",
   },
 
-  // Tenant info card (manage mode)
-  infoCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    marginBottom: 22,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
+  phoneRow: {
+    flexDirection: "row",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#B5D4F4",
+    backgroundColor: "#fff",
+    overflow: "hidden",
   },
-  infoRow: {
-    paddingVertical: 13,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+  phonePrefix: {
+    backgroundColor: "#E6F1FB",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRightWidth: 1,
+    borderRightColor: "#B5D4F4",
+    justifyContent: "center",
   },
-  infoRowLast: { borderBottomWidth: 0 },
-  infoLabel: { fontSize: 12, color: Colors.textMuted, marginBottom: 3 },
-  infoValue: { fontSize: 15, fontWeight: "600", color: Colors.textPrimary },
+  phonePrefixText: {
+    fontSize: 15,
+    fontWeight: "500",
+    color: "#0C2D6B",
+  },
+  phoneInput: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: "#0C2D6B",
+  },
 
-  // Feedback
+  defaultPasswordNote: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#E6F1FB",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 18,
+  },
+  defaultPasswordNoteText: {
+    flex: 1,
+    fontSize: 13,
+    color: "#0C2D6B",
+    lineHeight: 19,
+  },
+  defaultPasswordNoteBold: {
+    fontWeight: "700",
+  },
+
+  // ── Feedback ──────────────────────────────────────────────────────────────────
+
   submitError: {
     fontSize: 13,
-    color: Colors.error,
+    color: "#A32D2D",
     textAlign: "center",
     marginBottom: 12,
   },
+
   successBox: {
     backgroundColor: "#EBF5EB",
     borderRadius: 8,
@@ -767,9 +709,10 @@ const styles = StyleSheet.create({
   },
   successText: { fontSize: 14, fontWeight: "600", color: "#2D6A4F" },
 
-  // Buttons
+  // ── Buttons ───────────────────────────────────────────────────────────────────
+
   primaryBtn: {
-    backgroundColor: Colors.primary,
+    backgroundColor: "#0C2D6B",
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: "center",
@@ -777,10 +720,10 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     minHeight: 48,
   },
-  primaryBtnText: { fontSize: 15, fontWeight: "600", color: "#FFFFFF" },
+  primaryBtnText: { fontSize: 15, fontWeight: "600", color: "#fff" },
 
   dangerBtn: {
-    backgroundColor: Colors.error,
+    backgroundColor: "#A32D2D",
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: "center",
@@ -788,39 +731,29 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     minHeight: 48,
   },
-  dangerBtnText: { fontSize: 15, fontWeight: "600", color: "#FFFFFF" },
+  dangerBtnText: { fontSize: 15, fontWeight: "600", color: "#fff" },
 
-  btnDisabled: { backgroundColor: Colors.disabled },
+  btnDisabled: { backgroundColor: "#B5D4F4" },
 
-  // Modal
+  // ── Modal (unused in this screen but kept for compatibility) ──────────────────
+
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
+    backgroundColor: "rgba(0,0,0,0.55)",
     justifyContent: "center",
+    alignItems: "center",
     padding: 24,
   },
   modalCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: "#fff",
     borderRadius: 16,
-    padding: 24,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 8,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
+    width: "100%",
+    overflow: "hidden",
   },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: Colors.textPrimary,
-    marginBottom: 10,
-  },
-  modalBody: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    lineHeight: 21,
-    marginBottom: 20,
-  },
+  modalTitle: { fontSize: 18, fontWeight: "700", color: "#0C2D6B", marginBottom: 10 },
+  modalBody: { fontSize: 14, color: "#444441", lineHeight: 21, marginBottom: 20 },
   modalBtns: { flexDirection: "row", gap: 10, alignItems: "stretch" },
   modalBtn: {
     flex: 1,
@@ -829,11 +762,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderRadius: 10,
   },
-  modalDangerBtn: { backgroundColor: Colors.error },
-  outlineBtn: { borderWidth: 1.5, borderColor: Colors.border },
-  outlineBtnText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: Colors.textSecondary,
-  },
+  outlineBtn: { borderWidth: 1.5, borderColor: "#B5D4F4" },
+  outlineBtnText: { fontSize: 14, fontWeight: "600", color: "#0C2D6B" },
 });

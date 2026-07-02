@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   ActivityIndicator,
+  Animated,
   StyleSheet,
   Alert,
   ScrollView,
@@ -12,10 +14,10 @@ import {
 import { router } from "expo-router";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
-import { Colors } from "../shared/constants/color";
 import Sidebar from "./components/Sidebar";
 
 export default function AdminProfile() {
@@ -24,10 +26,16 @@ export default function AdminProfile() {
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [contactNo, setContactNo] = useState("");
+
+  const [focusedField, setFocusedField] = useState<string | null>(null);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const originalRef = useRef({ firstName: "", lastName: "", contactNo: "" });
 
   useEffect(() => {
     const user = auth.currentUser;
@@ -38,14 +46,28 @@ export default function AdminProfile() {
     loadProfile(user.uid);
   }, []);
 
+  useEffect(() => {
+    if (!saved) return;
+    fadeAnim.setValue(0);
+    Animated.sequence([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
+      Animated.delay(1800),
+      Animated.timing(fadeAnim, { toValue: 0, duration: 250, useNativeDriver: true }),
+    ]).start(() => setSaved(false));
+  }, [saved]);
+
   const loadProfile = async (uid: string) => {
     try {
       const snap = await getDoc(doc(db, "users", uid));
       if (snap.exists()) {
         const data = snap.data();
-        setFirstName(data.firstName ?? "");
-        setLastName(data.lastName ?? "");
-        setContactNo(data.contactNo ?? "");
+        const fn = data.firstName ?? "";
+        const ln = data.lastName ?? "";
+        const cn = data.contactNo ?? "";
+        setFirstName(fn);
+        setLastName(ln);
+        setContactNo(cn);
+        originalRef.current = { firstName: fn, lastName: ln, contactNo: cn };
       }
     } catch (err) {
       console.error("ADMIN PROFILE LOAD ERROR:", err);
@@ -54,17 +76,37 @@ export default function AdminProfile() {
     }
   };
 
+  const hasChanges =
+    firstName.trim() !== originalRef.current.firstName ||
+    lastName.trim() !== originalRef.current.lastName ||
+    contactNo.trim() !== originalRef.current.contactNo;
+
+  const hasEmptyField =
+    !firstName.trim() || !lastName.trim() || !contactNo.trim();
+
   const handleSave = async () => {
     const user = auth.currentUser;
     if (!user) return;
+
+    const fn = firstName.trim();
+    const ln = lastName.trim();
+    const cn = contactNo.trim();
+
+    if (!fn || !ln || !cn) {
+      Alert.alert("Missing Information", "All fields are required.");
+      return;
+    }
+
     setSaving(true);
     try {
       await updateDoc(doc(db, "users", user.uid), {
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        contactNo: contactNo.trim(),
+        firstName: fn,
+        lastName: ln,
+        contactNo: cn,
       });
-      Alert.alert("Success", "Profile updated successfully.");
+      originalRef.current = { firstName: fn, lastName: ln, contactNo: cn };
+      setIsEditing(false);
+      setSaved(true);
     } catch (err) {
       console.error("ADMIN PROFILE SAVE ERROR:", err);
       Alert.alert("Error", "Failed to update profile. Please try again.");
@@ -76,101 +118,121 @@ export default function AdminProfile() {
   if (loading) {
     return (
       <View style={styles.fullCenter}>
-        <ActivityIndicator color={Colors.primary} size="large" />
+        <ActivityIndicator color="#0C2D6B" size="large" />
       </View>
     );
   }
 
   return (
     <View style={styles.screen}>
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity
-          style={styles.menuBtn}
-          onPress={() => setSidebarVisible(true)}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.menuIcon}>☰</Text>
+      {/* HEADER */}
+      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
+        <TouchableOpacity onPress={() => setSidebarVisible(true)} activeOpacity={0.7}>
+          <Ionicons name="menu" size={24} color="#E6F1FB" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>RentWise</Text>
-        <View style={styles.menuBtn} />
+        <View style={{ width: 24 }} />
       </View>
 
-      {/* Banner */}
-      <View style={styles.banner}>
-        <Text style={styles.bannerText}>My Account</Text>
+      {/* SUB-HEADER */}
+      <View style={styles.subHeader}>
+        <Text style={styles.subHeaderText}>My account</Text>
       </View>
 
+      {/* BODY */}
       <ScrollView
+        style={styles.body}
         contentContainerStyle={[
-          styles.content,
-          { paddingBottom: insets.bottom + 32 },
+          styles.bodyContent,
+          { paddingBottom: insets.bottom + 48 },
         ]}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        {/* Avatar */}
-        <View style={styles.avatarWrapper}>
-          <View style={styles.avatar}>
-            <View style={styles.avatarHead} />
-            <View style={styles.avatarBody} />
-          </View>
-          <View style={styles.editBadge}>
-            <Text style={styles.editBadgeIcon}>✏</Text>
-          </View>
-        </View>
-
-        {/* Last Name */}
-        <Text style={styles.label}>Last Name</Text>
+        {/* LAST NAME */}
+        <Text style={styles.fieldLabel}>Last name</Text>
         <TextInput
-          style={styles.input}
+          style={[
+            styles.input,
+            focusedField === "lastName" && styles.inputFocused,
+            !isEditing && styles.inputReadOnly,
+          ]}
           value={lastName}
           onChangeText={setLastName}
-          placeholder="Last Name"
-          placeholderTextColor="#AAAAAA"
+          placeholder="Enter last name"
+          placeholderTextColor="#B4B2A9"
+          onFocus={() => setFocusedField("lastName")}
+          onBlur={() => setFocusedField(null)}
+          editable={isEditing && !saving}
         />
 
-        {/* First Name */}
-        <Text style={styles.label}>First Name</Text>
+        {/* FIRST NAME */}
+        <Text style={styles.fieldLabel}>First name</Text>
         <TextInput
-          style={styles.input}
+          style={[
+            styles.input,
+            focusedField === "firstName" && styles.inputFocused,
+            !isEditing && styles.inputReadOnly,
+          ]}
           value={firstName}
           onChangeText={setFirstName}
-          placeholder="First Name"
-          placeholderTextColor="#AAAAAA"
+          placeholder="Enter first name"
+          placeholderTextColor="#B4B2A9"
+          onFocus={() => setFocusedField("firstName")}
+          onBlur={() => setFocusedField(null)}
+          editable={isEditing && !saving}
         />
 
-        {/* Contact No. */}
-        <Text style={styles.label}>Contact No.</Text>
-        <View style={styles.phoneRow}>
+        {/* CONTACT NO. */}
+        <Text style={styles.fieldLabel}>Contact no.</Text>
+        <View
+          style={[
+            styles.phoneRow,
+            focusedField === "contactNo" && styles.phoneRowFocused,
+            !isEditing && styles.phoneRowReadOnly,
+          ]}
+        >
           <View style={styles.phonePrefix}>
             <Text style={styles.phonePrefixText}>+63</Text>
           </View>
           <TextInput
-            style={styles.phoneInput}
+            style={[styles.phoneInput, !isEditing && styles.inputReadOnly]}
             value={contactNo}
-            onChangeText={(t) =>
-              setContactNo(t.replace(/\D/g, "").slice(0, 10))
-            }
+            onChangeText={(t) => setContactNo(t.replace(/\D/g, "").slice(0, 10))}
             keyboardType="phone-pad"
             placeholder="9XXXXXXXXX"
-            placeholderTextColor="#AAAAAA"
+            placeholderTextColor="#B4B2A9"
+            onFocus={() => setFocusedField("contactNo")}
+            onBlur={() => setFocusedField(null)}
+            editable={isEditing && !saving}
           />
         </View>
 
-        {/* Save */}
-        <TouchableOpacity
-          style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
-          onPress={handleSave}
-          disabled={saving}
-          activeOpacity={0.8}
+        {/* EDIT / SAVE BUTTON */}
+        <Pressable
+          style={({ pressed }) => [
+            styles.saveBtn,
+            isEditing && (!hasChanges || hasEmptyField || saving) && styles.saveBtnDisabled,
+            pressed && (!isEditing || (hasChanges && !hasEmptyField && !saving)) && styles.saveBtnPressed,
+          ]}
+          onPress={isEditing ? handleSave : () => setIsEditing(true)}
+          disabled={isEditing && (!hasChanges || hasEmptyField || saving)}
         >
           {saving ? (
-            <ActivityIndicator color="#FFFFFF" size="small" />
+            <ActivityIndicator color="#fff" size="small" />
           ) : (
-            <Text style={styles.saveBtnText}>Save</Text>
+            <Text style={styles.saveBtnText}>{isEditing ? "Save changes" : "Edit Profile"}</Text>
           )}
-        </TouchableOpacity>
+        </Pressable>
       </ScrollView>
+
+      {/* SUCCESS TOAST */}
+      {saved && (
+        <Animated.View style={[styles.toast, { opacity: fadeAnim }]}>
+          <Ionicons name="checkmark-circle" size={22} color="#B5D4F4" />
+          <Text style={styles.toastText}>Profile updated.</Text>
+        </Animated.View>
+      )}
 
       <Sidebar
         visible={sidebarVisible}
@@ -181,153 +243,183 @@ export default function AdminProfile() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#EBEBEB" },
+  screen: {
+    flex: 1,
+    backgroundColor: "#F0F4FA",
+  },
+
   fullCenter: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#EBEBEB",
+    backgroundColor: "#F0F4FA",
   },
 
-  // Header
+  // ── Header ────────────────────────────────────────────────────────────────────
+
   header: {
-    backgroundColor: "#1A1A1A",
+    backgroundColor: "#0C2D6B",
+    paddingHorizontal: 20,
     paddingBottom: 14,
-    paddingHorizontal: 16,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
   },
-  menuBtn: { width: 36, alignItems: "center", justifyContent: "center" },
-  menuIcon: { fontSize: 24, color: "#FFFFFF" },
-  headerTitle: { fontSize: 20, fontWeight: "700", color: "#FFFFFF" },
 
-  // Banner
-  banner: {
-    backgroundColor: "#8D7B6A",
-    paddingVertical: 18,
-    alignItems: "center",
+  headerTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "500",
+    flex: 1,
+    textAlign: "center",
   },
-  bannerText: { fontSize: 18, fontWeight: "700", color: "#FFFFFF" },
 
-  // Scrollable content
-  content: {
-    alignItems: "center",
-    paddingHorizontal: 32,
+  // ── Sub-header ────────────────────────────────────────────────────────────────
+
+  subHeader: {
+    backgroundColor: "#1A4DA0",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+  },
+
+  subHeaderText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "500",
+    textAlign: "center",
+  },
+
+  // ── Body ─────────────────────────────────────────────────────────────────────
+
+  body: {
+    flex: 1,
+  },
+
+  bodyContent: {
+    paddingHorizontal: 20,
     paddingTop: 28,
   },
 
-  // Avatar
-  avatarWrapper: {
-    position: "relative",
-    marginBottom: 28,
-  },
-  avatar: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: "#C8C8C8",
-    overflow: "hidden",
-    alignItems: "center",
-    justifyContent: "flex-end",
-  },
-  avatarHead: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: "#6B6B6B",
-    position: "absolute",
-    top: 16,
-  },
-  avatarBody: {
-    width: 54,
-    height: 38,
-    borderRadius: 27,
-    backgroundColor: "#6B6B6B",
-  },
-  editBadge: {
-    position: "absolute",
-    bottom: 0,
-    right: 0,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "#FFFFFF",
-    alignItems: "center",
-    justifyContent: "center",
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 3,
-  },
-  editBadgeIcon: { fontSize: 13 },
+  // ── Fields ────────────────────────────────────────────────────────────────────
 
-  // Form fields
-  label: {
-    alignSelf: "flex-start",
+  fieldLabel: {
     fontSize: 13,
-    fontWeight: "600",
-    color: "#333333",
+    fontWeight: "500",
+    color: "#1A4DA0",
     marginBottom: 6,
   },
+
   input: {
-    width: "100%",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#DDDDDD",
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
+    paddingHorizontal: 16,
+    paddingVertical: 13,
     fontSize: 15,
-    color: "#1A1A1A",
+    color: "#0C2D6B",
     marginBottom: 16,
   },
 
-  // Phone row
+  inputFocused: {
+    borderColor: "#2E6FD9",
+  },
+
+  inputReadOnly: {
+    backgroundColor: "#EEF2FA",
+    color: "#6B87B8",
+  },
+
+  // ── Phone row ─────────────────────────────────────────────────────────────────
+
   phoneRow: {
     flexDirection: "row",
-    width: "100%",
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
+    backgroundColor: "#fff",
+    overflow: "hidden",
     marginBottom: 16,
   },
-  phonePrefix: {
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#DDDDDD",
-    borderRightWidth: 0,
-    borderTopLeftRadius: 8,
-    borderBottomLeftRadius: 8,
-    paddingHorizontal: 12,
-    justifyContent: "center",
-  },
-  phonePrefixText: {
-    fontSize: 15,
-    color: "#1A1A1A",
-    fontWeight: "500",
-  },
-  phoneInput: {
-    flex: 1,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#DDDDDD",
-    borderTopRightRadius: 8,
-    borderBottomRightRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: "#1A1A1A",
+
+  phoneRowFocused: {
+    borderColor: "#2E6FD9",
   },
 
-  // Save button
-  saveBtn: {
-    marginTop: 20,
-    backgroundColor: Colors.primary,
-    paddingVertical: 14,
-    paddingHorizontal: 64,
-    borderRadius: 30,
-    alignItems: "center",
+  phoneRowReadOnly: {
+    backgroundColor: "#EEF2FA",
+  },
+
+  phonePrefix: {
+    backgroundColor: "#E6F1FB",
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    borderRightWidth: 1,
+    borderRightColor: "#B5D4F4",
     justifyContent: "center",
   },
-  saveBtnDisabled: { opacity: 0.6 },
-  saveBtnText: { fontSize: 16, fontWeight: "700", color: "#FFFFFF" },
+
+  phonePrefixText: {
+    fontSize: 15,
+    fontWeight: "500",
+    color: "#0C2D6B",
+  },
+
+  phoneInput: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    fontSize: 15,
+    color: "#0C2D6B",
+  },
+
+  // ── Save button ───────────────────────────────────────────────────────────────
+
+  saveBtn: {
+    width: "100%",
+    borderRadius: 14,
+    backgroundColor: "#0C2D6B",
+    paddingVertical: 15,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 8,
+    transform: [{ scale: 1 }],
+  },
+
+  saveBtnPressed: {
+    backgroundColor: "#091f4a",
+    transform: [{ scale: 0.97 }],
+  },
+
+  saveBtnDisabled: {
+    backgroundColor: "#B5D4F4",
+  },
+
+  saveBtnText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "500",
+    textAlign: "center",
+  },
+
+  // ── Toast ─────────────────────────────────────────────────────────────────────
+
+  toast: {
+    position: "absolute",
+    bottom: 40,
+    left: 20,
+    right: 20,
+    backgroundColor: "#0C2D6B",
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+
+  toastText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "500",
+  },
 });

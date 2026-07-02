@@ -10,12 +10,16 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Modal,
+  ActivityIndicator,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useRef, useEffect } from "react";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { loginUser } from "../services/authService";
+import { collection, query, where, getDocs, addDoc, serverTimestamp } from "firebase/firestore";
+import { db } from "../shared/firebaseConfig";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -27,6 +31,13 @@ export default function Login() {
   const [emailFocused, setEmailFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [fpEmail, setFpEmail] = useState("");
+  const [fpEmailFocused, setFpEmailFocused] = useState(false);
+  const [fpLoading, setFpLoading] = useState(false);
+  const [fpError, setFpError] = useState<string | null>(null);
+  const [fpSuccess, setFpSuccess] = useState(false);
 
   const pulseScale = useRef(new Animated.Value(0.92)).current;
   const pulseOpacity = useRef(new Animated.Value(0.6)).current;
@@ -98,6 +109,51 @@ export default function Login() {
       },
     ],
   });
+
+  function closeForgotModal() {
+    setShowForgotModal(false);
+    setFpEmail("");
+    setFpEmailFocused(false);
+    setFpError(null);
+    setFpSuccess(false);
+  }
+
+  async function handleForgotSubmit() {
+    const trimmed = fpEmail.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!trimmed || !emailRegex.test(trimmed)) {
+      setFpError("Please enter a valid email address.");
+      return;
+    }
+    setFpError(null);
+    setFpLoading(true);
+    try {
+      const snap = await getDocs(
+        query(collection(db, "users"), where("email", "==", trimmed))
+      );
+      if (snap.empty) {
+        setFpError("No account found with this email.");
+        return;
+      }
+      const matched = snap.docs[0];
+      const data = matched.data();
+      await addDoc(collection(db, "passwordResetRequests"), {
+        email: trimmed,
+        tenantId: matched.id,
+        tenantName: `${data.firstName ?? ""} ${data.lastName ?? ""}`.trim(),
+        spaceId: data.spaceId ?? data.stallId ?? "",
+        status: "pending",
+        createdAt: serverTimestamp(),
+      });
+      setFpSuccess(true);
+      setTimeout(() => closeForgotModal(), 2500);
+    } catch (err) {
+      console.log("ForgotPassword error:", err);
+      setFpError("Something went wrong. Please try again.");
+    } finally {
+      setFpLoading(false);
+    }
+  }
 
   async function handleLogin() {
     try {
@@ -207,6 +263,14 @@ export default function Login() {
               </View>
             </Animated.View>
 
+            {/* Forgot password link */}
+            <Pressable
+              style={styles.forgotLink}
+              onPress={() => setShowForgotModal(true)}
+            >
+              <Text style={styles.forgotLinkText}>Forgot password?</Text>
+            </Pressable>
+
             {/* Error banner */}
             {errorMsg ? (
               <View style={styles.errorBanner}>
@@ -229,6 +293,86 @@ export default function Login() {
           </View>
         </View>
       </ScrollView>
+
+      {/* FORGOT PASSWORD MODAL */}
+      <Modal
+        visible={showForgotModal}
+        transparent
+        animationType="fade"
+        onRequestClose={closeForgotModal}
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+        >
+          <View style={fp.overlay}>
+            <View style={fp.card}>
+              {/* Close button */}
+              <Pressable style={fp.closeBtn} onPress={closeForgotModal}>
+                <Ionicons name="close" size={16} color="#5F5E5A" />
+              </Pressable>
+
+              {/* Header */}
+              <View style={fp.iconCircle}>
+                <Ionicons name="mail-outline" size={24} color="#0F6E56" />
+              </View>
+              <Text style={fp.title}>Forgot password</Text>
+              <Text style={fp.subtitle}>
+                Enter your registered email and we'll send your request to the admin.
+              </Text>
+
+              {/* Email field */}
+              <View style={{ marginTop: 22, alignSelf: "stretch" }}>
+                <Text style={fp.label}>Email</Text>
+                <View style={fp.inputWrapper}>
+                  <Ionicons
+                    name="mail-outline"
+                    size={16}
+                    color="#1D9E75"
+                    style={fp.inputIcon}
+                  />
+                  <TextInput
+                    style={[fp.input, fpEmailFocused && fp.inputFocused]}
+                    value={fpEmail}
+                    onChangeText={(t) => { setFpEmail(t); setFpError(null); }}
+                    placeholder="tenant@rentwise.app"
+                    placeholderTextColor="#B4B2A9"
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    onFocus={() => setFpEmailFocused(true)}
+                    onBlur={() => setFpEmailFocused(false)}
+                  />
+                </View>
+                {fpError ? <Text style={fp.errorText}>{fpError}</Text> : null}
+              </View>
+
+              {/* Submit / success */}
+              {fpSuccess ? (
+                <View style={fp.successBox}>
+                  <Ionicons name="information-circle-outline" size={15} color="#0F6E56" style={fp.successIcon} />
+                  <Text style={fp.successText}>
+                    Request sent. The admin will contact you shortly.
+                  </Text>
+                </View>
+              ) : (
+                <Pressable
+                  style={({ pressed }) => [
+                    fp.submitBtn,
+                    pressed && { backgroundColor: "#085041", transform: [{ scale: 0.97 }] },
+                  ]}
+                  onPress={handleForgotSubmit}
+                  disabled={fpLoading}
+                >
+                  {fpLoading
+                    ? <ActivityIndicator color="#fff" />
+                    : <Text style={fp.submitText}>Submit request</Text>
+                  }
+                </Pressable>
+              )}
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -356,5 +500,143 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "500",
     textAlign: "center",
+  },
+  forgotLink: {
+    alignSelf: "flex-end",
+    marginTop: 10,
+  },
+  forgotLinkText: {
+    fontSize: 13,
+    color: "#1D9E75",
+    fontWeight: "500",
+  },
+});
+
+const fp = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: "rgba(8,80,65,0.55)",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    paddingTop: 120,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  card: {
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    width: "88%",
+    maxWidth: 340,
+    paddingTop: 28,
+    paddingBottom: 24,
+    paddingHorizontal: 24,
+    position: "relative",
+    alignItems: "center",
+  },
+  closeBtn: {
+    position: "absolute",
+    top: 16,
+    right: 16,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#F1EFE8",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  iconCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: "#E1F5EE",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  title: {
+    fontSize: 19,
+    fontWeight: "500",
+    color: "#085041",
+    textAlign: "center",
+  },
+  subtitle: {
+    fontSize: 13,
+    color: "#888780",
+    textAlign: "center",
+    marginTop: 6,
+    lineHeight: 19,
+    paddingHorizontal: 4,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: "#0F6E56",
+    marginBottom: 6,
+    alignSelf: "flex-start",
+  },
+  inputWrapper: {
+    width: "100%",
+    position: "relative",
+    justifyContent: "center",
+  },
+  inputIcon: {
+    position: "absolute",
+    left: 13,
+    zIndex: 1,
+  },
+  input: {
+    width: "100%",
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "#9FE1CB",
+    backgroundColor: "#f7fdf9",
+    paddingVertical: 12,
+    paddingLeft: 38,
+    paddingRight: 16,
+    color: "#085041",
+    fontSize: 14,
+  },
+  inputFocused: {
+    borderColor: "#1D9E75",
+  },
+  errorText: {
+    color: "#A32D2D",
+    fontSize: 12,
+    marginTop: 6,
+    alignSelf: "flex-start",
+  },
+  submitBtn: {
+    marginTop: 20,
+    width: "100%",
+    borderRadius: 14,
+    backgroundColor: "#0F6E56",
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  submitText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "500",
+    textAlign: "center",
+  },
+  successBox: {
+    marginTop: 14,
+    backgroundColor: "#E1F5EE",
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    width: "100%",
+  },
+  successIcon: {
+    marginRight: 8,
+    marginTop: 1,
+  },
+  successText: {
+    fontSize: 12,
+    color: "#0F6E56",
+    lineHeight: 18,
+    flex: 1,
   },
 });

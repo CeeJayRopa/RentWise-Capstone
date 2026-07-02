@@ -4,7 +4,9 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   ScrollView,
+  Animated,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
@@ -14,13 +16,13 @@ import { router, useLocalSearchParams } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
-import { Colors } from "../shared/constants/color";
 import { logDetailedUpdate } from "../shared/services/updatesService";
 
-type Schedule = "daily" | "weekly" | "monthly";
+type Schedule = "daily" | "weekly" | "semi-monthly" | "monthly";
 
 export default function EditRentalInfo() {
   const insets = useSafeAreaInsets();
@@ -60,6 +62,10 @@ export default function EditRentalInfo() {
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState("");
 
+  // UI-only: focused field & toast animation
+  const [focusedField, setFocusedField] = useState<string | null>(null);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
   useEffect(() => {
     return () => {
       mountedRef.current = false;
@@ -82,6 +88,17 @@ export default function EditRentalInfo() {
     });
     return unsubscribe;
   }, [stallId]);
+
+  // Trigger toast animation when save succeeds
+  useEffect(() => {
+    if (!saved) return;
+    fadeAnim.setValue(0);
+    Animated.sequence([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
+      Animated.delay(1800),
+      Animated.timing(fadeAnim, { toValue: 0, duration: 250, useNativeDriver: true }),
+    ]).start();
+  }, [saved]);
 
   const fetchStall = async (id: string) => {
     setLoading(true);
@@ -215,31 +232,23 @@ export default function EditRentalInfo() {
     }
   };
 
-  // ── Auth spinner ─────────────────────────────────────────────────────────
-
   if (checking) {
     return (
       <View style={styles.fullCenter}>
-        <ActivityIndicator color={Colors.primary} size="large" />
+        <ActivityIndicator color="#0C2D6B" size="large" />
       </View>
     );
   }
 
-  // ── Render ───────────────────────────────────────────────────────────────
-
   return (
     <View style={styles.screen}>
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity
-          style={styles.navBtn}
-          onPress={() => router.back()}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.navIcon}>←</Text>
+      {/* HEADER */}
+      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
+        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+          <Ionicons name="arrow-back" size={22} color="#E6F1FB" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Edit Rental Info</Text>
-        <View style={styles.navBtn} />
+        <Text style={styles.headerTitle}>Edit rental info</Text>
+        <View style={{ width: 22 }} />
       </View>
 
       <KeyboardAvoidingView
@@ -252,12 +261,11 @@ export default function EditRentalInfo() {
             { paddingBottom: insets.bottom + 32 },
           ]}
           keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          {/* ── Loading / error states ──────────────────────────────── */}
-
           {loading ? (
             <View style={styles.centeredBox}>
-              <ActivityIndicator color={Colors.primary} size="large" />
+              <ActivityIndicator color="#0C2D6B" size="large" />
             </View>
           ) : loadError ? (
             <View style={styles.centeredBox}>
@@ -272,97 +280,108 @@ export default function EditRentalInfo() {
             </View>
           ) : (
             <>
-              {/* ── Read-only context ─────────────────────────────────── */}
-              <View style={styles.contextBox}>
-                <Text style={styles.contextText}>
-                  Building {buildingNumber} · Space ID: {spaceId}
+              {/* STALL ID PILL */}
+              <View style={styles.stallPill}>
+                <Ionicons
+                  name="storefront-outline"
+                  size={16}
+                  color="#0C2D6B"
+                  style={{ marginRight: 10 }}
+                />
+                <Text style={styles.stallPillText}>
+                  Building {buildingNumber} {"·"} Space ID: {spaceId}
                 </Text>
               </View>
 
-              {/* ── Length ───────────────────────────────────────────── */}
+              {/* LENGTH */}
               <View style={styles.field}>
                 <Text style={styles.fieldLabel}>Length (m)</Text>
                 <TextInput
                   style={[
                     styles.input,
-                    lengthError ? styles.inputErrorBorder : null,
+                    focusedField === "length" && styles.inputFocused,
+                    lengthError ? styles.inputError : null,
                   ]}
                   keyboardType="numeric"
                   placeholder="e.g. 3"
-                  placeholderTextColor={Colors.textMuted}
+                  placeholderTextColor="#B4B2A9"
                   value={length}
                   onChangeText={(t) => {
                     setLength(t);
                     if (lengthError) setLengthError("");
                   }}
+                  onFocus={() => setFocusedField("length")}
+                  onBlur={() => setFocusedField(null)}
                   editable={!saving && !saved}
                 />
-                {lengthError ? (
-                  <Text style={styles.fieldError}>{lengthError}</Text>
-                ) : null}
+                {lengthError ? <Text style={styles.fieldError}>{lengthError}</Text> : null}
               </View>
 
-              {/* ── Width ────────────────────────────────────────────── */}
+              {/* WIDTH */}
               <View style={styles.field}>
                 <Text style={styles.fieldLabel}>Width (m)</Text>
                 <TextInput
                   style={[
                     styles.input,
-                    widthError ? styles.inputErrorBorder : null,
+                    focusedField === "width" && styles.inputFocused,
+                    widthError ? styles.inputError : null,
                   ]}
                   keyboardType="numeric"
                   placeholder="e.g. 2"
-                  placeholderTextColor={Colors.textMuted}
+                  placeholderTextColor="#B4B2A9"
                   value={width}
                   onChangeText={(t) => {
                     setWidth(t);
                     if (widthError) setWidthError("");
                   }}
+                  onFocus={() => setFocusedField("width")}
+                  onBlur={() => setFocusedField(null)}
                   editable={!saving && !saved}
                 />
-                {widthError ? (
-                  <Text style={styles.fieldError}>{widthError}</Text>
-                ) : null}
+                {widthError ? <Text style={styles.fieldError}>{widthError}</Text> : null}
               </View>
 
-              {/* ── Rental Rate ───────────────────────────────────────── */}
+              {/* RENTAL RATE */}
               <View style={styles.field}>
-                <Text style={styles.fieldLabel}>Rental Rate</Text>
+                <Text style={styles.fieldLabel}>Rental rate</Text>
                 <View
                   style={[
                     styles.currencyRow,
-                    rateError ? styles.inputErrorBorder : null,
+                    focusedField === "rate" && styles.currencyRowFocused,
+                    rateError ? styles.inputError : null,
                   ]}
                 >
-                  <Text style={styles.currencySymbol}>₱</Text>
+                  <View style={styles.currencyPrefix}>
+                    <Text style={styles.currencySymbol}>₱</Text>
+                  </View>
                   <TextInput
-                    style={styles.currencyTextInput}
+                    style={styles.currencyInput}
                     keyboardType="numeric"
-                    placeholder="0.00"
-                    placeholderTextColor={Colors.textMuted}
+                    placeholder="0"
+                    placeholderTextColor="#B4B2A9"
                     value={rentalRate}
                     onChangeText={(t) => {
                       setRentalRate(t);
                       if (rateError) setRateError("");
                     }}
+                    onFocus={() => setFocusedField("rate")}
+                    onBlur={() => setFocusedField(null)}
                     editable={!saving && !saved}
                   />
                 </View>
-                {rateError ? (
-                  <Text style={styles.fieldError}>{rateError}</Text>
-                ) : null}
+                {rateError ? <Text style={styles.fieldError}>{rateError}</Text> : null}
               </View>
 
-              {/* ── Payment Schedule ──────────────────────────────────── */}
-              <View style={styles.field}>
-                <Text style={styles.fieldLabel}>Payment Schedule</Text>
+              {/* PAYMENT SCHEDULE */}
+              <View style={[styles.field, { marginTop: 4, marginBottom: 24 }]}>
+                <Text style={styles.fieldLabel}>Payment schedule</Text>
                 <View style={styles.scheduleRow}>
-                  {(["daily", "weekly", "monthly"] as const).map((s) => (
+                  {(["daily", "weekly", "semi-monthly", "monthly"] as const).map((s) => (
                     <TouchableOpacity
                       key={s}
                       style={[
-                        styles.schedulePill,
-                        paymentSchedule === s && styles.schedulePillActive,
+                        styles.scheduleTab,
+                        paymentSchedule === s && styles.scheduleTabActive,
                       ]}
                       onPress={() => {
                         setPaymentSchedule(s);
@@ -373,9 +392,8 @@ export default function EditRentalInfo() {
                     >
                       <Text
                         style={[
-                          styles.schedulePillText,
-                          paymentSchedule === s &&
-                            styles.schedulePillTextActive,
+                          styles.scheduleTabText,
+                          paymentSchedule === s && styles.scheduleTabTextActive,
                         ]}
                       >
                         {s.charAt(0).toUpperCase() + s.slice(1)}
@@ -383,40 +401,36 @@ export default function EditRentalInfo() {
                     </TouchableOpacity>
                   ))}
                 </View>
-                {scheduleError ? (
-                  <Text style={styles.fieldError}>{scheduleError}</Text>
-                ) : null}
+                {scheduleError ? <Text style={styles.fieldError}>{scheduleError}</Text> : null}
               </View>
 
-              {/* ── Feedback ──────────────────────────────────────────── */}
-              {saveError ? (
-                <Text style={styles.saveError}>{saveError}</Text>
-              ) : null}
+              {/* SAVE ERROR */}
+              {saveError ? <Text style={styles.saveError}>{saveError}</Text> : null}
 
-              {saved ? (
-                <View style={styles.successBox}>
-                  <Text style={styles.successText}>
-                    Changes saved successfully.
-                  </Text>
-                </View>
-              ) : null}
-
-              {/* ── Save button ───────────────────────────────────────── */}
-              <TouchableOpacity
-                style={[
+              {/* SAVE BUTTON */}
+              <Pressable
+                style={({ pressed }) => [
                   styles.saveBtn,
                   (saving || saved) && styles.saveBtnDisabled,
+                  pressed && !saving && !saved && styles.saveBtnPressed,
                 ]}
                 onPress={handleSave}
-                activeOpacity={0.8}
                 disabled={saving || saved}
               >
                 {saving ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
+                  <ActivityIndicator color="#fff" size="small" />
                 ) : (
-                  <Text style={styles.saveBtnText}>Save</Text>
+                  <Text style={styles.saveBtnText}>Save changes</Text>
                 )}
-              </TouchableOpacity>
+              </Pressable>
+
+              {/* SUCCESS TOAST */}
+              {saved && (
+                <Animated.View style={[styles.toast, { opacity: fadeAnim }]}>
+                  <Ionicons name="checkmark-circle" size={18} color="#B5D4F4" />
+                  <Text style={styles.toastText}>Rental info updated.</Text>
+                </Animated.View>
+              )}
             </>
           )}
         </ScrollView>
@@ -425,205 +439,246 @@ export default function EditRentalInfo() {
   );
 }
 
-// ── Styles ─────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: "#F0F4FA",
   },
+
   fullCenter: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: Colors.background,
   },
 
-  // Header (mirrors financials.tsx)
+  // ── Header ────────────────────────────────────────────────────────────────────
+
   header: {
-    backgroundColor: Colors.primary,
+    backgroundColor: "#0C2D6B",
+    paddingHorizontal: 20,
     paddingBottom: 14,
-    paddingHorizontal: 16,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-  },
-  navBtn: {
-    width: 36,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  navIcon: {
-    fontSize: 22,
-    color: "#FFFFFF",
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#FFFFFF",
   },
 
-  // Scroll / layout
-  scrollContent: {
-    padding: 20,
+  headerTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "500",
+    flex: 1,
+    textAlign: "center",
   },
+
+  // ── Body ─────────────────────────────────────────────────────────────────────
+
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+  },
+
   centeredBox: {
     paddingVertical: 60,
     alignItems: "center",
   },
 
-  // Load error
   loadErrorText: {
     fontSize: 15,
-    color: Colors.error,
+    color: "#A32D2D",
     textAlign: "center",
     marginBottom: 16,
   },
-  backLink: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-  },
-  backLinkText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: Colors.primary,
+
+  backLink: { paddingVertical: 8, paddingHorizontal: 16 },
+  backLinkText: { fontSize: 14, fontWeight: "600", color: "#0C2D6B" },
+
+  // ── Stall ID pill ─────────────────────────────────────────────────────────────
+
+  stallPill: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
+    borderLeftWidth: 4,
+    borderLeftColor: "#0C2D6B",
+    marginBottom: 24,
+    flexDirection: "row",
+    alignItems: "center",
   },
 
-  // Context badge
-  contextBox: {
-    backgroundColor: Colors.surface,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 22,
-    borderLeftWidth: 3,
-    borderLeftColor: Colors.primary,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 1,
-  },
-  contextText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: Colors.textPrimary,
+  stallPillText: {
+    fontSize: 15,
+    fontWeight: "500",
+    color: "#0C2D6B",
   },
 
-  // Fields
+  // ── Fields ────────────────────────────────────────────────────────────────────
+
   field: {
-    marginBottom: 18,
+    marginBottom: 16,
   },
+
   fieldLabel: {
     fontSize: 13,
-    fontWeight: "600",
-    color: Colors.textSecondary,
+    fontWeight: "500",
+    color: "#1A4DA0",
     marginBottom: 6,
   },
+
   input: {
-    backgroundColor: Colors.inputBackground,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
+    paddingHorizontal: 16,
+    paddingVertical: 13,
     fontSize: 15,
-    color: Colors.textPrimary,
+    color: "#0C2D6B",
   },
-  inputErrorBorder: {
-    borderColor: Colors.error,
+
+  inputFocused: {
+    borderColor: "#2E6FD9",
   },
+
+  inputError: {
+    borderColor: "#A32D2D",
+  },
+
   fieldError: {
     fontSize: 12,
-    color: Colors.error,
+    color: "#A32D2D",
     marginTop: 4,
   },
 
-  // Currency row (₱ prefix + TextInput sharing one bordered container)
+  // ── Rental Rate ───────────────────────────────────────────────────────────────
+
   currencyRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: Colors.inputBackground,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 10,
-  },
-  currencySymbol: {
-    paddingLeft: 14,
-    paddingRight: 4,
-    fontSize: 15,
-    color: Colors.textSecondary,
-  },
-  currencyTextInput: {
-    flex: 1,
-    paddingRight: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: Colors.textPrimary,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
+    overflow: "hidden",
   },
 
-  // Payment schedule segmented control
+  currencyRowFocused: {
+    borderColor: "#2E6FD9",
+  },
+
+  currencyPrefix: {
+    backgroundColor: "#E6F1FB",
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    borderRightWidth: 1,
+    borderRightColor: "#B5D4F4",
+  },
+
+  currencySymbol: {
+    fontSize: 15,
+    fontWeight: "500",
+    color: "#0C2D6B",
+  },
+
+  currencyInput: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    fontSize: 15,
+    color: "#0C2D6B",
+  },
+
+  // ── Payment schedule tabs ─────────────────────────────────────────────────────
+
   scheduleRow: {
     flexDirection: "row",
-    gap: 8,
-  },
-  schedulePill: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    alignItems: "center",
-    borderWidth: 1.5,
-    borderColor: Colors.primary,
-  },
-  schedulePillActive: {
-    backgroundColor: Colors.primary,
-  },
-  schedulePillText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: Colors.primary,
-  },
-  schedulePillTextActive: {
-    color: "#FFFFFF",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 2,
   },
 
-  // Feedback
+  scheduleTab: {
+    flexBasis: "47%",
+    flexGrow: 1,
+    paddingVertical: 11,
+    paddingHorizontal: 6,
+    borderRadius: 10,
+    alignItems: "center",
+    backgroundColor: "#fff",
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
+  },
+
+  scheduleTabActive: {
+    backgroundColor: "#0C2D6B",
+    borderColor: "#0C2D6B",
+  },
+
+  scheduleTabText: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: "#888780",
+    textAlign: "center",
+  },
+
+  scheduleTabTextActive: {
+    color: "#fff",
+  },
+
+  // ── Save button ───────────────────────────────────────────────────────────────
+
+  saveBtn: {
+    width: "100%",
+    backgroundColor: "#0C2D6B",
+    borderRadius: 14,
+    paddingVertical: 15,
+    alignItems: "center",
+    justifyContent: "center",
+    transform: [{ scale: 1 }],
+  },
+
+  saveBtnPressed: {
+    backgroundColor: "#091f4a",
+    transform: [{ scale: 0.97 }],
+  },
+
+  saveBtnDisabled: {
+    backgroundColor: "#B5D4F4",
+  },
+
+  saveBtnText: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#fff",
+    textAlign: "center",
+  },
+
+  // ── Save error ────────────────────────────────────────────────────────────────
+
   saveError: {
     fontSize: 13,
-    color: Colors.error,
+    color: "#A32D2D",
     textAlign: "center",
     marginBottom: 12,
   },
-  successBox: {
-    backgroundColor: "#EBF5EB",
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    marginBottom: 12,
+
+  // ── Success toast ─────────────────────────────────────────────────────────────
+
+  toast: {
+    flexDirection: "row",
     alignItems: "center",
-  },
-  successText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#2D6A4F",
+    gap: 8,
+    backgroundColor: "#0C2D6B",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginTop: 14,
   },
 
-  // Save button (mirrors index.tsx / financials.tsx primary button)
-  saveBtn: {
-    backgroundColor: Colors.primary,
-    borderRadius: 10,
-    paddingVertical: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 4,
-    minHeight: 48,
-  },
-  saveBtnDisabled: {
-    backgroundColor: Colors.disabled,
-  },
-  saveBtnText: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#FFFFFF",
+  toastText: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#fff",
   },
 });

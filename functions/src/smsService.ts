@@ -1,7 +1,5 @@
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 
-const db = getFirestore();
-
 // ─────────────────────────────────────────────────────────────────────────────
 // MOCK SMS SENDER
 // MOCK SMS ENABLED FOR DEMO
@@ -13,6 +11,7 @@ async function sendSMS(
   message: string,
   tenantId?: string,
 ): Promise<void> {
+  const db = getFirestore();
   console.log(`[SMS MOCK] To: ${number} | ${message}`);
 
   await db.collection('sms_logs').add({

@@ -1,14 +1,16 @@
 import {
   collection,
   addDoc,
+  doc,
   query,
   where,
   getDocs,
   serverTimestamp,
+  writeBatch,
 } from "firebase/firestore";
 
 import { db } from "../shared/firebaseConfig";
-import { createPaymongoCheckout } from "./paymongo";
+import { createPaymongoPaymentIntent, PaymentMethodType } from "./paymongo";
 
 export interface Payment {
   id: string;
@@ -39,9 +41,34 @@ export async function createPayment(data: any) {
 
 export async function createOnlinePayment(
   amount: number,
+  paymentMethod: PaymentMethodType,
   customer?: { name: string; email: string },
-): Promise<{ checkoutSessionId: string; checkoutUrl: string }> {
-  return createPaymongoCheckout(amount, customer);
+): Promise<{ redirectUrl: string; paymentIntentId: string }> {
+  return createPaymongoPaymentIntent(amount, paymentMethod, customer);
+}
+
+export async function notifyAdminsOfOnlinePayment(
+  tenantName: string,
+  amount: number,
+  spaceId: string,
+) {
+  const adminsSnap = await getDocs(
+    query(collection(db, "users"), where("role", "==", "admin")),
+  );
+  if (adminsSnap.empty) return;
+
+  const message = `${tenantName || "A tenant"} submitted an online payment of ₱${amount.toLocaleString()} for Space ${spaceId || "—"} — awaiting confirmation.`;
+
+  const batch = writeBatch(db);
+  for (const adminDoc of adminsSnap.docs) {
+    batch.set(doc(collection(db, "notifications")), {
+      userId: adminDoc.id,
+      message,
+      read: false,
+      createdAt: serverTimestamp(),
+    });
+  }
+  await batch.commit();
 }
 
 export async function getTenantPayments(userId: string) {

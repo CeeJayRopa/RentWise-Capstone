@@ -24,7 +24,7 @@ type AdminDoc = {
   uid: string;
   firstName: string;
   lastName: string;
-  userName: string;
+  username: string;
   contactNo: string;
   email: string;
 };
@@ -72,7 +72,7 @@ export default function ManageAdmin() {
         setAdmin(data);
         const fn = data.firstName ?? "";
         const ln = data.lastName ?? "";
-        const un = data.userName ?? "";
+        const un = data.username ?? "";
         const cn = data.contactNo ?? "";
         setFirstName(fn);
         setLastName(ln);

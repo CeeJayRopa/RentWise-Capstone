@@ -19,6 +19,8 @@ export interface Tenant {
 
   contactNo?: string;
 
+  mustChangePassword?: boolean;
+
   stall?: any;
 }
 

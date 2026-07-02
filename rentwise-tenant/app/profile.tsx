@@ -26,6 +26,7 @@ export default function Profile() {
   const [firstNameFocused, setFirstNameFocused] = useState(false);
   const [contactFocused, setContactFocused] = useState(false);
   const [original, setOriginal] = useState({ firstName: "", lastName: "", contact: "" });
+  const [isEditing, setIsEditing] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(20)).current;
@@ -63,29 +64,29 @@ export default function Profile() {
       Animated.parallel([
         Animated.timing(toastOpacity, {
           toValue: 1,
-          duration: 300,
-          easing: Easing.out(Easing.back(1.5)),
+          duration: 450,
+          easing: Easing.out(Easing.ease),
           useNativeDriver: true,
         }),
         Animated.timing(toastTranslateY, {
           toValue: 0,
-          duration: 300,
-          easing: Easing.out(Easing.back(1.5)),
+          duration: 450,
+          easing: Easing.out(Easing.ease),
           useNativeDriver: true,
         }),
       ]),
-      Animated.delay(1800),
+      Animated.delay(1000),
       Animated.parallel([
         Animated.timing(toastOpacity, {
           toValue: 0,
-          duration: 250,
-          easing: Easing.in(Easing.ease),
+          duration: 450,
+          easing: Easing.in(Easing.back(1.5)),
           useNativeDriver: true,
         }),
         Animated.timing(toastTranslateY, {
           toValue: -10,
-          duration: 250,
-          easing: Easing.in(Easing.ease),
+          duration: 450,
+          easing: Easing.in(Easing.back(1.5)),
           useNativeDriver: true,
         }),
       ]),
@@ -93,11 +94,24 @@ export default function Profile() {
   }
 
   async function saveProfile() {
+    const fn = firstName.trim();
+    const ln = lastName.trim();
+    const cn = contact.trim();
+
+    if (!fn || !ln || !cn) {
+      Alert.alert("Missing Information", "All fields are required.");
+      return;
+    }
+
     try {
       const user = auth.currentUser;
       if (!user) return;
-      await updateTenantProfile(user.uid, { firstName, lastName, contactNo: contact });
-      setOriginal({ firstName, lastName, contact });
+      await updateTenantProfile(user.uid, { firstName: fn, lastName: ln, contactNo: cn });
+      setFirstName(fn);
+      setLastName(ln);
+      setContact(cn);
+      setOriginal({ firstName: fn, lastName: ln, contact: cn });
+      setIsEditing(false);
       triggerToast();
     } catch (error) {
       console.log("Save Error:", error);
@@ -137,11 +151,12 @@ export default function Profile() {
         {/* Last name */}
         <Text style={styles.label}>Last name</Text>
         <TextInput
-          style={[styles.input, lastNameFocused && styles.inputFocused]}
+          style={[styles.input, !isEditing && styles.inputReadOnly, isEditing && lastNameFocused && styles.inputFocused]}
           value={lastName}
           onChangeText={setLastName}
           placeholder="Enter last name"
           placeholderTextColor="#B4B2A9"
+          editable={isEditing}
           onFocus={() => setLastNameFocused(true)}
           onBlur={() => setLastNameFocused(false)}
         />
@@ -149,58 +164,64 @@ export default function Profile() {
         {/* First name */}
         <Text style={styles.label}>First name</Text>
         <TextInput
-          style={[styles.input, firstNameFocused && styles.inputFocused]}
+          style={[styles.input, !isEditing && styles.inputReadOnly, isEditing && firstNameFocused && styles.inputFocused]}
           value={firstName}
           onChangeText={setFirstName}
           placeholder="Enter first name"
           placeholderTextColor="#B4B2A9"
+          editable={isEditing}
           onFocus={() => setFirstNameFocused(true)}
           onBlur={() => setFirstNameFocused(false)}
         />
 
         {/* Contact no. */}
         <Text style={styles.label}>Contact no.</Text>
-        <View style={[styles.phoneRow, contactFocused && styles.phoneRowFocused]}>
-          <View style={styles.phonePrefix}>
+        <View style={[styles.phoneRow, !isEditing && styles.phoneRowReadOnly, isEditing && contactFocused && styles.phoneRowFocused]}>
+          <View style={[styles.phonePrefix, !isEditing && styles.phonePrefixReadOnly]}>
             <Text style={styles.phonePrefixText}>+63</Text>
           </View>
           <TextInput
-            style={styles.phoneInput}
+            style={[styles.phoneInput, !isEditing && { color: "#888780" }]}
             value={contact}
             onChangeText={(val) => setContact(val.replace(/[^0-9]/g, ""))}
             placeholder="9XXXXXXXXX"
             placeholderTextColor="#B4B2A9"
             keyboardType="phone-pad"
-            maxLength={11}
+            maxLength={10}
+            editable={isEditing}
             onFocus={() => setContactFocused(true)}
             onBlur={() => setContactFocused(false)}
           />
         </View>
 
-        {/* Save button */}
-        <Pressable
-          style={({ pressed }) => [
-            styles.saveButton,
-            !(firstName !== original.firstName || lastName !== original.lastName || contact !== original.contact) && styles.saveButtonDisabled,
-            pressed && (firstName !== original.firstName || lastName !== original.lastName || contact !== original.contact) && { backgroundColor: "#085041", transform: [{ scale: 0.97 }] },
-          ]}
-          onPress={saveProfile}
-          disabled={!(firstName !== original.firstName || lastName !== original.lastName || contact !== original.contact)}
-        >
-          <Text style={styles.saveText}>Save changes</Text>
-        </Pressable>
+        {/* Edit / Save button */}
+        {(() => {
+          const hasChanges = firstName !== original.firstName || lastName !== original.lastName || contact !== original.contact;
+          const hasEmptyField = !firstName.trim() || !lastName.trim() || !contact.trim();
+          const disabled = isEditing && (!hasChanges || hasEmptyField);
+          return (
+            <Pressable
+              style={({ pressed }) => [
+                styles.saveButton,
+                disabled && styles.saveButtonDisabled,
+                pressed && !disabled && { backgroundColor: "#085041", transform: [{ scale: 0.97 }] },
+              ]}
+              onPress={isEditing ? saveProfile : () => setIsEditing(true)}
+              disabled={disabled}
+            >
+              <Text style={styles.saveText}>{isEditing ? "Save changes" : "Edit Profile"}</Text>
+            </Pressable>
+          );
+        })()}
 
       </ScrollView>
 
       {showToast && (
-        <Animated.View
-          style={[
-            styles.toast,
-            { opacity: toastOpacity, transform: [{ translateY: toastTranslateY }] },
-          ]}
-        >
-          <Ionicons name="checkmark-circle" size={22} color="#9FE1CB" />
-          <Text style={styles.toastText}>Profile updated.</Text>
+        <Animated.View style={[styles.overlay, { opacity: toastOpacity }]}>
+          <Animated.View style={[styles.toast, { transform: [{ translateY: toastTranslateY }] }]}>
+            <Ionicons name="checkmark-circle" size={22} color="#25e6a9" />
+            <Text style={styles.toastText}>Profile Updated</Text>
+          </Animated.View>
         </Animated.View>
       )}
     </View>
@@ -301,6 +322,12 @@ const styles = StyleSheet.create({
     borderColor: "#1D9E75",
   },
 
+  inputReadOnly: {
+    backgroundColor: "#EBEBEB",
+    borderColor: "#D4D2CB",
+    color: "#888780",
+  },
+
   // ── Phone row ────────────────────────────────────
   phoneRow: {
     flexDirection: "row",
@@ -315,6 +342,16 @@ const styles = StyleSheet.create({
 
   phoneRowFocused: {
     borderColor: "#1D9E75",
+  },
+
+  phoneRowReadOnly: {
+    backgroundColor: "#EBEBEB",
+    borderColor: "#D4D2CB",
+  },
+
+  phonePrefixReadOnly: {
+    backgroundColor: "#DCDCDC",
+    borderRightColor: "#D4D2CB",
   },
 
   phonePrefix: {
@@ -339,61 +376,43 @@ const styles = StyleSheet.create({
     color: "#085041",
   },
 
-  // ── Success banner ───────────────────────────────
-  successBanner: {
+// ── Toast notif ────────────────────────────────────────
+  overlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  toast: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    marginTop: 14,
-    backgroundColor: "#E1F5EE",
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-
-  successText: {
-    fontSize: 14,
-    color: "#0F6E56",
-    fontWeight: "500",
-  },
-
-  // ── Toast ────────────────────────────────────────
-  toast: {
-    position: "absolute",
-    bottom: 380,
-    alignSelf: "center",
-    backgroundColor: "#0F6E56",
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 18,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    elevation: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
   },
 
   toastText: {
-    color: "#fff",
-    fontSize: 15,
+    color: "#23ca95",
+    fontSize: 18,
     fontWeight: "500",
   },
 
-  saveButtonDisabled: {
-    opacity: 0.45,
-  },
-
-  // ── Save button ──────────────────────────────────
+  // ── Save / Edit button ───────────────────────────
   saveButton: {
-    width: "100%",
+    alignSelf: "center",
+    width: "50%",
     borderRadius: 14,
     backgroundColor: "#0F6E56",
     paddingVertical: 15,
     alignItems: "center",
-    marginTop: 8,
+    marginTop: 30,
+  },
+
+  saveButtonDisabled: {
+    opacity: 0.45,
   },
 
   saveText: {

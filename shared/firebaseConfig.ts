@@ -1,7 +1,9 @@
 import { initializeApp } from "firebase/app";
-import { initializeAuth, inMemoryPersistence } from "firebase/auth";
+import { initializeAuth, getAuth } from "firebase/auth";
+import type { Auth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import ReactNativeAsyncStorage from "@react-native-async-storage/async-storage";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCo_sM0NvjXReuQsTep28s7onguf0IJvE8",
@@ -14,20 +16,19 @@ const firebaseConfig = {
 
 const firebaseApp = initializeApp(firebaseConfig);
 
-let persistence: any = inMemoryPersistence;
+// getReactNativePersistence lives in the RN-specific firebase/auth build.
+// TypeScript resolves the browser types which don't include it, so we require()
+// it at runtime to bypass the type check while still getting AsyncStorage persistence.
+let auth: Auth;
 try {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const AsyncStorage = require("@react-native-async-storage/async-storage").default;
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { getReactNativePersistence } = require("firebase/auth");
-  if (AsyncStorage && getReactNativePersistence) {
-    persistence = getReactNativePersistence(AsyncStorage);
-  }
+  const { getReactNativePersistence } = require("firebase/auth") as { getReactNativePersistence: (storage: typeof ReactNativeAsyncStorage) => import("firebase/auth").Persistence };
+  auth = initializeAuth(firebaseApp, {
+    persistence: getReactNativePersistence(ReactNativeAsyncStorage),
+  });
 } catch {
-  // falls back to inMemoryPersistence (Expo Go / web)
+  auth = getAuth(firebaseApp);
 }
-
-const auth = initializeAuth(firebaseApp, { persistence });
 
 const db = getFirestore(firebaseApp);
 

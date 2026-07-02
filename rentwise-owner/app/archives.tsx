@@ -24,7 +24,7 @@ type ArchiveEntry = {
   uid: string;
   firstName: string;
   lastName: string;
-  userName: string;
+  username: string;
   contactNo: string;
   buildingNumber: string;
   spaceId: string;
@@ -57,7 +57,7 @@ export default function Archives() {
           uid: d.id,
           firstName: (data.firstName as string) ?? "",
           lastName: (data.lastName as string) ?? "",
-          userName: (data.userName as string) ?? "",
+          username: (data.username as string) ?? (data.userName as string) ?? "",
           contactNo: (data.contactNo as string) ?? "",
           buildingNumber: (data.buildingNumber as string) ?? "",
           spaceId: (data.spaceId as string) ?? "",
@@ -134,7 +134,7 @@ export default function Archives() {
               </View>
               <View style={styles.cardInfo}>
                 <Text style={styles.cardName}>{item.firstName} {item.lastName}</Text>
-                <Text style={styles.cardUsername}>@{item.userName}</Text>
+                <Text style={styles.cardUsername}>@{item.username}</Text>
                 <Text style={styles.cardStall}>
                   Building {item.buildingNumber} {"·"} Space {item.spaceId}
                 </Text>

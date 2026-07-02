@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   View,
   Text,
@@ -7,10 +7,11 @@ import {
   ScrollView,
   ActivityIndicator,
   LayoutAnimation,
-  Platform,
-  UIManager,
   Alert,
   StyleSheet,
+  Animated,
+  PanResponder,
+  Dimensions,
 } from "react-native";
 import {
   collection,
@@ -23,17 +24,12 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { FileEdit } from "lucide-react-native";
+import { Ionicons } from "@expo/vector-icons";
 
 import { db } from "../../shared/services/firestore";
-import { Colors } from "../../shared/constants/color";
 
-if (
-  Platform.OS === "android" &&
-  UIManager.setLayoutAnimationEnabledExperimental
-) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
+const FAB_SIZE = 56;
+const FAB_MARGIN = 20;
 
 function notifLocation(u: any): string {
   const module: string = u.module ?? "";
@@ -57,7 +53,17 @@ function notifLocation(u: any): string {
   return "Rental Information";
 }
 
-export default function UpdatesReportFAB() {
+type UpdatesReportFABProps = {
+  disabled?: boolean;
+  color?: string;
+  icon?: React.ReactNode;
+};
+
+export default function UpdatesReportFAB({
+  disabled = false,
+  color = "#0C2D6B",
+  icon,
+}: UpdatesReportFABProps) {
   const insets = useSafeAreaInsets();
 
   const [visible, setVisible] = useState(false);
@@ -67,6 +73,64 @@ export default function UpdatesReportFAB() {
   const [buildingOpen, setBuildingOpen] = useState(true);
   const [financeOpen, setFinanceOpen] = useState(true);
   const [archiveOpen, setArchiveOpen] = useState(true);
+
+  // ── Draggable FAB position ─────────────────────────────────────────────────
+  const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
+  const posRef = useRef({
+    x: SCREEN_W - FAB_SIZE - FAB_MARGIN,
+    y: SCREEN_H - FAB_SIZE - FAB_MARGIN - insets.bottom,
+  });
+  const pan = useRef(new Animated.ValueXY(posRef.current)).current;
+  const dragStart = useRef({ x: 0, y: 0 });
+  const dragged = useRef(false);
+
+  const clamp = (val: number, min: number, max: number) =>
+    Math.min(Math.max(val, min), max);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => !disabled,
+      onPanResponderGrant: () => {
+        dragged.current = false;
+        dragStart.current = { x: posRef.current.x, y: posRef.current.y };
+      },
+      onPanResponderMove: (_evt, gestureState) => {
+        if (Math.abs(gestureState.dx) > 4 || Math.abs(gestureState.dy) > 4) {
+          dragged.current = true;
+        }
+        const nextX = clamp(
+          dragStart.current.x + gestureState.dx,
+          FAB_MARGIN,
+          SCREEN_W - FAB_SIZE - FAB_MARGIN,
+        );
+        const nextY = clamp(
+          dragStart.current.y + gestureState.dy,
+          insets.top + FAB_MARGIN,
+          SCREEN_H - FAB_SIZE - insets.bottom - FAB_MARGIN,
+        );
+        posRef.current = { x: nextX, y: nextY };
+        pan.setValue({ x: nextX, y: nextY });
+      },
+      onPanResponderRelease: () => {
+        if (!dragged.current) {
+          if (!disabled) openModal();
+          return;
+        }
+        // Snap to whichever side the finger was closest to, like Messenger's
+        // chat heads — stays on the same row (y), just settles to the edge.
+        const targetX =
+          posRef.current.x + FAB_SIZE / 2 < SCREEN_W / 2
+            ? FAB_MARGIN
+            : SCREEN_W - FAB_SIZE - FAB_MARGIN;
+        posRef.current = { x: targetX, y: posRef.current.y };
+        Animated.spring(pan, {
+          toValue: { x: targetX, y: posRef.current.y },
+          friction: 6,
+          useNativeDriver: false,
+        }).start();
+      },
+    }),
+  ).current;
 
   const openModal = async () => {
     setVisible(true);
@@ -182,14 +246,24 @@ export default function UpdatesReportFAB() {
 
   return (
     <>
-      {/* Yellow FAB */}
-      <TouchableOpacity
-        style={[styles.fab, { bottom: insets.bottom + 20 }]}
-        onPress={openModal}
-        activeOpacity={0.85}
+      {/* FAB — draggable anywhere on screen, tap (without dragging) opens the modal */}
+      <Animated.View
+        style={[
+          styles.fab,
+          { backgroundColor: color },
+          disabled && styles.fabDisabled,
+          { transform: pan.getTranslateTransform() },
+        ]}
+        {...panResponder.panHandlers}
       >
-        <FileEdit size={24} color="#1A1A1A" />
-      </TouchableOpacity>
+        {icon ?? (
+          <Ionicons
+            name="create-outline"
+            size={24}
+            color={disabled ? "#B5D4F4" : "#FFFFFF"}
+          />
+        )}
+      </Animated.View>
 
       {/* Updates Report Modal */}
       <Modal
@@ -206,11 +280,13 @@ export default function UpdatesReportFAB() {
           />
 
           <View style={styles.card}>
-            <Text style={styles.title}>Updates Report</Text>
+            <View style={styles.titleBar}>
+              <Text style={styles.title}>Updates Report</Text>
+            </View>
 
             {loading ? (
               <View style={styles.loadingBox}>
-                <ActivityIndicator color={Colors.primary} size="large" />
+                <ActivityIndicator color="#2E6FD9" size="large" />
               </View>
             ) : updates.length === 0 ? (
               <View style={styles.emptyBox}>
@@ -371,11 +447,12 @@ function AccordionSection({
 const styles = StyleSheet.create({
   fab: {
     position: "absolute",
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: "#F4C430",
+    left: 0,
+    top: 0,
+    width: FAB_SIZE,
+    height: FAB_SIZE,
+    borderRadius: FAB_SIZE / 2,
+    backgroundColor: "#0C2D6B",
     justifyContent: "center",
     alignItems: "center",
     elevation: 8,
@@ -384,6 +461,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 6,
     zIndex: 50,
+  },
+  fabDisabled: {
+    opacity: 0.4,
   },
 
   overlay: {
@@ -397,24 +477,27 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: "#FFFFFF",
     borderRadius: 16,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
     width: "100%",
     maxHeight: "90%",
+    overflow: "hidden",
   },
 
+  titleBar: {
+    backgroundColor: "#E6F1FB",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+  },
   title: {
     fontSize: 18,
     fontWeight: "700",
-    color: Colors.textPrimary,
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    color: "#0C2D6B",
   },
 
   loadingBox: { paddingVertical: 48, alignItems: "center" },
   emptyBox: { paddingVertical: 48, alignItems: "center" },
-  emptyBoxText: { fontSize: 14, color: Colors.textMuted },
+  emptyBoxText: { fontSize: 14, color: "#888780" },
 
   scrollArea: { flexGrow: 0, maxHeight: 420 },
   scrollContent: { padding: 14, gap: 10 },
@@ -423,8 +506,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 10,
     padding: 16,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
+    borderTopWidth: 0.5,
+    borderTopColor: "#E6F1FB",
   },
   btn: {
     flex: 1,
@@ -434,9 +517,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     minHeight: 42,
   },
-  btnOutline: { borderWidth: 1.5, borderColor: Colors.border },
-  btnOutlineText: { fontSize: 14, fontWeight: "600", color: Colors.textSecondary },
-  btnPrimary: { backgroundColor: Colors.primary },
+  btnOutline: { borderWidth: 1.5, borderColor: "#0C2D6B" },
+  btnOutlineText: { fontSize: 14, fontWeight: "600", color: "#0C2D6B" },
+  btnPrimary: { backgroundColor: "#2E6FD9" },
   btnPrimaryText: { fontSize: 14, fontWeight: "600", color: "#FFFFFF" },
   btnDisabled: { opacity: 0.5 },
 });
@@ -444,7 +527,7 @@ const styles = StyleSheet.create({
 const sectionStyles = StyleSheet.create({
   container: {
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: "#B5D4F4",
     borderRadius: 10,
     overflow: "hidden",
     marginBottom: 2,
@@ -453,27 +536,27 @@ const sectionStyles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: Colors.inputBackground,
+    backgroundColor: "#E6F1FB",
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
-  headerText: { fontSize: 14, fontWeight: "700", color: Colors.textPrimary },
-  arrow: { fontSize: 11, color: Colors.textSecondary },
+  headerText: { fontSize: 14, fontWeight: "500", color: "#0C2D6B" },
+  arrow: { fontSize: 11, color: "#2E6FD9" },
   body: { backgroundColor: "#FFFFFF" },
   tableRow: { flexDirection: "row", paddingHorizontal: 12, paddingVertical: 9 },
   colHeaderRow: {
-    backgroundColor: "#F5F9FD",
+    backgroundColor: "#F0F4FA",
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: "#E6F1FB",
   },
-  rowBorder: { borderBottomWidth: 1, borderBottomColor: Colors.border },
+  rowBorder: { borderBottomWidth: 1, borderBottomColor: "#E6F1FB" },
   colHeaderCell: {
     fontWeight: "700",
-    color: Colors.textSecondary,
+    color: "#0C2D6B",
     fontSize: 10,
     textTransform: "uppercase",
     letterSpacing: 0.3,
   },
-  cell: { flex: 1, fontSize: 12, color: Colors.textPrimary, paddingRight: 4 },
-  emptyText: { padding: 14, fontSize: 13, color: Colors.textMuted, textAlign: "center" },
+  cell: { flex: 1, fontSize: 12, color: "#444441", paddingRight: 4 },
+  emptyText: { padding: 14, fontSize: 13, color: "#888780", textAlign: "center" },
 });

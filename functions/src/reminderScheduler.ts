@@ -3,8 +3,6 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { sendSMSWithRetry } from './smsService';
 import { isPaymentDue, hasReminderBeenSent } from './paymentChecker';
 
-const db = getFirestore();
-
 // ─────────────────────────────────────────────────────────────────────────────
 // PAYMENT REMINDER SCHEDULER
 //
@@ -23,6 +21,7 @@ export const sendPaymentReminders = onSchedule(
   async () => {
     // ── Top-level guard ───────────────────────────────────────────────────────
     try {
+      const db = getFirestore();
       const tenantsSnap = await db
         .collection('users')
         .where('role', '==', 'tenant')

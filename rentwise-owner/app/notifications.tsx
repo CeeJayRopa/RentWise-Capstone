@@ -140,6 +140,15 @@ export default function Notifications() {
         try {
           const snap = await getDoc(doc(db, "updates", item.updateId));
           const data = snap.exists() ? snap.data() : {};
+          if (data.changedBy) {
+            const label = data.module ?? categoryLabel(data.category ?? "archive");
+            await addDoc(collection(db, "notifications"), {
+              userId: data.changedBy,
+              message: `Your "${label}" update was approved by the owner.`,
+              read: false,
+              createdAt: serverTimestamp(),
+            });
+          }
           await addDoc(collection(db, "dailyReports"), {
             type: data.module ?? categoryLabel(data.category ?? "archive"),
             updateId: item.updateId,

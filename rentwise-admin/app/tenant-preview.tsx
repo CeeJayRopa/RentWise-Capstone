@@ -5,8 +5,7 @@ import {
   ActivityIndicator,
   ScrollView,
   TouchableOpacity,
-  FlatList,
-  Image,
+  Pressable,
   Linking,
   Alert,
 } from "react-native";
@@ -29,6 +28,7 @@ import {
 
 import { db } from "../shared/services/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 
 const MONTHS = [
   "January",
@@ -57,6 +57,7 @@ export default function TenantPreview() {
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [generatingReceipt, setGeneratingReceipt] = useState(false);
 
   useEffect(() => {
     loadTenant();
@@ -121,6 +122,8 @@ export default function TenantPreview() {
   }
 
   async function viewOnlineReceipt(payment: any) {
+    if (generatingReceipt) return;
+    setGeneratingReceipt(true);
     try {
       const rd = payment.receiptData;
       if (!rd) return;
@@ -161,6 +164,8 @@ export default function TenantPreview() {
     } catch (err) {
       console.log("ONLINE RECEIPT ERROR", err);
       Alert.alert("Error", "Failed to generate receipt.");
+    } finally {
+      setGeneratingReceipt(false);
     }
   }
 
@@ -217,7 +222,7 @@ export default function TenantPreview() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" />
+        <ActivityIndicator size="large" color="#0C2D6B" />
       </View>
     );
   }
@@ -225,133 +230,141 @@ export default function TenantPreview() {
   return (
     <View style={styles.root}>
       {/* HEADER */}
-
-      <View
-        style={[
-          styles.header,
-          {
-            paddingTop: insets.top + 15,
-          },
-        ]}
-      >
-        <TouchableOpacity onPress={() => router.back()}>
-          <Text style={styles.back}>←</Text>
+      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
+        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+          <Ionicons name="arrow-back" size={22} color="#E6F1FB" />
         </TouchableOpacity>
 
-        <Text style={styles.title}>RentWise Preview</Text>
+        <Text style={styles.headerTitle}>Tenant Preview</Text>
 
-        <TouchableOpacity
-          style={[styles.notifyBtn, sending && styles.notifyBtnDisabled]}
+        <Pressable
+          style={({ pressed }) => [
+            styles.notifyBtn,
+            sending && styles.notifyBtnDisabled,
+            pressed && !sending && styles.notifyBtnPressed,
+          ]}
           onPress={handleNotifyTenant}
           disabled={sending}
-          activeOpacity={0.8}
         >
           <Text style={styles.notifyBtnText}>
-            {sending ? "Sending..." : "Notify Tenant"}
+            {sending ? "Sending..." : "Notify tenant"}
           </Text>
-        </TouchableOpacity>
+        </Pressable>
       </View>
 
       <ScrollView
-        contentContainerStyle={{
-          paddingBottom: 30,
-        }}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[
+          styles.body,
+          { paddingBottom: insets.bottom + 32 },
+        ]}
       >
-        {/* TENANT BANNER */}
-
+        {/* PROFILE BANNER */}
         <View style={styles.banner}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>👤</Text>
-          </View>
-
           <View>
-            <Text style={styles.welcome}>Welcome, tenant!</Text>
-
-            <Text style={styles.name}>
+            <Text style={styles.bannerWelcome}>Welcome, tenant!</Text>
+            <Text style={styles.bannerName}>
               {tenant?.firstName} {tenant?.lastName}
             </Text>
-
-            <Text style={styles.contact}>{tenant?.contactNo}</Text>
+            <Text style={styles.bannerContact}>{tenant?.contactNo}</Text>
           </View>
         </View>
 
-        {/* PAYMENT INFORMATION */}
-
+        {/* CARD 1 — RENTAL PAYMENT INFORMATION */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Rental Payment Information</Text>
+          <Text style={styles.cardTitle}>Rental payment information</Text>
 
-          <Row label="Payment" value={`₱${totalPayment.toLocaleString()}`} />
-
-          <Row label="Pending" value={`₱${pendingPayment.toLocaleString()}`} />
-
-          <Row
+          <InfoRow label="Payment" value={`₱${totalPayment.toLocaleString()}`} />
+          <InfoRow label="Pending" value={`₱${pendingPayment.toLocaleString()}`} />
+          <InfoRow
             label="Remaining Bill"
             value={`₱${remaining.toLocaleString()}`}
+            isLast
+            danger
           />
         </View>
 
-        {/* PAYMENT HISTORY */}
-
+        {/* CARD 2 — MONTHLY PAYMENT HISTORY */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Monthly Payment History</Text>
+          <Text style={styles.cardTitle}>Monthly payment history</Text>
 
+          {/* Table header */}
           <View style={styles.tableHeader}>
-            <Text style={styles.cell}>Date</Text>
-
-            <Text style={styles.cell}>Status</Text>
-
-            <Text style={styles.cell}>Receipt</Text>
+            <Text style={[styles.colHeader, { flex: 2 }]}>Date</Text>
+            <Text style={[styles.colHeader, { flex: 2 }]}>Status</Text>
+            <Text style={[styles.colHeader, { flex: 1, textAlign: "right" }]}>Receipt</Text>
           </View>
 
           {payments.length === 0 ? (
-            <Text style={styles.empty}>No payments yet</Text>
+            <Text style={styles.empty}>No payments yet.</Text>
           ) : (
-            <FlatList
-              scrollEnabled={false}
-              data={payments}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <View style={styles.row}>
-                  <Text style={styles.cell}>{formatDate(item.date)}</Text>
+            payments.map((item, index) => (
+              <View
+                key={item.id}
+                style={[
+                  styles.paymentRow,
+                  index === payments.length - 1 && { borderBottomWidth: 0 },
+                ]}
+              >
+                {/* Date */}
+                <Text style={[styles.paymentDate, { flex: 2 }]}>
+                  {formatDate(item.date)}
+                </Text>
 
-                  <Text
+                {/* Status badge */}
+                <View style={{ flex: 2 }}>
+                  <View
                     style={[
-                      styles.cell,
-
+                      styles.statusBadge,
                       item.status === "approved"
-                        ? styles.green
+                        ? styles.badgeApproved
                         : item.status === "pending"
-                          ? styles.orange
-                          : styles.red,
+                          ? styles.badgePending
+                          : styles.badgeRejected,
                     ]}
                   >
-                    {item.status?.toUpperCase()}
-                  </Text>
+                    <Text
+                      style={[
+                        styles.statusText,
+                        item.status === "approved"
+                          ? styles.textApproved
+                          : item.status === "pending"
+                            ? styles.textPending
+                            : styles.textRejected,
+                      ]}
+                    >
+                      {item.status?.toUpperCase()}
+                    </Text>
+                  </View>
+                </View>
 
+                {/* Receipt */}
+                <View style={{ flex: 1, alignItems: "flex-end" }}>
                   {item.receipt ? (
                     <TouchableOpacity
-                      style={styles.cell}
                       onPress={() => Linking.openURL(item.receipt)}
+                      activeOpacity={0.7}
                     >
-                      <Image
-                        source={{ uri: item.receipt }}
-                        style={styles.receiptThumb}
-                        resizeMode="cover"
-                      />
+                      <Ionicons name="receipt-outline" size={20} color="#1D9E75" />
                     </TouchableOpacity>
                   ) : item.receiptData ? (
                     <TouchableOpacity
-                      style={styles.cell}
                       onPress={() => viewOnlineReceipt(item)}
+                      activeOpacity={0.7}
+                      disabled={generatingReceipt}
                     >
-                      <Text style={styles.receiptIcon}>📄</Text>
+                      {generatingReceipt ? (
+                        <ActivityIndicator size="small" color="#1D9E75" />
+                      ) : (
+                        <Ionicons name="receipt-outline" size={20} color="#1D9E75" />
+                      )}
                     </TouchableOpacity>
                   ) : (
-                    <Text style={styles.cell}>—</Text>
+                    <Text style={styles.paymentDate}>—</Text>
                   )}
                 </View>
-              )}
-            />
+              </View>
+            ))
           )}
         </View>
       </ScrollView>
@@ -359,12 +372,23 @@ export default function TenantPreview() {
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function InfoRow({
+  label,
+  value,
+  isLast = false,
+  danger = false,
+}: {
+  label: string;
+  value: string;
+  isLast?: boolean;
+  danger?: boolean;
+}) {
   return (
-    <View style={styles.infoRow}>
-      <Text>{label}</Text>
-
-      <Text style={styles.value}>{value}</Text>
+    <View style={[styles.infoRow, !isLast && styles.infoRowBorder]}>
+      <Text style={styles.infoLabel}>{label}</Text>
+      <Text style={[styles.infoValue, danger && styles.infoValueDanger]}>
+        {value}
+      </Text>
     </View>
   );
 }
@@ -372,7 +396,7 @@ function Row({ label, value }: { label: string; value: string }) {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#E8E8E8",
+    backgroundColor: "#F0F4FA",
   },
 
   center: {
@@ -381,143 +405,191 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
 
+  // ── Header ────────────────────────────────────────────────────────────────────
+
   header: {
-    backgroundColor: "#1A1A1A",
-    padding: 16,
+    backgroundColor: "#0C2D6B",
+    paddingHorizontal: 20,
+    paddingBottom: 14,
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
+    justifyContent: "space-between",
   },
 
-  back: {
+  headerTitle: {
     color: "#fff",
-    fontSize: 24,
+    fontSize: 18,
+    fontWeight: "500",
+    flex: 1,
+    textAlign: "center",
   },
 
   notifyBtn: {
-    backgroundColor: "#F5C518",
-    borderRadius: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
+    backgroundColor: "#EF9F27",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    transform: [{ scale: 1 }],
   },
+
+  notifyBtnPressed: {
+    backgroundColor: "#BA7517",
+    transform: [{ scale: 0.97 }],
+  },
+
   notifyBtnDisabled: {
     opacity: 0.5,
   },
+
   notifyBtnText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#1A1A1A",
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "500",
   },
 
-  title: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "bold",
+  // ── Body ─────────────────────────────────────────────────────────────────────
+
+  body: {
+    paddingHorizontal: 16,
+    paddingTop: 20,
+    gap: 16,
   },
+
+  // ── Profile banner ────────────────────────────────────────────────────────────
 
   banner: {
-    backgroundColor: "#B5A89A",
-    padding: 18,
+    backgroundColor: "#1A4DA0",
+    borderRadius: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
     flexDirection: "row",
     alignItems: "center",
+    gap: 14,
   },
 
-  avatar: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: "#ccc",
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 15,
+  bannerWelcome: {
+    color: "#B5D4F4",
+    fontSize: 12,
   },
 
-  avatarText: {
-    fontSize: 30,
-  },
-
-  welcome: {
-    color: "#fff",
-  },
-
-  name: {
+  bannerName: {
     color: "#fff",
     fontSize: 17,
-    fontWeight: "bold",
+    fontWeight: "500",
+    marginTop: 2,
   },
 
-  contact: {
-    color: "#fff",
+  bannerContact: {
+    color: "#B5D4F4",
+    fontSize: 13,
+    marginTop: 2,
   },
+
+  // ── Card ─────────────────────────────────────────────────────────────────────
 
   card: {
     backgroundColor: "#fff",
-    margin: 16,
-    padding: 16,
-    borderRadius: 10,
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
   },
 
   cardTitle: {
-    fontWeight: "bold",
     fontSize: 15,
-    marginBottom: 15,
+    fontWeight: "500",
+    color: "#085041",
+    marginBottom: 14,
   },
+
+  // ── Info rows (Card 1) ────────────────────────────────────────────────────────
 
   infoRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: 10,
+    alignItems: "center",
+    paddingVertical: 12,
   },
 
-  value: {
-    fontWeight: "bold",
+  infoRowBorder: {
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#E6F1FB",
   },
+
+  infoLabel: {
+    fontSize: 14,
+    color: "#888780",
+  },
+
+  infoValue: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#0C2D6B",
+  },
+
+  infoValueDanger: {
+    color: "#E24B4A",
+  },
+
+  // ── Payment history table (Card 2) ────────────────────────────────────────────
 
   tableHeader: {
+    backgroundColor: "#F0F4FA",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     flexDirection: "row",
-    backgroundColor: "#f2f2f2",
-    padding: 10,
+    marginBottom: 4,
   },
 
-  row: {
+  colHeader: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: "#5F5E5A",
+  },
+
+  paymentRow: {
     flexDirection: "row",
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderColor: "#eee",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#E6F1FB",
   },
 
-  cell: {
-    flex: 1,
-    fontSize: 13,
+  paymentDate: {
+    fontSize: 14,
+    color: "#444441",
   },
 
-  green: {
-    color: "#27AE60",
+  // Status badges
+
+  statusBadge: {
+    alignSelf: "flex-start",
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
 
-  orange: {
-    color: "#E67E22",
+  badgeApproved: { backgroundColor: "#E1F5EE" },
+  badgePending: { backgroundColor: "#FAEEDA" },
+  badgeRejected: { backgroundColor: "#FCEBEB" },
+
+  statusText: {
+    fontSize: 11,
+    fontWeight: "500",
   },
 
-  red: {
-    color: "#C0392B",
-  },
+  textApproved: { color: "#0F6E56" },
+  textPending: { color: "#BA7517" },
+  textRejected: { color: "#A32D2D" },
+
+  // Empty state
 
   empty: {
+    paddingVertical: 24,
     textAlign: "center",
-    padding: 20,
-    color: "#777",
-  },
-
-  receiptThumb: {
-    width: 48,
-    height: 48,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: "#ddd",
-  },
-
-  receiptIcon: {
-    fontSize: 24,
+    fontSize: 14,
+    color: "#B4B2A9",
   },
 });

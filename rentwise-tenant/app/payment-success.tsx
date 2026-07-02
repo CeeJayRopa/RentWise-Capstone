@@ -53,6 +53,11 @@ export default function PaymentSuccess() {
         }
 
         const sessionId = getPendingCheckoutSession();
+        if (!sessionId) {
+          // Already recorded by the in-app WebView handler
+          router.replace("/dashboard");
+          return;
+        }
         clearPendingCheckoutSession();
 
         const receiptNo = "RW-ONLINE-" + Date.now().toString().slice(-8);
