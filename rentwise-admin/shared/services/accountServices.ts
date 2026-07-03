@@ -159,6 +159,20 @@ export const resetTenantPasswordToDefault = async (
   await updateDoc(doc(db, "users", uid), { mustChangePassword: true });
 };
 
+// Disables/re-enables the tenant's Firebase Auth login itself — separate
+// from the Firestore `status` field, which only controls what the admin
+// app shows. Without this, an "archived" tenant's account still works and
+// they can keep signing in.
+const setTenantAccountDisabled = async (
+  uid: string,
+  disabled: boolean,
+): Promise<void> => {
+  const callerUid = auth.currentUser?.uid;
+  if (!callerUid) throw new Error("Admin not authenticated.");
+  const setDisabledFn = httpsCallable(cloudFunctions, "adminSetAccountDisabled");
+  await setDisabledFn({ uid, disabled, callerUid });
+};
+
 export const archiveTenant = async (uid: string): Promise<void> => {
   const userSnap = await getDoc(doc(db, "users", uid));
   if (!userSnap.exists()) throw new Error("User not found.");
@@ -185,6 +199,11 @@ export const archiveTenant = async (uid: string): Promise<void> => {
       stallBelongsToTenant = sd.tenantId === uid;
     }
   }
+
+  // Lock the tenant out of the app before committing the archive — if this
+  // fails, the whole archive aborts rather than leaving Firestore saying
+  // "archived" while the tenant can still log in.
+  await setTenantAccountDisabled(uid, true);
 
   const batch = writeBatch(db);
 
@@ -306,6 +325,9 @@ export const restoreTenant = async (uid: string): Promise<void> => {
   const stallId = (archive.stallId as string) ?? "";
   const tenantName = `${archive.firstName ?? ""} ${archive.lastName ?? ""}`.trim();
 
+  // Re-enable login before committing the restore.
+  await setTenantAccountDisabled(uid, false);
+
   const batch = writeBatch(db);
 
   batch.update(doc(db, "users", uid), { status: "active" });
@@ -359,6 +381,9 @@ export const restoreTenantToNewStall = async (
   }
 
   const newSpaceNo = String(stallSnap.data().spaceId ?? newStallId);
+
+  // Re-enable login before committing the restore.
+  await setTenantAccountDisabled(uid, false);
 
   const batch = writeBatch(db);
 

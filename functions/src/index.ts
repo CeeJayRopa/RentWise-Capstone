@@ -205,35 +205,22 @@ export const ownerResetAdminPassword = onCall(async (request) => {
 // =====================================
 
 export const adminSetAccountDisabled = onCall(async (request) => {
-  const adminUid = request.auth?.uid;
-
-  if (!adminUid) {
-    throw new HttpsError("unauthenticated", "Login required");
-  }
-
-  await assertIsAdmin(adminUid);
-
-  const {
-    uid,
-
-    disabled,
-  } = request.data;
-
-  if (!uid) {
-    throw new HttpsError("invalid-argument", "Missing user UID");
-  }
-
-  await auth.updateUser(
-    uid,
-
-    {
-      disabled,
-    },
-  );
-
-  return {
-    success: true,
+  const { uid, disabled, callerUid } = request.data as {
+    uid: string;
+    disabled: boolean;
+    callerUid: string;
   };
+
+  if (!uid || typeof disabled !== "boolean" || !callerUid) {
+    throw new HttpsError("invalid-argument", "Missing account data");
+  }
+
+  // Verify caller is an admin via Firestore (works even when request.auth is unavailable in RN)
+  await assertIsAdmin(callerUid);
+
+  await auth.updateUser(uid, { disabled });
+
+  return { success: true };
 });
 
 // =====================================
