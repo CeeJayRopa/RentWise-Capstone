@@ -1,6 +1,12 @@
 # Dependencies
 node_modules/
 
+# Local editor/tool config (not shared project settings)
+.claude/
+.qodo/
+**/.claude/
+**/.qodo/
+
 # Expo
 .expo/
 dist/
@@ -21,7 +27,6 @@ ui-debug.log
 # Build outputs
 functions/lib/
 paymongo-api/node_modules/
-server/node_modules/
 
 # OS
 .DS_Store
