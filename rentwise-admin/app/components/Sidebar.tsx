@@ -11,7 +11,7 @@ import {
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
-  ShieldCheck,
+  User,
   Home,
   Wallet,
   Building2,
@@ -113,7 +113,7 @@ export default function Sidebar({ visible, onClose }: Props) {
         {/* Profile section */}
         <View style={[styles.profileSection, { paddingTop: insets.top + 28 }]}>
           <View style={styles.avatar}>
-            <ShieldCheck size={32} color="#E6F1FB" />
+            <User size={32} color="#E6F1FB" />
           </View>
           <Text style={styles.adminName}>{adminName}</Text>
           <Text style={styles.adminRole}>Administrator</Text>

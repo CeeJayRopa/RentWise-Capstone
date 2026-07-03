@@ -39,7 +39,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { auth } from "../shared/firebaseConfig";
 import { getTenantData } from "../services/tenantService";
-import { createOnlinePayment, createPayment, notifyAdminsOfOnlinePayment } from "../services/paymentService";
+import { createOnlinePayment, createPayment } from "../services/paymentService";
 import { uploadReceiptImage } from "../services/storageService";
 import {
   setPendingCheckoutSession,
@@ -416,9 +416,9 @@ export default function Dashboard() {
         cashReceived: null,
         change: 0,
       });
-      notifyAdminsOfOnlinePayment(tenantName, paymentAmount, stall?.spaceId ?? "").catch((err) => {
-        console.log("[notifyAdminsOfOnlinePayment] error:", err);
-      });
+      // Admins are notified server-side by the notifyAdminsOnPayment Cloud
+      // Function trigger (functions/src/paymentNotifier.ts), which fires
+      // reliably on payment-doc creation regardless of client path.
       setCaptureReceipt({ paymentId, data: receiptData });
       triggerToast("Payment submitted successfully!");
     } catch (err) {
@@ -481,6 +481,17 @@ export default function Dashboard() {
   async function handlePayNow() {
     if (!payAmount || Number(payAmount) <= 0) {
       Alert.alert("Error", "Please enter a valid amount");
+      return;
+    }
+    // No more partial payments — paying online must cover at least the
+    // current Payment due (matches how cash collection always works: the
+    // admin only ever accepts the exact amount, never less). Paying more
+    // is still fine — that's an advance payment.
+    if (paymentDue > 0 && Number(payAmount) < paymentDue) {
+      Alert.alert(
+        "Amount too low",
+        `Please enter at least ₱${Math.round(paymentDue).toLocaleString()} — partial payments are no longer accepted.`,
+      );
       return;
     }
     if (!selectedMethod) {
@@ -862,6 +873,10 @@ export default function Dashboard() {
                   );
                   return;
                 }
+                // Pre-fill with the exact current "Payment" amount as a
+                // starting point — still editable, so paying more (advance)
+                // or less (partial) is still possible.
+                setPayAmount(paymentDue > 0 ? String(Math.round(paymentDue)) : "");
                 setShowPayModal(true);
               }}
             >
@@ -901,6 +916,11 @@ export default function Dashboard() {
               value={payAmount}
               onChangeText={setPayAmount}
             />
+            {paymentDue > 0 && (
+              <Text style={styles.payAmountHint}>
+                You currently owe ₱{Math.round(paymentDue).toLocaleString()}. You can pay more to cover future periods in advance, but not less.
+              </Text>
+            )}
 
             <Text style={styles.payLabel}>Payment Method</Text>
             <View style={styles.methodRow}>
@@ -1390,6 +1410,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#f7fdf9",
     color: "#085041",
     fontSize: 15,
+  },
+
+  payAmountHint: {
+    fontSize: 12,
+    color: "#888780",
+    marginTop: 6,
+    lineHeight: 16,
   },
 
   methodRow: {

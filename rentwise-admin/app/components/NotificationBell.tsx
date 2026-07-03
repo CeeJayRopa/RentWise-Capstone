@@ -218,7 +218,7 @@ export default function NotificationBell() {
                           onPress={() => goToTenant(r)}
                         >
                           <Text style={styles.goToTenantBtnText}>
-                            Reset in Tenant Management
+                            Reset
                           </Text>
                         </TouchableOpacity>
                       )}
