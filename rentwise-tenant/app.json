@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "rentwise-tenant",
+    "name": "RentWise",
     "slug": "rentwise-tenant",
     "scheme": "rentwise",
     "plugins": [
@@ -33,6 +33,13 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "fe8386dc-027a-402d-9915-3c1f4da22a13"
+      }
+    },
+    "owner": "ceejay27"
   }
 }

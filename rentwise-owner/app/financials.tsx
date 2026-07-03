@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   TextInput,
+  RefreshControl,
 } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
@@ -84,6 +85,7 @@ export default function Financials() {
   const insets = useSafeAreaInsets();
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [rows, setRows] = useState<PaymentRow[]>([]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [dateFilter, setDateFilter] = useState<DateFilter>("Monthly");
@@ -102,6 +104,12 @@ export default function Financials() {
   }, []);
 
   useFocusEffect(useCallback(() => { if (!checking) fetchData(); }, [checking, dateFilter]));
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchData();
+    setRefreshing(false);
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -317,6 +325,9 @@ export default function Financials() {
             keyExtractor={(item) => item.id}
             contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 32 }]}
             showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            }
             ListEmptyComponent={
               <Text style={styles.empty}>
                 {statusFilter === "Paid"

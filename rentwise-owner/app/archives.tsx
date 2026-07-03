@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
+  RefreshControl,
 } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
@@ -44,6 +45,7 @@ export default function Archives() {
   const insets = useSafeAreaInsets();
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [archives, setArchives] = useState<ArchiveEntry[]>([]);
   const [sidebarVisible, setSidebarVisible] = useState(false);
 
@@ -89,6 +91,12 @@ export default function Archives() {
 
   useFocusEffect(useCallback(() => { if (!checking) fetchData(); }, [checking, fetchData]));
 
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchData();
+    setRefreshing(false);
+  }, [fetchData]);
+
   if (checking) {
     return <View style={styles.fullCenter}><ActivityIndicator color="#0C2D6B" size="large" /></View>;
   }
@@ -125,6 +133,9 @@ export default function Archives() {
           keyExtractor={(item) => item.uid}
           contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 24 }]}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
           renderItem={({ item }) => (
             <View style={styles.card}>
               <View style={styles.avatarCircle}>

@@ -8,6 +8,7 @@ import {
   Pressable,
   Linking,
   Alert,
+  RefreshControl,
 } from "react-native";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
@@ -45,6 +46,49 @@ const MONTHS = [
   "December",
 ];
 
+// Advances `d` to the start of the next billing period for `schedule`.
+function nextPeriodStart(schedule: string, d: Date): Date {
+  const n = new Date(d);
+  if (schedule === "daily") {
+    n.setDate(n.getDate() + 1);
+    return n;
+  }
+  if (schedule === "weekly") {
+    n.setDate(n.getDate() + 7);
+    return n;
+  }
+  if (schedule === "semi-monthly") {
+    if (n.getDate() <= 15) {
+      n.setDate(16);
+      return n;
+    }
+    return new Date(n.getFullYear(), n.getMonth() + 1, 1);
+  }
+  return new Date(n.getFullYear(), n.getMonth() + 1, 1); // monthly
+}
+
+// Sums each billing period's charge for every period from day 1 of the
+// month through today's period, inclusive — a period counts in full the
+// moment it starts (not prorated by day), and the trailing period is capped
+// at the month's last day so the total never overshoots the month's full
+// charge (dailyRate × daysInMonth). Mirrors rentwise-tenant/app/dashboard.tsx.
+function chargedSinceMonthStart(dailyRate: number, schedule: string, today: Date): number {
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const monthEndExclusive = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  let total = 0;
+  let cursor = monthStart;
+  let guard = 0;
+  while (cursor <= today && guard < 31) {
+    const periodEnd = nextPeriodStart(schedule, cursor);
+    const cappedEnd = periodEnd < monthEndExclusive ? periodEnd : monthEndExclusive;
+    const daysInChunk = Math.round((cappedEnd.getTime() - cursor.getTime()) / 86400000);
+    total += dailyRate * daysInChunk;
+    cursor = periodEnd;
+    guard++;
+  }
+  return total;
+}
+
 export default function TenantPreview() {
   const insets = useSafeAreaInsets();
 
@@ -56,12 +100,19 @@ export default function TenantPreview() {
   const [stall, setStall] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [sending, setSending] = useState(false);
   const [generatingReceipt, setGeneratingReceipt] = useState(false);
 
   useEffect(() => {
     loadTenant();
   }, []);
+
+  async function onRefresh() {
+    setRefreshing(true);
+    await loadTenant();
+    setRefreshing(false);
+  }
 
   async function loadTenant() {
     try {
@@ -177,23 +228,26 @@ export default function TenantPreview() {
     return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
   }
 
-  const approved = payments.filter((p) => p.status === "approved");
+  // Month-scoped balance — mirrors rentwise-tenant/app/dashboard.tsx exactly,
+  // so the admin sees the same numbers the tenant sees on their own screen.
+  const dailyRate = Number(stall?.price || 0);
+  const paymentSchedule = stall?.paymentSchedule ?? "monthly";
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = today.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthTotalCharge = dailyRate * daysInMonth;
 
-  const pending = payments.filter((p) => p.status === "pending");
+  const paidThisMonth = payments.reduce((sum, p) => {
+    if (p.status !== "approved") return sum;
+    const d = p.date?.toDate ? p.date.toDate() : p.date ? new Date(p.date) : null;
+    if (!d || d.getFullYear() !== year || d.getMonth() !== month) return sum;
+    return sum + Number(p.amount || 0);
+  }, 0);
 
-  const totalPayment = approved.reduce(
-    (sum, p) => sum + Number(p.amount || 0),
-    0,
-  );
-
-  const pendingPayment = pending.reduce(
-    (sum, p) => sum + Number(p.amount || 0),
-    0,
-  );
-
-  const monthlyRent = Number(stall?.price || 0);
-
-  const remaining = monthlyRent - totalPayment;
+  const remainingBill = monthTotalCharge - paidThisMonth;
+  const chargedToDate = chargedSinceMonthStart(dailyRate, paymentSchedule, today);
+  const paymentDue = chargedToDate - paidThisMonth;
 
   const NOTIFY_MESSAGE =
     "The Market Administrator sent you a reminder regarding your rental account. Please check your payment status or contact the market office if you have any questions.";
@@ -258,6 +312,9 @@ export default function TenantPreview() {
           styles.body,
           { paddingBottom: insets.bottom + 32 },
         ]}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
       >
         {/* PROFILE BANNER */}
         <View style={styles.banner}>
@@ -274,11 +331,21 @@ export default function TenantPreview() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Rental payment information</Text>
 
-          <InfoRow label="Payment" value={`₱${totalPayment.toLocaleString()}`} />
-          <InfoRow label="Pending" value={`₱${pendingPayment.toLocaleString()}`} />
+          <InfoRow
+            label="Payment"
+            value={`${paymentDue < 0 ? "-" : ""}₱${Math.abs(paymentDue).toLocaleString()}`}
+          />
+          <InfoRow
+            label="Payment Schedule"
+            value={
+              paymentSchedule
+                ? paymentSchedule.charAt(0).toUpperCase() + paymentSchedule.slice(1)
+                : "—"
+            }
+          />
           <InfoRow
             label="Remaining Bill"
-            value={`₱${remaining.toLocaleString()}`}
+            value={`₱${remainingBill.toLocaleString()}`}
             isLast
             danger
           />

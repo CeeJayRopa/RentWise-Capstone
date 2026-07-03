@@ -9,6 +9,7 @@ import { db } from "../../shared/services/firestore";
 
 export default function OwnerBellIcon() {
   const [unreadCount, setUnreadCount] = useState(0);
+  const [pendingResetCount, setPendingResetCount] = useState(0);
 
   useEffect(() => {
     const user = auth.currentUser;
@@ -24,7 +25,20 @@ export default function OwnerBellIcon() {
       setUnreadCount(snap.size);
     });
 
-    return () => unsub();
+    const resetQ = query(
+      collection(db, "passwordResetRequests"),
+      where("requestedRole", "==", "admin"),
+      where("status", "==", "pending"),
+    );
+
+    const unsubResets = onSnapshot(resetQ, (snap) => {
+      setPendingResetCount(snap.size);
+    });
+
+    return () => {
+      unsub();
+      unsubResets();
+    };
   }, []);
 
   return (
@@ -34,7 +48,7 @@ export default function OwnerBellIcon() {
       activeOpacity={0.7}
     >
       <Ionicons name="notifications-outline" size={24} color="#E6F1FB" />
-      {unreadCount > 0 && <View style={styles.dot} />}
+      {unreadCount + pendingResetCount > 0 && <View style={styles.dot} />}
     </TouchableOpacity>
   );
 }

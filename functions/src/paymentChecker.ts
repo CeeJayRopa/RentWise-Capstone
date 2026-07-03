@@ -2,47 +2,91 @@ import { getFirestore } from 'firebase-admin/firestore';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PERIOD HELPERS
+// Mirrors rentwise-tenant/app/dashboard.tsx exactly, so a reminder only
+// fires when the tenant's own dashboard would still show them as owing.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function isSameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
-}
-
-function isSameWeek(a: Date, b: Date): boolean {
-  const weekStart = (d: Date): Date => {
-    const n = new Date(d);
-    n.setDate(n.getDate() - n.getDay());
-    n.setHours(0, 0, 0, 0);
+// Advances `d` to the start of the next billing period for `schedule`.
+function nextPeriodStart(schedule: string, d: Date): Date {
+  const n = new Date(d);
+  if (schedule === 'daily') {
+    n.setDate(n.getDate() + 1);
     return n;
-  };
-  return weekStart(a).getTime() === weekStart(b).getTime();
+  }
+  if (schedule === 'weekly') {
+    n.setDate(n.getDate() + 7);
+    return n;
+  }
+  if (schedule === 'semi-monthly') {
+    if (n.getDate() <= 15) {
+      n.setDate(16);
+      return n;
+    }
+    return new Date(n.getFullYear(), n.getMonth() + 1, 1);
+  }
+  return new Date(n.getFullYear(), n.getMonth() + 1, 1); // monthly
 }
 
-function isSameMonth(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth()
-  );
+// Sums each billing period's charge for every period from day 1 of the
+// month through today's period, inclusive — a period counts in full the
+// moment it starts (not prorated by day), and the trailing period is capped
+// at the month's last day so the total never overshoots the month's full
+// charge (dailyRate × daysInMonth).
+function chargedSinceMonthStart(dailyRate: number, schedule: string, today: Date): number {
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const monthEndExclusive = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  let total = 0;
+  let cursor = monthStart;
+  let guard = 0;
+  while (cursor <= today && guard < 31) {
+    const periodEnd = nextPeriodStart(schedule, cursor);
+    const cappedEnd = periodEnd < monthEndExclusive ? periodEnd : monthEndExclusive;
+    const daysInChunk = Math.round((cappedEnd.getTime() - cursor.getTime()) / 86400000);
+    total += dailyRate * daysInChunk;
+    cursor = periodEnd;
+    guard++;
+  }
+  return total;
 }
 
-// Semi-monthly periods split each calendar month into two halves: 1st–15th
-// and 16th–end of month.
-function isSameSemiMonth(a: Date, b: Date): boolean {
-  const halfOf = (d: Date) => (d.getDate() <= 15 ? 0 : 1);
-  return isSameMonth(a, b) && halfOf(a) === halfOf(b);
+// True if `a` and `b` fall within the same billing period for `schedule` —
+// used only to detect a payment made specifically for today's period, so a
+// tenant isn't nagged again the same day they already paid (even partially).
+function isSamePeriod(schedule: string, a: Date, b: Date): boolean {
+  if (schedule === 'daily') {
+    return (
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate()
+    );
+  }
+  if (schedule === 'weekly') {
+    const startA = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+    startA.setDate(startA.getDate() - startA.getDay());
+    const startB = new Date(b.getFullYear(), b.getMonth(), b.getDate());
+    startB.setDate(startB.getDate() - startB.getDay());
+    return startA.getTime() === startB.getTime();
+  }
+  if (schedule === 'semi-monthly') {
+    const halfOf = (d: Date) => (d.getDate() <= 15 ? 0 : 1);
+    return (
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      halfOf(a) === halfOf(b)
+    );
+  }
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth(); // monthly
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PAYMENT DUE CHECK
-// Returns true  → no approved/pending payment found for the current period
-//         false → payment already exists, skip reminder
+// Returns true  → the current month's running balance is not yet settled
+//         false → the tenant is paid up through today (or ahead)
 // ─────────────────────────────────────────────────────────────────────────────
 export async function isPaymentDue(
   tenantId: string,
   schedule: string,
+  dailyRate: number,
 ): Promise<boolean> {
   // Composite index required in Firestore: userId ASC, status ASC
   const snap = await getFirestore()
@@ -52,6 +96,14 @@ export async function isPaymentDue(
     .get();
 
   const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthTotalCharge = dailyRate * daysInMonth;
+
+  let paidThisMonth = 0;
+  let hasPendingThisMonth = false;
+  let hasPaidForCurrentSpecificPeriod = false;
 
   for (const docSnap of snap.docs) {
     const data = docSnap.data();
@@ -59,16 +111,27 @@ export async function isPaymentDue(
       ? data.date.toDate()
       : new Date(data.date);
 
-    let coveredByThisPeriod = false;
-    if (schedule === 'daily') coveredByThisPeriod = isSameDay(paymentDate, now);
-    if (schedule === 'weekly') coveredByThisPeriod = isSameWeek(paymentDate, now);
-    if (schedule === 'semi-monthly') coveredByThisPeriod = isSameSemiMonth(paymentDate, now);
-    if (schedule === 'monthly') coveredByThisPeriod = isSameMonth(paymentDate, now);
+    if (data.status === 'approved') {
+      if (paymentDate.getFullYear() === year && paymentDate.getMonth() === month) {
+        paidThisMonth += Number(data.amount || 0);
+      }
+    } else {
+      // pending
+      if (paymentDate.getFullYear() === year && paymentDate.getMonth() === month) {
+        hasPendingThisMonth = true;
+      }
+    }
 
-    if (coveredByThisPeriod) return false; // payment exists → NOT due
+    if (isSamePeriod(schedule, paymentDate, now)) {
+      hasPaidForCurrentSpecificPeriod = true;
+    }
   }
 
-  return true; // no payment found for this period → IS due
+  const balance = monthTotalCharge - paidThisMonth;
+  const hasPaidCurrentPeriod =
+    balance <= 0 || hasPendingThisMonth || hasPaidForCurrentSpecificPeriod;
+
+  return !hasPaidCurrentPeriod;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

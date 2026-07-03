@@ -9,6 +9,7 @@ import {
   Alert,
   Animated,
   Easing,
+  RefreshControl,
 } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
@@ -106,6 +107,7 @@ export default function DailyReports() {
   const insets = useSafeAreaInsets();
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [reports, setReports] = useState<ReportDoc[]>([]);
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -138,6 +140,12 @@ export default function DailyReports() {
   }, []);
 
   useFocusEffect(useCallback(() => { if (!checking) fetchData(); }, [checking]));
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchData();
+    setRefreshing(false);
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -270,6 +278,9 @@ export default function DailyReports() {
           keyExtractor={(item) => item.date}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
           renderItem={({ item: group }) => (
             <View>
               <Text style={styles.groupDate}>{group.date}</Text>

@@ -14,8 +14,10 @@ import {
   Animated,
   Easing,
   Linking,
+  RefreshControl,
 } from "react-native";
 import { WebView } from "react-native-webview";
+import { captureRef } from "react-native-view-shot";
 
 import BellIcon from "./components/BellIcon";
 
@@ -33,11 +35,12 @@ import { updatePassword } from "firebase/auth";
 import { db } from "../shared/services/firestore";
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { auth } from "../shared/firebaseConfig";
 import { getTenantData } from "../services/tenantService";
 import { createOnlinePayment, createPayment, notifyAdminsOfOnlinePayment } from "../services/paymentService";
+import { uploadReceiptImage } from "../services/storageService";
 import {
   setPendingCheckoutSession,
   getPendingCheckoutSession,
@@ -64,6 +67,151 @@ const MONTHS = [
   "December",
 ];
 
+// The admin always enters the stall's DAILY rate. Every schedule's period
+// charge is derived by multiplying that daily rate by however many days
+// fall in the period containing `date` (weekly is always 7 days; monthly
+// and semi-monthly vary with the actual calendar, e.g. Feb vs. Jan).
+function computePeriodCharge(dailyRate: number, schedule: string, date: Date): number {
+  if (schedule === "daily") return dailyRate;
+  if (schedule === "weekly") return dailyRate * 7;
+  const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  if (schedule === "semi-monthly") {
+    const daysInHalf = date.getDate() <= 15 ? 15 : daysInMonth - 15;
+    return dailyRate * daysInHalf;
+  }
+  return dailyRate * daysInMonth; // monthly
+}
+
+// Advances `d` to the start of the next billing period for `schedule`.
+function nextPeriodStart(schedule: string, d: Date): Date {
+  const n = new Date(d);
+  if (schedule === "daily") {
+    n.setDate(n.getDate() + 1);
+    return n;
+  }
+  if (schedule === "weekly") {
+    n.setDate(n.getDate() + 7);
+    return n;
+  }
+  if (schedule === "semi-monthly") {
+    if (n.getDate() <= 15) {
+      n.setDate(16);
+      return n;
+    }
+    return new Date(n.getFullYear(), n.getMonth() + 1, 1);
+  }
+  return new Date(n.getFullYear(), n.getMonth() + 1, 1); // monthly
+}
+
+// Sums each billing period's charge for every period from day 1 of the
+// month through today's period, inclusive. A period counts in full the
+// moment it starts — it isn't prorated by how many days into it "today" is
+// — so a weekly tenant on day 3 (still inside week 1) owes exactly one
+// week's rent (₱1,169), not a 3-day fraction. For "daily" this naturally
+// reduces to dailyRate × day-of-month, since each day is its own period.
+// The trailing period is capped at the month's last day (e.g. a weekly
+// tenant's 5th "week" of a 31-day month is really only 3 days) so the
+// running total never overshoots — and stays equal to — the month's total
+// charge (dailyRate × daysInMonth) once every period has started.
+function chargedSinceMonthStart(dailyRate: number, schedule: string, today: Date): number {
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const monthEndExclusive = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  let total = 0;
+  let cursor = monthStart;
+  let guard = 0;
+  while (cursor <= today && guard < 31) {
+    const periodEnd = nextPeriodStart(schedule, cursor);
+    const cappedEnd = periodEnd < monthEndExclusive ? periodEnd : monthEndExclusive;
+    const daysInChunk = Math.round((cappedEnd.getTime() - cursor.getTime()) / 86400000);
+    total += dailyRate * daysInChunk;
+    cursor = periodEnd;
+    guard++;
+  }
+  return total;
+}
+
+// True if `a` and `b` fall within the same billing period for `schedule` —
+// used only to block a duplicate "Pay Online" submission for a period
+// that's already been paid, separate from the month-wide running balance.
+function isSamePeriod(schedule: string, a: Date, b: Date): boolean {
+  if (schedule === "daily") {
+    return (
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate()
+    );
+  }
+  if (schedule === "weekly") {
+    const startA = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+    startA.setDate(startA.getDate() - startA.getDay());
+    const startB = new Date(b.getFullYear(), b.getMonth(), b.getDate());
+    startB.setDate(startB.getDate() - startB.getDay());
+    return startA.getTime() === startB.getTime();
+  }
+  if (schedule === "semi-monthly") {
+    const halfOf = (d: Date) => (d.getDate() <= 15 ? 0 : 1);
+    return (
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      halfOf(a) === halfOf(b)
+    );
+  }
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth(); // monthly
+}
+
+function ReceiptCardContent({ data }: { data: any }) {
+  return (
+    <View style={styles.receiptFields}>
+      <View style={styles.receiptFieldRow}>
+        <Text style={styles.receiptFieldLabel}>Receipt No</Text>
+        <Text style={styles.receiptFieldValue}>{data.receiptNo}</Text>
+      </View>
+      <View style={styles.receiptFieldRow}>
+        <Text style={styles.receiptFieldLabel}>Tenant Name</Text>
+        <Text style={styles.receiptFieldValue}>{data.tenantName}</Text>
+      </View>
+      <View style={styles.receiptFieldRow}>
+        <Text style={styles.receiptFieldLabel}>Building No</Text>
+        <Text style={styles.receiptFieldValue}>{data.buildingNumber}</Text>
+      </View>
+      <View style={styles.receiptFieldRow}>
+        <Text style={styles.receiptFieldLabel}>Space ID</Text>
+        <Text style={styles.receiptFieldValue}>{data.spaceId}</Text>
+      </View>
+      {data.paymentMethod && (
+        <View style={styles.receiptFieldRow}>
+          <Text style={styles.receiptFieldLabel}>Payment Method</Text>
+          <Text style={styles.receiptFieldValue}>{data.paymentMethod}</Text>
+        </View>
+      )}
+      <View style={styles.receiptFieldRow}>
+        <Text style={styles.receiptFieldLabel}>Date</Text>
+        <Text style={styles.receiptFieldValue}>
+          {new Date(data.date).toLocaleDateString()}
+        </Text>
+      </View>
+      <View style={styles.receiptFieldRow}>
+        <Text style={styles.receiptFieldLabel}>Rent Amount</Text>
+        <Text style={styles.receiptFieldValue}>₱{data.rentAmount}</Text>
+      </View>
+      <View style={styles.receiptFieldRow}>
+        <Text style={styles.receiptFieldLabel}>Payment</Text>
+        <Text style={styles.receiptFieldValue}>₱{data.payment}</Text>
+      </View>
+      <View style={styles.receiptFieldRow}>
+        <Text style={styles.receiptFieldLabel}>Change</Text>
+        <Text style={styles.receiptFieldValue}>₱{data.change}</Text>
+      </View>
+      <View style={styles.receiptFieldRow}>
+        <Text style={styles.receiptFieldLabel}>Status</Text>
+        <Text style={[styles.receiptFieldValue, styles.textApproved]}>
+          {data.status}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 export default function Dashboard() {
   const insets = useSafeAreaInsets();
 
@@ -74,6 +222,7 @@ export default function Dashboard() {
   const [stall, setStall] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(
     MONTHS[new Date().getMonth()],
   );
@@ -102,9 +251,52 @@ export default function Dashboard() {
   const [changePwError, setChangePwError] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
 
+  const [captureReceipt, setCaptureReceipt] = useState<{
+    paymentId: string;
+    data: any;
+  } | null>(null);
+  const receiptShotRef = useRef<View>(null);
+
   const monthPillRef = useRef<View>(null);
 
-  const monthlyRent = Number(stall?.price || 0);
+  // The stall's rate for whatever schedule is currently selected (daily,
+  // weekly, semi-monthly, or monthly) — admin enters this as the direct
+  // per-period amount, not a monthly total to be divided down.
+  const periodRate = Number(stall?.price || 0);
+
+  // Renders the digital receipt off-screen, snapshots it as an image, and
+  // attaches the uploaded image URL to the payment doc so admins can view it
+  // in the "Tenant's Online Receipt" confirmation modal.
+  useEffect(() => {
+    if (!captureReceipt) return;
+
+    let cancelled = false;
+
+    (async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      try {
+        const uri = await captureRef(receiptShotRef, {
+          format: "jpg",
+          quality: 0.9,
+          result: "base64",
+        });
+        const imageUrl = await uploadReceiptImage(uri);
+        if (!cancelled) {
+          await updateDoc(doc(db, "payments", captureReceipt.paymentId), {
+            receipt: imageUrl,
+          });
+        }
+      } catch (err) {
+        console.log("[receipt capture/upload] error:", err);
+      } finally {
+        if (!cancelled) setCaptureReceipt(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [captureReceipt]);
 
   useFocusEffect(
     useCallback(() => {
@@ -155,6 +347,13 @@ export default function Dashboard() {
     }
   }
 
+  async function onRefresh() {
+    setRefreshing(true);
+    const user = auth.currentUser;
+    if (user) await loadTenantProfile(user.uid);
+    setRefreshing(false);
+  }
+
   function triggerToast(msg: string) {
     setToastMsg(msg);
     toastOpacity.setValue(0);
@@ -176,18 +375,15 @@ export default function Dashboard() {
       clearPendingCheckoutSession();
       const receiptNo = "RW-ONLINE-" + Date.now().toString().slice(-8);
       const tenantName = tenant ? `${tenant.firstName} ${tenant.lastName}` : "";
-      const scheduleRent = (() => {
-        const price = stall?.price ?? 0;
-        const schedule = stall?.paymentSchedule ?? "monthly";
-        if (schedule === "daily") {
-          const now = new Date();
-          const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-          return Math.round(price / days);
-        }
-        if (schedule === "weekly") return Math.round(price / 4);
-        if (schedule === "semi-monthly") return Math.round(price / 2);
-        return price;
-      })();
+      const scheduleRent = computePeriodCharge(
+        stall?.price ?? 0,
+        stall?.paymentSchedule ?? "monthly",
+        new Date(),
+      );
+      // Paying more than one period's rent in a single transaction counts as
+      // an advance payment covering that many future periods.
+      const periodsCovered =
+        scheduleRent > 0 ? Math.max(1, Math.round(paymentAmount / scheduleRent)) : 1;
       const receiptData = {
         receiptNo,
         tenantName,
@@ -200,10 +396,11 @@ export default function Dashboard() {
         change: 0,
         status: "PENDING",
       };
-      await createPayment({
+      const paymentId = await createPayment({
         userId: user.uid,
         amount: paymentAmount,
         rentAmount: scheduleRent,
+        periodsCovered,
         method: "online",
         status: "pending",
         tenantName,
@@ -222,6 +419,7 @@ export default function Dashboard() {
       notifyAdminsOfOnlinePayment(tenantName, paymentAmount, stall?.spaceId ?? "").catch((err) => {
         console.log("[notifyAdminsOfOnlinePayment] error:", err);
       });
+      setCaptureReceipt({ paymentId, data: receiptData });
       triggerToast("Payment submitted successfully!");
     } catch (err) {
       console.log("[handlePaymentSuccess] error:", err);
@@ -332,17 +530,59 @@ export default function Dashboard() {
 
   const pendingPayments = payments.filter((p) => p.status === "pending");
 
-  const totalPayment = successfulPayments.reduce(
-    (sum, p) => sum + Number(p.amount || 0),
-    0,
-  );
-
   const pendingPayment = pendingPayments.reduce(
     (sum, p) => sum + Number(p.amount || 0),
     0,
   );
 
-  const remainingBill = monthlyRent - totalPayment;
+  const paymentSchedule = stall?.paymentSchedule ?? "monthly";
+  const today = new Date();
+
+  // "Remaining Bill": the whole calendar month's total rent (daily rate ×
+  // days in month, the same "₱167 × 31 = ₱5,177" total regardless of
+  // schedule) minus everything actually paid (approved only) so far *this
+  // month*. Resets to a fresh balance every new month.
+  const year = today.getFullYear();
+  const month = today.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthTotalCharge = periodRate * daysInMonth;
+
+  const paidThisMonth = successfulPayments.reduce((sum, p) => {
+    const d = p.date?.toDate ? p.date.toDate() : p.date ? new Date(p.date) : null;
+    if (!d || d.getFullYear() !== year || d.getMonth() !== month) return sum;
+    return sum + Number(p.amount || 0);
+  }, 0);
+
+  const balance = monthTotalCharge - paidThisMonth;
+  const remainingBill = balance;
+
+  // "Payment": pacing against the schedule's own periods, so it reflects
+  // exactly where the tenant stands as of today — negative (credit) if
+  // they're ahead, positive if behind. This is intentionally separate from
+  // "Remaining Bill" (the month-total left): paying today immediately shows
+  // a same-day credit here, which the month-total figure can't show since
+  // it's always measured against the full month.
+  const chargedToDate = chargedSinceMonthStart(periodRate, paymentSchedule, today);
+  const paymentDue = chargedToDate - paidThisMonth;
+
+  // Blocks re-paying once this month's balance is settled (or ahead), while
+  // a payment made this month is still pending admin approval, or if a
+  // payment already exists for today's specific period — prevents an
+  // accidental duplicate payment for the same day/week/etc. even while the
+  // month's overall balance still has room left.
+  const hasPendingThisMonth = pendingPayments.some((p) => {
+    const d = p.date?.toDate ? p.date.toDate() : p.date ? new Date(p.date) : null;
+    if (!d) return false;
+    return d.getFullYear() === year && d.getMonth() === month;
+  });
+  const hasPaidForCurrentSpecificPeriod = payments.some((p) => {
+    if (p.status !== "approved" && p.status !== "pending") return false;
+    const d = p.date?.toDate ? p.date.toDate() : p.date ? new Date(p.date) : null;
+    if (!d) return false;
+    return isSamePeriod(paymentSchedule, d, today);
+  });
+  const hasPaidCurrentPeriod =
+    balance <= 0 || hasPendingThisMonth || hasPaidForCurrentSpecificPeriod;
 
   const history = paymentHistory
     .filter((p) => {
@@ -404,6 +644,9 @@ export default function Dashboard() {
           { paddingBottom: insets.bottom + 16 },
         ]}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
       >
         {/* CARD 1 — Rental payment information */}
         <View style={styles.card}>
@@ -411,7 +654,9 @@ export default function Dashboard() {
 
           <View style={[styles.infoRow, styles.infoRowBorder]}>
             <Text style={styles.infoLabel}>Payment</Text>
-            <Text style={styles.infoValue}>₱{totalPayment.toLocaleString()}</Text>
+            <Text style={styles.infoValue}>
+              {paymentDue < 0 ? "-" : ""}₱{Math.abs(paymentDue).toLocaleString()}
+            </Text>
           </View>
 
           <View style={[styles.infoRow, styles.infoRowBorder]}>
@@ -610,10 +855,24 @@ export default function Dashboard() {
               style={styles.menuItem}
               onPress={() => {
                 setShowMenu(false);
+                if (hasPaidCurrentPeriod) {
+                  Alert.alert(
+                    "Already Paid",
+                    "You've already paid or have a pending payment for this period.",
+                  );
+                  return;
+                }
                 setShowPayModal(true);
               }}
             >
-              <Text style={styles.menuItemText}>Pay Online</Text>
+              <Text
+                style={[
+                  styles.menuItemText,
+                  hasPaidCurrentPeriod && styles.menuItemTextDisabled,
+                ]}
+              >
+                Pay Online
+              </Text>
             </TouchableOpacity>
 
             <View style={styles.menuDivider} />
@@ -723,72 +982,7 @@ export default function Dashboard() {
               showsVerticalScrollIndicator={false}
             >
               {selectedPayment?.receiptData ? (
-                <View style={styles.receiptFields}>
-                  <View style={styles.receiptFieldRow}>
-                    <Text style={styles.receiptFieldLabel}>Receipt No</Text>
-                    <Text style={styles.receiptFieldValue}>
-                      {selectedPayment.receiptData.receiptNo}
-                    </Text>
-                  </View>
-                  <View style={styles.receiptFieldRow}>
-                    <Text style={styles.receiptFieldLabel}>Tenant Name</Text>
-                    <Text style={styles.receiptFieldValue}>
-                      {selectedPayment.receiptData.tenantName}
-                    </Text>
-                  </View>
-                  <View style={styles.receiptFieldRow}>
-                    <Text style={styles.receiptFieldLabel}>Building No</Text>
-                    <Text style={styles.receiptFieldValue}>
-                      {selectedPayment.receiptData.buildingNumber}
-                    </Text>
-                  </View>
-                  <View style={styles.receiptFieldRow}>
-                    <Text style={styles.receiptFieldLabel}>Space ID</Text>
-                    <Text style={styles.receiptFieldValue}>
-                      {selectedPayment.receiptData.spaceId}
-                    </Text>
-                  </View>
-                  {selectedPayment.receiptData.paymentMethod && (
-                    <View style={styles.receiptFieldRow}>
-                      <Text style={styles.receiptFieldLabel}>Payment Method</Text>
-                      <Text style={styles.receiptFieldValue}>
-                        {selectedPayment.receiptData.paymentMethod}
-                      </Text>
-                    </View>
-                  )}
-                  <View style={styles.receiptFieldRow}>
-                    <Text style={styles.receiptFieldLabel}>Date</Text>
-                    <Text style={styles.receiptFieldValue}>
-                      {new Date(
-                        selectedPayment.receiptData.date,
-                      ).toLocaleDateString()}
-                    </Text>
-                  </View>
-                  <View style={styles.receiptFieldRow}>
-                    <Text style={styles.receiptFieldLabel}>Rent Amount</Text>
-                    <Text style={styles.receiptFieldValue}>
-                      ₱{selectedPayment.receiptData.rentAmount}
-                    </Text>
-                  </View>
-                  <View style={styles.receiptFieldRow}>
-                    <Text style={styles.receiptFieldLabel}>Payment</Text>
-                    <Text style={styles.receiptFieldValue}>
-                      ₱{selectedPayment.receiptData.payment}
-                    </Text>
-                  </View>
-                  <View style={styles.receiptFieldRow}>
-                    <Text style={styles.receiptFieldLabel}>Change</Text>
-                    <Text style={styles.receiptFieldValue}>
-                      ₱{selectedPayment.receiptData.change}
-                    </Text>
-                  </View>
-                  <View style={styles.receiptFieldRow}>
-                    <Text style={styles.receiptFieldLabel}>Status</Text>
-                    <Text style={[styles.receiptFieldValue, styles.textApproved]}>
-                      {selectedPayment.receiptData.status}
-                    </Text>
-                  </View>
-                </View>
+                <ReceiptCardContent data={selectedPayment.receiptData} />
               ) : selectedPayment?.receipt ? (
                 <Image
                   source={{ uri: selectedPayment.receipt }}
@@ -905,6 +1099,15 @@ export default function Dashboard() {
             <Text style={styles.toastText}>{toastMsg}</Text>
           </View>
         </Animated.View>
+      )}
+
+      {captureReceipt && (
+        <View style={styles.receiptCaptureOffscreen} pointerEvents="none">
+          <View ref={receiptShotRef} collapsable={false} style={styles.receiptCaptureCard}>
+            <Text style={styles.payTitle}>Payment Receipt</Text>
+            <ReceiptCardContent data={captureReceipt.data} />
+          </View>
+        </View>
       )}
     </View>
   );
@@ -1136,6 +1339,10 @@ const styles = StyleSheet.create({
     color: "#085041",
   },
 
+  menuItemTextDisabled: {
+    color: "#B4B2A9",
+  },
+
   signOutText: {
     color: "#E24B4A",
   },
@@ -1321,6 +1528,18 @@ const styles = StyleSheet.create({
     width: "100%",
     height: 350,
     resizeMode: "contain",
+  },
+
+  receiptCaptureOffscreen: {
+    position: "absolute",
+    top: 0,
+    left: -2000,
+  },
+
+  receiptCaptureCard: {
+    width: 320,
+    backgroundColor: "#fff",
+    padding: 20,
   },
 
   receiptCloseBtn: {

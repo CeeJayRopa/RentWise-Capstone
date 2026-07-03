@@ -15,6 +15,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
@@ -36,6 +37,13 @@ type OwnerNotification = {
   read: boolean;
   createdAt?: any;
   updateId?: string;
+};
+
+type AdminPasswordReset = {
+  id: string;
+  tenantName?: string; // admin's name — field reused from the shared passwordResetRequests schema
+  email?: string;
+  createdAt?: any;
 };
 
 function relativeTime(ts: any): string {
@@ -63,10 +71,48 @@ function categoryLabel(cat: string): string {
 export default function Notifications() {
   const insets = useSafeAreaInsets();
   const [notifications, setNotifications] = useState<OwnerNotification[]>([]);
+  const [adminResets, setAdminResets] = useState<AdminPasswordReset[]>([]);
+  const [resolvingResetId, setResolvingResetId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
   const [clearing, setClearing] = useState(false);
   const unsubRef = useRef<(() => void) | null>(null);
+
+  const fetchAdminResets = useCallback(async () => {
+    try {
+      const snap = await getDocs(
+        query(
+          collection(db, "passwordResetRequests"),
+          where("requestedRole", "==", "admin"),
+          where("status", "==", "pending"),
+        ),
+      );
+      setAdminResets(
+        snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })),
+      );
+    } catch (err) {
+      console.log("ADMIN RESET FETCH ERROR:", err);
+    }
+  }, []);
+
+  const resolveAdminReset = async (item: AdminPasswordReset) => {
+    setResolvingResetId(item.id);
+    try {
+      await updateDoc(doc(db, "passwordResetRequests", item.id), {
+        status: "resolved",
+      });
+      setAdminResets((prev) => prev.filter((r) => r.id !== item.id));
+    } catch (err) {
+      console.log("ADMIN RESET RESOLVE ERROR:", err);
+      Alert.alert("Error", "Failed to update request.");
+    } finally {
+      setResolvingResetId(null);
+    }
+  };
+
+  const goResetAdminPassword = () => {
+    router.push("/manage-admin");
+  };
 
   const subscribe = useCallback(() => {
     const user = auth.currentUser;
@@ -94,11 +140,12 @@ export default function Notifications() {
   useFocusEffect(
     useCallback(() => {
       subscribe();
+      fetchAdminResets();
       return () => {
         unsubRef.current?.();
         unsubRef.current = null;
       };
-    }, [subscribe]),
+    }, [subscribe, fetchAdminResets]),
   );
 
   const markRead = async (item: OwnerNotification) => {
@@ -251,6 +298,59 @@ export default function Notifications() {
         contentContainerStyle={{ padding: 14, paddingBottom: insets.bottom + 24 }}
       >
         <Text style={styles.pageTitle}>Notifications</Text>
+
+        {/* Admin password reset requests */}
+        {adminResets.length > 0 && (
+          <View style={{ marginBottom: 14 }}>
+            <Text style={styles.sectionTitle}>Admin Password Resets</Text>
+            {adminResets.map((item) => (
+              <View key={item.id} style={styles.card}>
+                <View style={styles.cardRow}>
+                  <View style={styles.bellCircle}>
+                    <Text style={styles.bellEmoji}>🔑</Text>
+                  </View>
+                  <View style={styles.cardContent}>
+                    <Text style={styles.senderName}>
+                      {item.tenantName || "Admin"}
+                    </Text>
+                    <Text style={styles.messageText}>{item.email}</Text>
+                    <Text style={styles.timeText}>
+                      {relativeTime(item.createdAt)}
+                    </Text>
+                    <View style={styles.resetActionsRow}>
+                      <TouchableOpacity
+                        style={styles.checkReportBtn}
+                        onPress={goResetAdminPassword}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.checkReportText}>
+                          Reset in Manage Admin
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[
+                          styles.resolveResetBtn,
+                          resolvingResetId === item.id && styles.btnDisabled,
+                        ]}
+                        onPress={() => resolveAdminReset(item)}
+                        disabled={resolvingResetId === item.id}
+                        activeOpacity={0.8}
+                      >
+                        {resolvingResetId === item.id ? (
+                          <ActivityIndicator color="#1A1A1A" size="small" />
+                        ) : (
+                          <Text style={styles.resolveResetBtnText}>
+                            Mark resolved
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
 
         {/* Action buttons */}
         {notifications.length > 0 && (
@@ -492,6 +592,28 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   checkReportText: { fontSize: 12, fontWeight: "700", color: "#1A1A1A" },
+
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#1A1A1A",
+    marginBottom: 8,
+  },
+  resetActionsRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 6,
+  },
+  resolveResetBtn: {
+    alignSelf: "flex-start",
+    backgroundColor: "#EBEBEB",
+    borderWidth: 1,
+    borderColor: "#B5B5B5",
+    paddingHorizontal: 14,
+    paddingVertical: 5,
+    borderRadius: 20,
+  },
+  resolveResetBtnText: { fontSize: 12, fontWeight: "700", color: "#1A1A1A" },
 
   empty: { alignItems: "center", paddingTop: 80 },
   emptyText: { fontSize: 15, color: "#888888" },

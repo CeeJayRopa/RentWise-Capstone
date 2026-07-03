@@ -9,8 +9,9 @@ import {
   ActivityIndicator,
   StyleSheet,
   Alert,
+  RefreshControl,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -40,9 +41,11 @@ type Tenant = {
 
 export default function TenantManagement() {
   const insets = useSafeAreaInsets();
+  const { tenantId } = useLocalSearchParams<{ tenantId?: string }>();
 
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [sidebarVisible, setSidebarVisible] = useState(false);
 
@@ -109,6 +112,12 @@ export default function TenantManagement() {
     }
   }, []);
 
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchData();
+    setRefreshing(false);
+  }, [fetchData]);
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       if (!user) { router.replace("/"); return; }
@@ -117,6 +126,14 @@ export default function TenantManagement() {
     });
     return unsub;
   }, [fetchData]);
+
+  // Deep link from a password-reset notification: once tenants are loaded,
+  // auto-open the reset modal for the tenant that requested it.
+  useEffect(() => {
+    if (!tenantId || tenants.length === 0) return;
+    const match = tenants.find((t) => t.uid === tenantId);
+    if (match) setResetTarget(match);
+  }, [tenantId, tenants]);
 
   const handleArchive = async () => {
     if (!archiveTarget) return;
@@ -198,6 +215,9 @@ export default function TenantManagement() {
           <ScrollView
             showsVerticalScrollIndicator={false}
             contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 40 }]}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            }
           >
             {tenants.map((item) => (
               <View key={item.uid} style={styles.card}>
@@ -302,6 +322,9 @@ export default function TenantManagement() {
                     )}
                   </TouchableOpacity>
                 </View>
+                <Text style={styles.modalTargetUsername}>
+                  Username: {resetTarget.username}
+                </Text>
               </View>
             </View>
           )}
@@ -577,6 +600,13 @@ const styles = StyleSheet.create({
     color: "#A32D2D",
     marginBottom: 12,
     textAlign: "center",
+  },
+
+  modalTargetUsername: {
+    fontSize: 12,
+    color: "#888780",
+    textAlign: "center",
+    marginTop: 12,
   },
 
   modalBtns: {

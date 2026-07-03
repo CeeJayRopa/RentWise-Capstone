@@ -12,14 +12,17 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  Modal,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useRef, useEffect } from "react";
 import { router } from "expo-router";
-import { ShieldCheck, Mail, Lock, Eye, EyeOff, AlertCircle } from "lucide-react-native";
+import { ShieldCheck, Mail, Lock, Eye, EyeOff, AlertCircle, X, Info } from "lucide-react-native";
+import { collection, query, where, getDocs, addDoc, serverTimestamp } from "firebase/firestore";
 
 import { loginUser } from "../shared/services/auth";
 import { getUserByUsername } from "../shared/services/userServices";
+import { db } from "../shared/services/firestore";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -32,6 +35,13 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [emailFocused, setEmailFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
+
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [fpEmail, setFpEmail] = useState("");
+  const [fpEmailFocused, setFpEmailFocused] = useState(false);
+  const [fpLoading, setFpLoading] = useState(false);
+  const [fpError, setFpError] = useState<string | null>(null);
+  const [fpSuccess, setFpSuccess] = useState(false);
 
   const pulseScale = useRef(new Animated.Value(0.92)).current;
   const pulseOpacity = useRef(new Animated.Value(0.6)).current;
@@ -109,6 +119,55 @@ export default function Login() {
     }
   };
 
+  function closeForgotModal() {
+    setShowForgotModal(false);
+    setFpEmail("");
+    setFpEmailFocused(false);
+    setFpError(null);
+    setFpSuccess(false);
+  }
+
+  async function handleForgotSubmit() {
+    const trimmed = fpEmail.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!trimmed || !emailRegex.test(trimmed)) {
+      setFpError("Please enter a valid email address.");
+      return;
+    }
+    setFpError(null);
+    setFpLoading(true);
+    try {
+      const snap = await getDocs(
+        query(
+          collection(db, "users"),
+          where("email", "==", trimmed),
+          where("role", "==", "admin"),
+        ),
+      );
+      if (snap.empty) {
+        setFpError("No admin account found with this email.");
+        return;
+      }
+      const matched = snap.docs[0];
+      const data = matched.data();
+      await addDoc(collection(db, "passwordResetRequests"), {
+        email: trimmed,
+        tenantId: matched.id,
+        tenantName: `${data.firstName ?? ""} ${data.lastName ?? ""}`.trim(),
+        requestedRole: "admin",
+        status: "pending",
+        createdAt: serverTimestamp(),
+      });
+      setFpSuccess(true);
+      setTimeout(() => closeForgotModal(), 2500);
+    } catch (err) {
+      console.log("ForgotPassword error:", err);
+      setFpError("Something went wrong. Please try again.");
+    } finally {
+      setFpLoading(false);
+    }
+  }
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: "#0C2D6B" }}
@@ -160,7 +219,7 @@ export default function Login() {
                   style={[styles.textInput, emailFocused && styles.textInputFocused]}
                   value={username}
                   onChangeText={(t) => { setUsername(t); setError(""); }}
-                  placeholder="admin@rentwise.app"
+                  placeholder="username@rentwise.app"
                   placeholderTextColor="#B4B2A9"
                   autoCapitalize="none"
                   autoCorrect={false}
@@ -198,6 +257,14 @@ export default function Login() {
               </View>
             </Animated.View>
 
+            {/* Forgot password link */}
+            <Pressable
+              style={styles.forgotLink}
+              onPress={() => setShowForgotModal(true)}
+            >
+              <Text style={styles.forgotLinkText}>Forgot password?</Text>
+            </Pressable>
+
             {/* Error banner */}
             {!!error && (
               <View style={styles.errorBanner}>
@@ -228,6 +295,77 @@ export default function Login() {
           </View>
         </View>
       </ScrollView>
+
+      {/* FORGOT PASSWORD MODAL */}
+      <Modal
+        visible={showForgotModal}
+        transparent
+        animationType="fade"
+        onRequestClose={closeForgotModal}
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+        >
+          <View style={fp.overlay}>
+            <View style={fp.card}>
+              <Pressable style={fp.closeBtn} onPress={closeForgotModal}>
+                <X size={16} color="#5F5E5A" />
+              </Pressable>
+
+              <View style={fp.iconCircle}>
+                <Mail size={24} color="#0C2D6B" />
+              </View>
+              <Text style={fp.title}>Forgot password</Text>
+              <Text style={fp.subtitle}>
+                Enter your admin email and we'll send your request to the owner.
+              </Text>
+
+              <View style={{ marginTop: 22, alignSelf: "stretch" }}>
+                <Text style={fp.label}>Email</Text>
+                <View style={fp.inputWrapper}>
+                  <Mail size={16} color="#2E6FD9" style={fp.inputIcon} />
+                  <TextInput
+                    style={[fp.input, fpEmailFocused && fp.inputFocused]}
+                    value={fpEmail}
+                    onChangeText={(t) => { setFpEmail(t); setFpError(null); }}
+                    placeholder="username@rentwise.app"
+                    placeholderTextColor="#B4B2A9"
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    onFocus={() => setFpEmailFocused(true)}
+                    onBlur={() => setFpEmailFocused(false)}
+                  />
+                </View>
+                {fpError ? <Text style={fp.errorText}>{fpError}</Text> : null}
+              </View>
+
+              {fpSuccess ? (
+                <View style={fp.successBox}>
+                  <Info size={15} color="#0C2D6B" style={fp.successIcon} />
+                  <Text style={fp.successText}>
+                    Request sent. The owner will contact you shortly.
+                  </Text>
+                </View>
+              ) : (
+                <Pressable
+                  style={({ pressed }) => [
+                    fp.submitBtn,
+                    pressed && { backgroundColor: "#091f4a", transform: [{ scale: 0.97 }] },
+                  ]}
+                  onPress={handleForgotSubmit}
+                  disabled={fpLoading}
+                >
+                  {fpLoading
+                    ? <ActivityIndicator color="#fff" />
+                    : <Text style={fp.submitText}>Submit request</Text>
+                  }
+                </Pressable>
+              )}
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -375,5 +513,145 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "500",
     textAlign: "center",
+  },
+
+  forgotLink: {
+    alignSelf: "flex-end",
+    marginTop: 10,
+  },
+
+  forgotLinkText: {
+    fontSize: 13,
+    color: "#2E6FD9",
+    fontWeight: "500",
+  },
+});
+
+const fp = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: "rgba(12,45,107,0.55)",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    paddingTop: 120,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  card: {
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    width: "88%",
+    maxWidth: 340,
+    paddingTop: 28,
+    paddingBottom: 24,
+    paddingHorizontal: 24,
+    position: "relative",
+    alignItems: "center",
+  },
+  closeBtn: {
+    position: "absolute",
+    top: 16,
+    right: 16,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#F0F4FA",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  iconCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: "#E6F1FB",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  title: {
+    fontSize: 19,
+    fontWeight: "500",
+    color: "#0C2D6B",
+    textAlign: "center",
+  },
+  subtitle: {
+    fontSize: 13,
+    color: "#888780",
+    textAlign: "center",
+    marginTop: 6,
+    lineHeight: 19,
+    paddingHorizontal: 4,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: "#1A4DA0",
+    marginBottom: 6,
+    alignSelf: "flex-start",
+  },
+  inputWrapper: {
+    width: "100%",
+    position: "relative",
+    justifyContent: "center",
+  },
+  inputIcon: {
+    position: "absolute",
+    left: 13,
+    zIndex: 1,
+  },
+  input: {
+    width: "100%",
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
+    backgroundColor: "#F0F4FA",
+    paddingVertical: 12,
+    paddingLeft: 38,
+    paddingRight: 16,
+    color: "#0C2D6B",
+    fontSize: 14,
+  },
+  inputFocused: {
+    borderColor: "#2E6FD9",
+  },
+  errorText: {
+    color: "#A32D2D",
+    fontSize: 12,
+    marginTop: 6,
+    alignSelf: "flex-start",
+  },
+  submitBtn: {
+    marginTop: 20,
+    width: "100%",
+    borderRadius: 14,
+    backgroundColor: "#0C2D6B",
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  submitText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "500",
+    textAlign: "center",
+  },
+  successBox: {
+    marginTop: 14,
+    backgroundColor: "#E6F1FB",
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    width: "100%",
+  },
+  successIcon: {
+    marginRight: 8,
+    marginTop: 1,
+  },
+  successText: {
+    fontSize: 12,
+    color: "#0C2D6B",
+    lineHeight: 18,
+    flex: 1,
   },
 });

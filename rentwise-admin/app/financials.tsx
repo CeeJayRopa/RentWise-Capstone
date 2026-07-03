@@ -10,6 +10,8 @@ import {
   ActivityIndicator,
   StyleSheet,
   Alert,
+  Image,
+  RefreshControl,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { router, useFocusEffect } from "expo-router";
@@ -51,6 +53,9 @@ type TenantRow = {
   paymentSchedule: string;
   status: "paid" | "unpaid" | "online";
   paymentId: string | null;
+  // Month-scoped balance (matches rentwise-tenant/app/dashboard.tsx): what's
+  // due right now, accounting for whatever's already been paid this month.
+  paymentDue: number;
 };
 
 type StallInfo = {
@@ -60,27 +65,61 @@ type StallInfo = {
   paymentSchedule: string;
 };
 
-function isSameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
+// The admin always enters the stall's DAILY rate. Every schedule's period
+// charge is derived by multiplying that daily rate by however many days
+// fall in the period containing `date`.
+function computePeriodCharge(dailyRate: number, schedule: string, date: Date): number {
+  if (schedule === "daily") return dailyRate;
+  if (schedule === "weekly") return dailyRate * 7;
+  const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  if (schedule === "semi-monthly") {
+    const daysInHalf = date.getDate() <= 15 ? 15 : daysInMonth - 15;
+    return dailyRate * daysInHalf;
+  }
+  return dailyRate * daysInMonth; // monthly
 }
-function isSameMonth(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+
+// Advances `d` to the start of the next billing period for `schedule`.
+function nextPeriodStart(schedule: string, d: Date): Date {
+  const n = new Date(d);
+  if (schedule === "daily") {
+    n.setDate(n.getDate() + 1);
+    return n;
+  }
+  if (schedule === "weekly") {
+    n.setDate(n.getDate() + 7);
+    return n;
+  }
+  if (schedule === "semi-monthly") {
+    if (n.getDate() <= 15) {
+      n.setDate(16);
+      return n;
+    }
+    return new Date(n.getFullYear(), n.getMonth() + 1, 1);
+  }
+  return new Date(n.getFullYear(), n.getMonth() + 1, 1); // monthly
 }
-function isSameWeek(a: Date, b: Date): boolean {
-  // Normalize to midnight so time-of-day differences don't affect the comparison
-  const startA = new Date(a.getFullYear(), a.getMonth(), a.getDate());
-  startA.setDate(startA.getDate() - startA.getDay());
-  const startB = new Date(b.getFullYear(), b.getMonth(), b.getDate());
-  startB.setDate(startB.getDate() - startB.getDay());
-  return startA.getTime() === startB.getTime();
-}
-function isSameSemiMonth(a: Date, b: Date): boolean {
-  const halfOf = (d: Date) => (d.getDate() <= 15 ? 0 : 1);
-  return isSameMonth(a, b) && halfOf(a) === halfOf(b);
+
+// Sums each billing period's charge for every period from day 1 of the
+// month through today's period, inclusive — a period counts in full the
+// moment it starts (not prorated by day), and the trailing period is capped
+// at the month's last day so the total never overshoots the month's full
+// charge (dailyRate × daysInMonth). Mirrors rentwise-tenant/app/dashboard.tsx.
+function chargedSinceMonthStart(dailyRate: number, schedule: string, today: Date): number {
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const monthEndExclusive = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  let total = 0;
+  let cursor = monthStart;
+  let guard = 0;
+  while (cursor <= today && guard < 31) {
+    const periodEnd = nextPeriodStart(schedule, cursor);
+    const cappedEnd = periodEnd < monthEndExclusive ? periodEnd : monthEndExclusive;
+    const daysInChunk = Math.round((cappedEnd.getTime() - cursor.getTime()) / 86400000);
+    total += dailyRate * daysInChunk;
+    cursor = periodEnd;
+    guard++;
+  }
+  return total;
 }
 
 export default function Financials() {
@@ -88,6 +127,7 @@ export default function Financials() {
 
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [filter, setFilter] = useState<StatusFilter>("Unpaid");
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -104,9 +144,11 @@ export default function Financials() {
   const [receiptPreviewModal, setReceiptPreviewModal] = useState(false);
   const [onlineConfirmModal, setOnlineConfirmModal] = useState(false);
   const [selectedOnlinePayment, setSelectedOnlinePayment] = useState<any>(null);
+  const [receiptImageViewer, setReceiptImageViewer] = useState(false);
 
   const userDocsRef = useRef<any[]>([]);
   const stallMapRef = useRef<Map<string, StallInfo>>(new Map());
+  const paymentsRef = useRef<any[]>([]);
 
   // Auth guard — redirect if not signed in
   useEffect(() => {
@@ -126,34 +168,43 @@ export default function Financials() {
     const stallMap = stallMapRef.current;
     const today = new Date();
 
+    const year = today.getFullYear();
+    const month = today.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
     const tenantList: TenantRow[] = userDocs.map((d) => {
       const u = d.data();
       const stall = stallMap.get(u.stallId);
       const tenantPayments = allPayments.filter((p) => p.userId === d.id);
+      const schedule = stall?.paymentSchedule ?? "monthly";
+      const dailyRate = stall?.price ?? 0;
+
+      // Month-scoped balance (matches rentwise-tenant/app/dashboard.tsx):
+      // the whole calendar month's total rent minus everything approved so
+      // far *this month*. Resets every new month.
+      const monthTotalCharge = dailyRate * daysInMonth;
+      const paidThisMonth = tenantPayments.reduce((sum, p) => {
+        if (p.status !== "approved") return sum;
+        const pd = p.date?.toDate?.();
+        if (!pd || pd.getFullYear() !== year || pd.getMonth() !== month) return sum;
+        return sum + Number(p.amount || 0);
+      }, 0);
+      const balance = monthTotalCharge - paidThisMonth;
+
+      const chargedToDate = chargedSinceMonthStart(dailyRate, schedule, today);
+      const paymentDue = chargedToDate - paidThisMonth;
 
       let tenantStatus: "paid" | "unpaid" | "online" = "unpaid";
       let paymentId: null | string = null;
 
-      for (const p of tenantPayments) {
-        const paymentDate = p.date?.toDate?.();
-
-        if (!paymentDate) continue;
-
-        let valid = false;
-        if (stall?.paymentSchedule === "daily")
-          valid = isSameDay(paymentDate, today);
-        if (stall?.paymentSchedule === "weekly")
-          valid = isSameWeek(paymentDate, today);
-        if (stall?.paymentSchedule === "semi-monthly")
-          valid = isSameSemiMonth(paymentDate, today);
-        if (stall?.paymentSchedule === "monthly")
-          valid = isSameMonth(paymentDate, today);
-
-        if (!valid) continue;
-
-        paymentId = p.id;
-        if (p.status === "pending") tenantStatus = "online";
-        if (p.status === "approved") tenantStatus = "paid";
+      // A pending online payment always needs admin action (confirm it),
+      // regardless of whether the month's overall balance is settled.
+      const pendingPayment = tenantPayments.find((p) => p.status === "pending");
+      if (pendingPayment) {
+        tenantStatus = "online";
+        paymentId = pendingPayment.id;
+      } else if (balance <= 0) {
+        tenantStatus = "paid";
       }
 
       return {
@@ -166,6 +217,7 @@ export default function Financials() {
         paymentSchedule: stall?.paymentSchedule ?? "monthly",
         status: tenantStatus,
         paymentId,
+        paymentDue,
       };
     });
 
@@ -178,6 +230,47 @@ export default function Financials() {
     setRows(tenantList);
   };
 
+  // Re-fetches users+stalls (not live) and recomputes rows against the
+  // latest cached payments snapshot (which stays live via onSnapshot).
+  const refreshUsersAndStalls = async () => {
+    const [usersSnap, stallsSnap] = await Promise.all([
+      getDocs(
+        query(
+          collection(db, "users"),
+          where("role", "==", "tenant"),
+          where("status", "==", "active"),
+        ),
+      ),
+      getDocs(collection(db, "stalls")),
+    ]);
+
+    const stallMap = new Map<string, StallInfo>();
+    stallsSnap.docs.forEach((d) => {
+      const s = d.data();
+      stallMap.set(d.id, {
+        buildingNumber: String(s.buildingNumber ?? ""),
+        spaceId: s.spaceId ?? "",
+        price: Number(s.price ?? 0),
+        paymentSchedule: s.paymentSchedule ?? "monthly",
+      });
+    });
+
+    userDocsRef.current = usersSnap.docs;
+    stallMapRef.current = stallMap;
+    computeRows(paymentsRef.current);
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await refreshUsersAndStalls();
+    } catch (e) {
+      console.log("FINANCIALS REFRESH ERROR:", e);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   // On every screen focus: refresh users+stalls then open a live payments listener
   useFocusEffect(
     useCallback(() => {
@@ -186,30 +279,7 @@ export default function Financials() {
 
       const setup = async () => {
         try {
-          const [usersSnap, stallsSnap] = await Promise.all([
-            getDocs(
-              query(
-                collection(db, "users"),
-                where("role", "==", "tenant"),
-                where("status", "==", "active"),
-              ),
-            ),
-            getDocs(collection(db, "stalls")),
-          ]);
-
-          const stallMap = new Map<string, StallInfo>();
-          stallsSnap.docs.forEach((d) => {
-            const s = d.data();
-            stallMap.set(d.id, {
-              buildingNumber: String(s.buildingNumber ?? ""),
-              spaceId: s.spaceId ?? "",
-              price: Number(s.price ?? 0),
-              paymentSchedule: s.paymentSchedule ?? "monthly",
-            });
-          });
-
-          userDocsRef.current = usersSnap.docs;
-          stallMapRef.current = stallMap;
+          await refreshUsersAndStalls();
 
           // Real-time payments listener — fires immediately then on every change
           unsubPayments = onSnapshot(
@@ -219,6 +289,7 @@ export default function Financials() {
                 id: d.id,
                 ...d.data(),
               }));
+              paymentsRef.current = allPayments;
               computeRows(allPayments);
               setLoading(false);
             },
@@ -298,8 +369,13 @@ export default function Financials() {
     if (!selectedTenant) return;
 
     const received = Number(cashReceived);
+    const rentDue = computePeriodCharge(
+      selectedTenant.rent,
+      selectedTenant.paymentSchedule,
+      new Date(),
+    );
 
-    if (received < selectedTenant.rent) {
+    if (received < rentDue) {
       alert("Insufficient payment");
 
       return;
@@ -313,13 +389,13 @@ export default function Financials() {
       await addDoc(collection(db, "payments"), {
         userId: selectedTenant.id,
 
-        amount: selectedTenant.rent,
+        amount: rentDue,
 
-        rentAmount: selectedTenant.rent,
+        rentAmount: rentDue,
 
         cashReceived: received,
 
-        change: received - selectedTenant.rent,
+        change: received - rentDue,
 
         method: "cash",
 
@@ -356,25 +432,6 @@ export default function Financials() {
     }
   };
 
-  const computeRentAmount = (monthlyRent: number, schedule: string): number => {
-    if (schedule === "daily") {
-      const now = new Date();
-      const daysInMonth = new Date(
-        now.getFullYear(),
-        now.getMonth() + 1,
-        0,
-      ).getDate();
-      return Math.round(monthlyRent / daysInMonth);
-    }
-    if (schedule === "weekly") {
-      return Math.round(monthlyRent / 4);
-    }
-    if (schedule === "semi-monthly") {
-      return Math.round(monthlyRent / 2);
-    }
-    return monthlyRent;
-  };
-
   const confirmOnlinePayment = async (row: TenantRow) => {
     if (!row.paymentId) return;
 
@@ -399,6 +456,8 @@ export default function Financials() {
         payment: payment.amount,
 
         status: payment.status,
+        receiptImageUrl: payment.receipt ?? null,
+        periodsCovered: payment.periodsCovered ?? 1,
       });
 
       setOnlineConfirmModal(true);
@@ -407,9 +466,10 @@ export default function Financials() {
     }
   };
 
-  const computedRent = selectedTenant
-    ? computeRentAmount(selectedTenant.rent, selectedTenant.paymentSchedule)
-    : 0;
+  // What the tenant currently owes, matching the same balance the tenant
+  // sees as "Payment" on their own dashboard — not just a flat per-period
+  // rate, so a tenant who's already partly paid this month isn't overcharged.
+  const computedRent = selectedTenant ? Math.max(0, selectedTenant.paymentDue) : 0;
   const change = Number(cashReceived || 0) - computedRent;
 
   const filteredRows =
@@ -518,6 +578,9 @@ export default function Financials() {
               <ScrollView
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
+                refreshControl={
+                  <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+                }
               >
                 {filteredRows.map((item, index) => (
                   <View
@@ -569,9 +632,10 @@ export default function Financials() {
                               tenantName: item.name,
                               buildingNumber: item.buildingNumber,
                               spaceId: item.spaceId,
-                              rentAmount: computeRentAmount(
+                              rentAmount: computePeriodCharge(
                                 item.rent,
                                 item.paymentSchedule,
+                                new Date(),
                               ),
                               payment: onlinePayment.amount ?? 0,
                               receipt: onlinePayment.receipt,
@@ -798,7 +862,7 @@ export default function Financials() {
 
             <View style={styles.modalRow}>
               <Text style={styles.modalLabel}>Rent Amount</Text>
-              <Text style={styles.modalValue}>₱{selectedTenant?.rent}</Text>
+              <Text style={styles.modalValue}>₱{computedRent}</Text>
             </View>
 
             <View style={styles.modalRow}>
@@ -841,9 +905,9 @@ export default function Financials() {
                     buildingNumber: selectedTenant?.buildingNumber,
                     spaceId: selectedTenant?.spaceId,
                     date: new Date(),
-                    rentAmount: selectedTenant?.rent,
+                    rentAmount: computedRent,
                     payment: Number(cashReceived),
-                    change: Number(cashReceived) - Number(selectedTenant?.rent),
+                    change: Number(cashReceived) - computedRent,
                     status: "Approved",
                   });
 
@@ -879,27 +943,49 @@ export default function Financials() {
               {receiptData?.spaceId}
             </Text>
 
-            <View
-              style={{
-                height: 150,
-                backgroundColor: "#ddd",
-                marginVertical: 20,
-                justifyContent: "center",
-                alignItems: "center",
-              }}
-            >
-              <Text>Payment Receipt Image</Text>
-            </View>
+            {receiptData?.receiptImageUrl ? (
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => setReceiptImageViewer(true)}
+                style={styles.receiptImageThumb}
+              >
+                <Image
+                  source={{ uri: receiptData.receiptImageUrl }}
+                  style={styles.receiptImageThumbImg}
+                  resizeMode="cover"
+                />
+              </TouchableOpacity>
+            ) : (
+              <View
+                style={{
+                  height: 150,
+                  backgroundColor: "#ddd",
+                  marginVertical: 20,
+                  justifyContent: "center",
+                  alignItems: "center",
+                }}
+              >
+                <Text>Payment Receipt Image</Text>
+              </View>
+            )}
 
             <Text>Rent Amount: ₱{receiptData?.rentAmount}</Text>
 
             <Text>Payment: ₱{receiptData?.payment}</Text>
+
+            {receiptData?.periodsCovered > 1 && (
+              <Text>
+                Covers: {receiptData.periodsCovered} periods (today +{" "}
+                {receiptData.periodsCovered - 1} advance)
+              </Text>
+            )}
 
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={styles.modalBtnSecondary}
                 onPress={() => {
                   setOnlineConfirmModal(false);
+                  setReceiptImageViewer(false);
                 }}
               >
                 <Text>Cancel</Text>
@@ -936,6 +1022,7 @@ export default function Financials() {
                   });
 
                   setOnlineConfirmModal(false);
+                  setReceiptImageViewer(false);
                 }}
               >
                 <Text style={styles.modalBtnPrimaryText}>Confirm Payment</Text>
@@ -943,6 +1030,27 @@ export default function Financials() {
             </View>
           </View>
         </View>
+      </Modal>
+
+      {/* FULL-SCREEN RECEIPT IMAGE VIEWER */}
+      <Modal
+        visible={receiptImageViewer}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setReceiptImageViewer(false)}
+      >
+        <Pressable
+          style={styles.imageViewerBg}
+          onPress={() => setReceiptImageViewer(false)}
+        >
+          {receiptData?.receiptImageUrl && (
+            <Image
+              source={{ uri: receiptData.receiptImageUrl }}
+              style={styles.imageViewerImage}
+              resizeMode="contain"
+            />
+          )}
+        </Pressable>
       </Modal>
 
       {/* TENANT DIGITAL RECEIPT */}
@@ -1260,5 +1368,30 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: "right",
     backgroundColor: "#FFFFFF",
+  },
+
+  receiptImageThumb: {
+    height: 150,
+    borderRadius: 8,
+    marginVertical: 20,
+    overflow: "hidden",
+    backgroundColor: "#ddd",
+  },
+
+  receiptImageThumbImg: {
+    width: "100%",
+    height: "100%",
+  },
+
+  imageViewerBg: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  imageViewerImage: {
+    width: "100%",
+    height: "80%",
   },
 });

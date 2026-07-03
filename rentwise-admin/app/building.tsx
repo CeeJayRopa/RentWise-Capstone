@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
+  RefreshControl,
 } from "react-native";
 
 import { router, useFocusEffect } from "expo-router";
@@ -42,6 +43,7 @@ export default function Building() {
 
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [allStalls, setAllStalls] = useState<StallDoc[]>([]);
 
@@ -54,6 +56,7 @@ export default function Building() {
   const [filter, setFilter] = useState<"All" | "Unoccupied" | "Occupied">(
     "All",
   );
+  const [filterSheetVisible, setFilterSheetVisible] = useState(false);
 
   const [sidebarVisible, setSidebarVisible] = useState(false);
 
@@ -143,6 +146,12 @@ export default function Building() {
     }, [checking]),
   );
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchData();
+    setRefreshing(false);
+  };
+
   const buildingNumbers = [
     ...new Set(allStalls.map((s) => s.buildingNumber)),
   ].sort((a, b) => a - b);
@@ -202,74 +211,111 @@ export default function Building() {
 
       {/* BODY */}
       <View style={styles.body}>
-        {/* DROPDOWN + FILTER — elevated when dropdown is open */}
-        <View style={sheetVisible ? { zIndex: 150 } : undefined}>
+        {/* DROPDOWN + FILTER — same row, elevated when a dropdown is open */}
+        <View
+          style={[
+            styles.topRow,
+            sheetVisible || filterSheetVisible ? { zIndex: 150 } : undefined,
+          ]}
+        >
           {/* BUILDING DROPDOWN */}
           <View style={styles.dropdownWrapper}>
             <TouchableOpacity
               style={styles.dropdownTrigger}
-              onPress={() => setSheetVisible((v) => !v)}
+              onPress={() => {
+                setFilterSheetVisible(false);
+                setSheetVisible((v) => !v);
+              }}
               activeOpacity={0.8}
             >
-              <Text style={styles.dropdownTriggerText}>
+              <Text
+                style={styles.dropdownTriggerText}
+                numberOfLines={1}
+              >
                 {selectedBuilding !== null
                   ? `Building ${selectedBuilding}`
-                  : "Select Building"}
+                  : "Building"}
               </Text>
               <Ionicons name="chevron-down" size={14} color="#2E6FD9" />
             </TouchableOpacity>
 
             {sheetVisible && (
               <View style={styles.dropdown}>
-                {buildingNumbers.map((num) => (
-                  <TouchableOpacity
-                    key={num}
-                    style={[
-                      styles.dropdownItem,
-                      selectedBuilding === num && styles.dropdownItemActive,
-                    ]}
-                    onPress={() => {
-                      setSelectedBuilding(num);
-                      setSheetVisible(false);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Text
+                <View style={styles.dropdownInner}>
+                  {buildingNumbers.map((num) => (
+                    <TouchableOpacity
+                      key={num}
                       style={[
-                        styles.dropdownItemText,
-                        selectedBuilding === num &&
-                          styles.dropdownItemTextActive,
+                        styles.dropdownItem,
+                        selectedBuilding === num && styles.dropdownItemActive,
                       ]}
+                      onPress={() => {
+                        setSelectedBuilding(num);
+                        setSheetVisible(false);
+                      }}
+                      activeOpacity={0.7}
                     >
-                      Building {num}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                      <Text
+                        style={[
+                          styles.dropdownItemText,
+                          selectedBuilding === num &&
+                            styles.dropdownItemTextActive,
+                        ]}
+                      >
+                        Building {num}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </View>
             )}
           </View>
 
-          {/* FILTER TABS */}
-          <View style={styles.filterRow}>
-            {(["All", "Unoccupied", "Occupied"] as const).map((item) => (
-              <TouchableOpacity
-                key={item}
-                style={[
-                  styles.filterTab,
-                  filter === item && styles.filterTabActive,
-                ]}
-                onPress={() => setFilter(item)}
-              >
-                <Text
-                  style={[
-                    styles.filterTabText,
-                    filter === item && styles.filterTabTextActive,
-                  ]}
-                >
-                  {item}
-                </Text>
-              </TouchableOpacity>
-            ))}
+          {/* STATUS FILTER DROPDOWN */}
+          <View style={styles.filterDropdownWrapper}>
+            <TouchableOpacity
+              style={styles.dropdownTrigger}
+              onPress={() => {
+                setSheetVisible(false);
+                setFilterSheetVisible((v) => !v);
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.dropdownTriggerText} numberOfLines={1}>
+                {filter}
+              </Text>
+              <Ionicons name="chevron-down" size={14} color="#2E6FD9" />
+            </TouchableOpacity>
+
+            {filterSheetVisible && (
+              <View style={styles.dropdown}>
+                <View style={styles.dropdownInner}>
+                  {(["All", "Unoccupied", "Occupied"] as const).map((item) => (
+                    <TouchableOpacity
+                      key={item}
+                      style={[
+                        styles.dropdownItem,
+                        filter === item && styles.dropdownItemActive,
+                      ]}
+                      onPress={() => {
+                        setFilter(item);
+                        setFilterSheetVisible(false);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text
+                        style={[
+                          styles.dropdownItemText,
+                          filter === item && styles.dropdownItemTextActive,
+                        ]}
+                      >
+                        {item}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
           </View>
         </View>
 
@@ -291,7 +337,12 @@ export default function Building() {
               <Text style={styles.emptyText}>No stalls found.</Text>
             </View>
           ) : (
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              refreshControl={
+                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+              }
+            >
               {displayedStalls.map((item) => (
                 <StallRow key={item.id} stall={item} tenantMap={tenantMap} />
               ))}
@@ -301,10 +352,13 @@ export default function Building() {
       </View>
 
       {/* DROPDOWN BACKDROP */}
-      {sheetVisible && (
+      {(sheetVisible || filterSheetVisible) && (
         <TouchableOpacity
           style={[StyleSheet.absoluteFill, { zIndex: 100 }]}
-          onPress={() => setSheetVisible(false)}
+          onPress={() => {
+            setSheetVisible(false);
+            setFilterSheetVisible(false);
+          }}
           activeOpacity={1}
         />
       )}
@@ -462,11 +516,20 @@ const styles = StyleSheet.create({
     paddingTop: 16,
   },
 
+  // ── Top row (building dropdown + filter tabs) ─────────────────────────────────
+
+  topRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginBottom: 16,
+  },
+
   // ── Building dropdown ─────────────────────────────────────────────────────────
 
   dropdownWrapper: {
     position: "relative",
-    marginBottom: 14,
+    width: 110,
   },
 
   dropdownTrigger: {
@@ -477,22 +540,22 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1.5,
     borderColor: "#B5D4F4",
-    paddingHorizontal: 16,
-    paddingVertical: 13,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
 
   dropdownTriggerText: {
     flex: 1,
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: "500",
     color: "#0C2D6B",
   },
 
   dropdown: {
     position: "absolute",
-    top: 50,
+    top: 42,
     left: 0,
-    right: 0,
+    minWidth: 150,
     backgroundColor: "#FFFFFF",
     borderWidth: 1.5,
     borderColor: "#B5D4F4",
@@ -503,6 +566,14 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.12,
     shadowRadius: 4,
+  },
+
+  // Clips item highlights (dropdownItemActive) to the panel's rounded
+  // corners. Kept separate from `dropdown` so the outer view's shadow isn't
+  // clipped along with it (overflow: hidden hides iOS shadows on the same view).
+  dropdownInner: {
+    borderRadius: 10,
+    overflow: "hidden",
   },
 
   dropdownItem: {
@@ -524,42 +595,17 @@ const styles = StyleSheet.create({
     color: "#0C2D6B",
   },
 
-  // ── Filter tabs ───────────────────────────────────────────────────────────────
+  // ── Status filter dropdown ─────────────────────────────────────────────────────
 
-  filterRow: {
-    flexDirection: "row",
-    gap: 8,
-    marginBottom: 16,
-  },
-
-  filterTab: {
-    backgroundColor: "#fff",
-    borderRadius: 10,
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-    borderWidth: 1.5,
-    borderColor: "#B5D4F4",
-  },
-
-  filterTabActive: {
-    backgroundColor: "#0C2D6B",
-    borderColor: "#0C2D6B",
-  },
-
-  filterTabText: {
-    fontSize: 13,
-    fontWeight: "500",
-    color: "#888780",
-  },
-
-  filterTabTextActive: {
-    color: "#fff",
+  filterDropdownWrapper: {
+    position: "relative",
+    width: 120,
   },
 
   // ── Stall list card ──────────────────────────────────────────────────────────
 
   listCard: {
-    maxHeight: 430,
+    maxHeight: 650,
     backgroundColor: "#fff",
     borderRadius: 16,
     borderWidth: 0.5,

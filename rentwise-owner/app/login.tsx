@@ -161,7 +161,7 @@ export default function Login() {
                   style={[styles.textInput, emailFocused && styles.textInputFocused]}
                   value={username}
                   onChangeText={(t) => { setUsername(t); setError(""); }}
-                  placeholder="owner@rentwise.app"
+                  placeholder="username@rentwise.app"
                   placeholderTextColor="#B4B2A9"
                   autoCapitalize="none"
                   autoCorrect={false}

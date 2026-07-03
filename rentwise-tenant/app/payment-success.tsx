@@ -11,16 +11,18 @@ import {
   clearPendingCheckoutSession,
 } from "../services/pendingPayment";
 
-function computeRentAmount(monthlyRent: number, paymentSchedule: string): number {
-  if (paymentSchedule === "daily") {
-    const now = new Date();
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    return Math.round(monthlyRent / daysInMonth);
+// The admin always enters the stall's DAILY rate. Every schedule's period
+// charge is derived by multiplying that daily rate by however many days
+// fall in the period containing `date`.
+function computePeriodCharge(dailyRate: number, schedule: string, date: Date): number {
+  if (schedule === "daily") return dailyRate;
+  if (schedule === "weekly") return dailyRate * 7;
+  const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  if (schedule === "semi-monthly") {
+    const daysInHalf = date.getDate() <= 15 ? 15 : daysInMonth - 15;
+    return dailyRate * daysInHalf;
   }
-  if (paymentSchedule === "weekly") {
-    return Math.round(monthlyRent / 4);
-  }
-  return monthlyRent;
+  return dailyRate * daysInMonth; // monthly
 }
 
 export default function PaymentSuccess() {
@@ -63,10 +65,13 @@ export default function PaymentSuccess() {
         const receiptNo = "RW-ONLINE-" + Date.now().toString().slice(-8);
         const tenantName = `${tenantData.firstName} ${tenantData.lastName}`;
 
-        const scheduleRent = computeRentAmount(
+        const scheduleRent = computePeriodCharge(
           stallData?.price ?? 0,
           stallData?.paymentSchedule ?? "monthly",
+          new Date(),
         );
+        const periodsCovered =
+          scheduleRent > 0 ? Math.max(1, Math.round(paymentAmount / scheduleRent)) : 1;
 
         const receiptData = {
           receiptNo,
@@ -85,6 +90,7 @@ export default function PaymentSuccess() {
           userId: user.uid,
           amount: paymentAmount,
           rentAmount: scheduleRent,
+          periodsCovered,
           method: "online",
           status: "pending",
           tenantName,

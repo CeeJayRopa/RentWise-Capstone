@@ -12,13 +12,17 @@ import {
   Easing,
 } from "react-native";
 import { router } from "expo-router";
-import { onAuthStateChanged, updatePassword } from "firebase/auth";
+import { onAuthStateChanged } from "firebase/auth";
 import { collection, doc, getDocs, query, updateDoc, where } from "firebase/firestore";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
+import { firebaseApp } from "../shared/firebaseConfig";
+
+const cloudFunctions = getFunctions(firebaseApp);
 
 type AdminDoc = {
   uid: string;
@@ -118,6 +122,8 @@ export default function ManageAdmin() {
   };
 
   const handleChangePassword = async () => {
+    if (!admin) return;
+
     const pwRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
     let valid = true;
 
@@ -140,20 +146,18 @@ export default function ManageAdmin() {
 
     if (!valid) return;
 
-    const user = auth.currentUser;
-    if (!user) return;
+    const callerUid = auth.currentUser?.uid;
+    if (!callerUid) return;
     setChangingPw(true);
     try {
-      await updatePassword(user, newPassword);
+      const resetFn = httpsCallable(cloudFunctions, "ownerResetAdminPassword");
+      await resetFn({ uid: admin.uid, newPassword, callerUid });
       setNewPassword("");
       setConfirmPassword("");
       showToast("Password updated!");
-    } catch (err: any) {
-      if (err?.code === "auth/requires-recent-login") {
-        Alert.alert("Session Expired", "Please log out and log in again before changing your password.");
-      } else {
-        Alert.alert("Error", "Failed to change password.");
-      }
+    } catch (err) {
+      console.error(err);
+      Alert.alert("Error", "Failed to change password.");
     } finally {
       setChangingPw(false);
     }

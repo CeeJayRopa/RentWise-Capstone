@@ -1,0 +1,12 @@
+{
+  "name": "rentwise-monorepo",
+  "private": true,
+  "workspaces": [
+    "functions",
+    "paymongo-api",
+    "rentwise-admin",
+    "rentwise-guest",
+    "rentwise-owner",
+    "rentwise-tenant"
+  ]
+}

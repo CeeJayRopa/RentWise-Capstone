@@ -158,7 +158,7 @@ export default function Login() {
   async function handleLogin() {
     try {
       await loginUser(email, password);
-      router.push({ pathname: "/welcome" });
+      router.replace({ pathname: "/welcome" });
     } catch (error) {
       setErrorMsg("Incorrect email or password");
     }
@@ -218,7 +218,7 @@ export default function Login() {
                   style={[styles.textInput, emailFocused && styles.textInputFocused]}
                   value={email}
                   onChangeText={setEmail}
-                  placeholder="tenant@rentwise.app"
+                  placeholder="username@rentwise.app"
                   placeholderTextColor="#B4B2A9"
                   autoCapitalize="none"
                   keyboardType="email-address"
@@ -335,7 +335,7 @@ export default function Login() {
                     style={[fp.input, fpEmailFocused && fp.inputFocused]}
                     value={fpEmail}
                     onChangeText={(t) => { setFpEmail(t); setFpError(null); }}
-                    placeholder="tenant@rentwise.app"
+                    placeholder="username@rentwise.app"
                     placeholderTextColor="#B4B2A9"
                     keyboardType="email-address"
                     autoCapitalize="none"

@@ -8,6 +8,7 @@ import {
   Modal,
   ActivityIndicator,
   StyleSheet,
+  RefreshControl,
 } from "react-native";
 import { router } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
@@ -51,6 +52,7 @@ export default function Archives() {
 
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [archives, setArchives] = useState<ArchiveEntry[]>([]);
 
   const [sidebarVisible, setSidebarVisible] = useState(false);
@@ -94,6 +96,12 @@ export default function Archives() {
       setLoading(false);
     }
   }, []);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchData();
+    setRefreshing(false);
+  }, [fetchData]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -212,6 +220,9 @@ export default function Archives() {
           <ScrollView
             showsVerticalScrollIndicator={false}
             contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 40 }]}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            }
           >
             {archives.map((item) => (
               <View key={item.uid} style={styles.card}>

@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   Dimensions,
+  RefreshControl,
 } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
@@ -73,6 +74,7 @@ export default function Dashboard() {
   const insets = useSafeAreaInsets();
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState<Stats>(ZERO_STATS);
   const [sidebarVisible, setSidebarVisible] = useState(false);
 
@@ -90,6 +92,12 @@ export default function Dashboard() {
       if (!checking) fetchData();
     }, [checking]),
   );
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchData();
+    setRefreshing(false);
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -179,6 +187,9 @@ export default function Dashboard() {
         style={styles.scroll}
         contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
       >
         {loading ? (
           <ActivityIndicator color="#0C2D6B" size="large" style={styles.dataLoader} />

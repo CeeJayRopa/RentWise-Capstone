@@ -150,46 +150,6 @@ export default function UpdateConfirmation() {
     }
   };
 
-  const doRejectOne = async () => {
-    if (!update || !auth.currentUser) return;
-    setSaving(true);
-    try {
-      await updateDoc(doc(db, "updates", update.id), {
-        approvalStatus: "rejected",
-      });
-      await markLinkedNotifications(update.id, "Rejected");
-      if (update.changedBy) {
-        const label =
-          update.type ?? update.module ?? categoryLabel(update.category ?? "archive");
-        await addDoc(collection(db, "notifications"), {
-          userId: update.changedBy,
-          message: `Your "${label}" update was rejected by the owner.`,
-          read: false,
-          createdAt: serverTimestamp(),
-        });
-      }
-      Alert.alert("Rejected", "Update has been rejected.", [
-        { text: "OK", onPress: () => router.back() },
-      ]);
-    } catch (err) {
-      console.error(err);
-      Alert.alert("Error", "Failed to reject. Please try again.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const rejectOne = () => {
-    Alert.alert(
-      "Reject Update",
-      "Are you sure you want to reject this update?",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Reject", style: "destructive", onPress: doRejectOne },
-      ],
-    );
-  };
-
   if (loading) {
     return (
       <View style={styles.fullCenter}>
@@ -323,19 +283,6 @@ export default function UpdateConfirmation() {
                 <Text style={styles.actionBtnText}>Approve</Text>
               )}
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.actionBtn,
-                styles.rejectBtn,
-                saving && styles.btnDisabled,
-              ]}
-              onPress={rejectOne}
-              disabled={saving}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.rejectBtnText}>Reject</Text>
-            </TouchableOpacity>
           </View>
         )}
 
@@ -449,13 +396,7 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   approveBtn: { backgroundColor: Colors.success },
-  rejectBtn: {
-    backgroundColor: Colors.surface,
-    borderWidth: 1.5,
-    borderColor: Colors.error,
-  },
   actionBtnText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
-  rejectBtnText: { color: Colors.error, fontSize: 15, fontWeight: "700" },
 
   backBtnBottom: {
     backgroundColor: Colors.surface,

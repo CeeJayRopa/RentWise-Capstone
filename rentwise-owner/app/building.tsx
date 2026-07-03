@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   TextInput,
+  RefreshControl,
 } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
@@ -32,6 +33,7 @@ export default function Building() {
   const insets = useSafeAreaInsets();
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [stalls, setStalls] = useState<StallRow[]>([]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [buildingFilter, setBuildingFilter] = useState("");
@@ -47,6 +49,12 @@ export default function Building() {
   }, []);
 
   useFocusEffect(useCallback(() => { if (!checking) fetchData(); }, [checking]));
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchData();
+    setRefreshing(false);
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -159,6 +167,9 @@ export default function Building() {
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.list}
             showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            }
             ListEmptyComponent={
               <View style={styles.emptyState}>
                 <Ionicons name="business-outline" size={40} color="#B5D4F4" style={{ marginBottom: 10 }} />

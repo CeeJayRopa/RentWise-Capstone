@@ -111,7 +111,7 @@ export default function Welcome() {
             styles.button,
             pressed && { backgroundColor: "#E1F5EE", transform: [{ scale: 0.97 }] },
           ]}
-          onPress={() => router.push("/dashboard")}
+          onPress={() => router.replace("/dashboard")}
         >
           <Text style={styles.buttonText}>Continue</Text>
         </Pressable>

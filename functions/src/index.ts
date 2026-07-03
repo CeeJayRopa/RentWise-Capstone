@@ -42,6 +42,24 @@ async function assertIsAdmin(uid: string) {
   }
 }
 
+/**
+ * Throws if the given uid does not belong to an owner user.
+ * @param {string} uid - The Firebase Auth UID to check.
+ */
+async function assertIsOwner(uid: string) {
+  const ownerDoc = await db.collection("users").doc(uid).get();
+
+  if (!ownerDoc.exists) {
+    throw new HttpsError("permission-denied", "User does not exist");
+  }
+
+  const data = ownerDoc.data();
+
+  if (data?.role !== "owner") {
+    throw new HttpsError("permission-denied", "Owner access required");
+  }
+}
+
 // =====================================
 // CREATE TENANT ACCOUNT
 // =====================================
@@ -150,6 +168,32 @@ export const adminResetTenantPassword = onCall(async (request) => {
 
   // Verify caller is an admin via Firestore (works even when request.auth is unavailable in RN)
   await assertIsAdmin(callerUid);
+
+  await auth.updateUser(uid, { password: newPassword });
+
+  return { success: true };
+});
+
+// =====================================
+// RESET ADMIN PASSWORD (owner-only)
+// =====================================
+
+export const ownerResetAdminPassword = onCall(async (request) => {
+  const { uid, newPassword, callerUid } = request.data as {
+    uid: string;
+    newPassword: string;
+    callerUid: string;
+  };
+
+  if (!uid || !newPassword || !callerUid) {
+    throw new HttpsError("invalid-argument", "Missing password data");
+  }
+
+  // Verify caller is an owner via Firestore (works even when request.auth is unavailable in RN)
+  await assertIsOwner(callerUid);
+
+  // Verify the target account is actually an admin, not an arbitrary user
+  await assertIsAdmin(uid);
 
   await auth.updateUser(uid, { password: newPassword });
 

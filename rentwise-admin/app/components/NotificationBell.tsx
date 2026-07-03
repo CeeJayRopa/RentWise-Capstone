@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -10,8 +10,9 @@ import {
   Alert,
   StyleSheet,
 } from "react-native";
-import { collection, doc, getDocs, query, updateDoc, where } from "firebase/firestore";
+import { collection, doc, onSnapshot, query, updateDoc, where } from "firebase/firestore";
 import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
 
 import { db } from "../../shared/services/firestore";
 import { auth } from "../../shared/services/auth";
@@ -20,6 +21,7 @@ type BellItem =
   | {
       id: string;
       kind: "passwordReset";
+      tenantId?: string;
       tenantName?: string;
       email?: string;
       spaceId?: string;
@@ -40,62 +42,84 @@ function formatDate(date: any) {
 
 export default function NotificationBell() {
   const [visible, setVisible] = useState(false);
-  const [requests, setRequests] = useState<BellItem[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [passwordResetItems, setPasswordResetItems] = useState<BellItem[]>([]);
+  const [messageItems, setMessageItems] = useState<BellItem[]>([]);
+  const [loading, setLoading] = useState(true);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
 
-  const openModal = async () => {
-    setVisible(true);
-    setLoading(true);
-    try {
-      const passwordResetSnap = await getDocs(
-        collection(db, "passwordResetRequests"),
-      );
-      const passwordResetItems: BellItem[] = passwordResetSnap.docs
-        .map((d) => ({ id: d.id, ...d.data() }) as any)
-        .filter((r: any) => r.status === "pending")
-        .map((r: any) => ({
-          id: r.id,
-          kind: "passwordReset" as const,
-          tenantName: r.tenantName,
-          email: r.email,
-          spaceId: r.spaceId,
-          createdAt: r.createdAt,
-        }));
-
-      const uid = auth.currentUser?.uid;
-      let messageItems: BellItem[] = [];
-      if (uid) {
-        const messageSnap = await getDocs(
-          query(collection(db, "notifications"), where("userId", "==", uid)),
-        );
-        messageItems = messageSnap.docs
+  // Live listeners — keep the bell badge and list current even while the
+  // modal is closed, instead of only refreshing at the moment it's opened.
+  useEffect(() => {
+    const unsubPasswordResets = onSnapshot(
+      collection(db, "passwordResetRequests"),
+      (snap) => {
+        const items: BellItem[] = snap.docs
           .map((d) => ({ id: d.id, ...d.data() }) as any)
-          .filter((r: any) => r.read !== true)
+          // Admin-targeted requests (admin forgot their own password) go to
+          // the owner instead — see rentwise-owner/app/notifications.tsx.
+          .filter((r: any) => r.status === "pending" && r.requestedRole !== "admin")
           .map((r: any) => ({
             id: r.id,
-            kind: "message" as const,
-            message: r.message,
+            kind: "passwordReset" as const,
+            tenantId: r.tenantId,
+            tenantName: r.tenantName,
+            email: r.email,
+            spaceId: r.spaceId,
             createdAt: r.createdAt,
           }));
-      }
+        setPasswordResetItems(items);
+        setLoading(false);
+      },
+      (err) => {
+        console.error("NotificationBell passwordResets error:", err);
+        setLoading(false);
+      },
+    );
 
-      const combined = [...passwordResetItems, ...messageItems].sort(
-        (a, b) => {
-          const aTs = a.createdAt?.seconds ?? 0;
-          const bTs = b.createdAt?.seconds ?? 0;
-          return bTs - aTs;
+    const uid = auth.currentUser?.uid;
+    let unsubMessages = () => {};
+    if (uid) {
+      unsubMessages = onSnapshot(
+        query(collection(db, "notifications"), where("userId", "==", uid)),
+        (snap) => {
+          const items: BellItem[] = snap.docs
+            .map((d) => ({ id: d.id, ...d.data() }) as any)
+            .filter((r: any) => r.read !== true)
+            .map((r: any) => ({
+              id: r.id,
+              kind: "message" as const,
+              message: r.message,
+              createdAt: r.createdAt,
+            }));
+          setMessageItems(items);
         },
+        (err) => console.error("NotificationBell messages error:", err),
       );
-      setRequests(combined);
-    } catch (err) {
-      console.error("NotificationBell fetch error:", err);
-    } finally {
-      setLoading(false);
     }
-  };
 
+    return () => {
+      unsubPasswordResets();
+      unsubMessages();
+    };
+  }, []);
+
+  const requests = [...passwordResetItems, ...messageItems].sort((a, b) => {
+    const aTs = a.createdAt?.seconds ?? 0;
+    const bTs = b.createdAt?.seconds ?? 0;
+    return bTs - aTs;
+  });
+
+  const openModal = () => setVisible(true);
   const closeModal = () => setVisible(false);
+
+  const goToTenant = (item: BellItem) => {
+    if (item.kind !== "passwordReset") return;
+    closeModal();
+    router.push({
+      pathname: "/tenant-management",
+      params: { tenantId: item.tenantId ?? "" },
+    } as any);
+  };
 
   const resolveItem = async (item: BellItem) => {
     setResolvingId(item.id);
@@ -109,7 +133,7 @@ export default function NotificationBell() {
           read: true,
         });
       }
-      setRequests((prev) => prev.filter((r) => r.id !== item.id));
+      // Live listeners above will pick up the change automatically.
     } catch (err) {
       console.error("resolveItem error:", err);
       Alert.alert("Error", "Failed to update notification.");
@@ -169,7 +193,7 @@ export default function NotificationBell() {
               >
                 {requests.map((r) => (
                   <View key={r.id} style={styles.item}>
-                    <View style={{ flex: 1 }}>
+                    <View>
                       {r.kind === "passwordReset" ? (
                         <>
                           <Text style={styles.itemTitle}>
@@ -187,22 +211,34 @@ export default function NotificationBell() {
                         {formatDate(r.createdAt)}
                       </Text>
                     </View>
-                    <TouchableOpacity
-                      style={[
-                        styles.resolveBtn,
-                        resolvingId === r.id && styles.btnDisabled,
-                      ]}
-                      onPress={() => resolveItem(r)}
-                      disabled={resolvingId === r.id}
-                    >
-                      {resolvingId === r.id ? (
-                        <ActivityIndicator color="#0C2D6B" size="small" />
-                      ) : (
-                        <Text style={styles.resolveBtnText}>
-                          Mark resolved
-                        </Text>
+                    <View style={styles.itemActions}>
+                      {r.kind === "passwordReset" && (
+                        <TouchableOpacity
+                          style={styles.goToTenantBtn}
+                          onPress={() => goToTenant(r)}
+                        >
+                          <Text style={styles.goToTenantBtnText}>
+                            Reset in Tenant Management
+                          </Text>
+                        </TouchableOpacity>
                       )}
-                    </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[
+                          styles.resolveBtn,
+                          resolvingId === r.id && styles.btnDisabled,
+                        ]}
+                        onPress={() => resolveItem(r)}
+                        disabled={resolvingId === r.id}
+                      >
+                        {resolvingId === r.id ? (
+                          <ActivityIndicator color="#0C2D6B" size="small" />
+                        ) : (
+                          <Text style={styles.resolveBtnText}>
+                            Mark resolved
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 ))}
               </ScrollView>
@@ -289,14 +325,24 @@ const styles = StyleSheet.create({
   scrollContent: { padding: 14, gap: 10 },
 
   item: {
-    flexDirection: "row",
-    alignItems: "center",
     gap: 10,
     borderWidth: 1,
     borderColor: "#B5D4F4",
     borderRadius: 10,
     padding: 12,
   },
+  itemActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 8,
+  },
+  goToTenantBtn: {
+    backgroundColor: "#0C2D6B",
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  goToTenantBtnText: { fontSize: 12, fontWeight: "600", color: "#FFFFFF" },
   itemTitle: { fontSize: 13, fontWeight: "600", color: "#0C2D6B" },
   itemSub: { fontSize: 12, color: "#444441", marginTop: 2 },
   itemDate: { fontSize: 11, color: "#888780", marginTop: 4 },

@@ -51,6 +51,13 @@
           "defaultChannel": "default"
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "97db2331-27c8-419a-af19-5878464120be"
+      }
+    },
+    "owner": "ceejay27"
   }
 }

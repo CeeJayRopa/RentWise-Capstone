@@ -64,7 +64,7 @@ export const sendPaymentReminders = onSchedule(
           const schedule: string = stall.paymentSchedule ?? 'monthly';
 
           // ── Skip: already paid for this period ────────────────────────────
-          const due = await isPaymentDue(tenantId, schedule);
+          const due = await isPaymentDue(tenantId, schedule, stall.price ?? 0);
           if (!due) continue;
 
           // ── Skip: reminder already sent this period ───────────────────────
