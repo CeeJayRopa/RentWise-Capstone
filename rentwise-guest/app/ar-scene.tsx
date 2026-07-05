@@ -105,6 +105,18 @@ export default function ARScene() {
     }
   };
 
+  // Arm the first catalog item automatically once AR starts, so tapping the surface
+  // places something immediately instead of silently doing nothing until a thumbnail
+  // is tapped first — this was the exact flow gap that made placement look broken.
+  useEffect(() => {
+    if (sessionActive && !armedId && !arming && objects.length > 0) {
+      arm(objects[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionActive, objects]);
+
+  const armedObject = objects.find((o) => o.id === armedId) ?? null;
+
   const selectedPlacedObjectId = placedState.selectedId
     ? placedState.placed.find((p) => p.id === placedState.selectedId)?.objectId
     : null;
@@ -166,9 +178,17 @@ export default function ARScene() {
           </View>
         )}
 
-        {sessionActive && !reticleVisible && (
+        {sessionActive && (
           <View style={styles.hintBanner} pointerEvents="none">
-            <Text style={styles.hintText}>Move your phone slowly to find a surface…</Text>
+            <Text style={styles.hintText}>
+              {arming
+                ? `Loading ${armedObject?.name ?? "item"}…`
+                : !reticleVisible
+                ? "Move your phone slowly to find a surface…"
+                : armedObject
+                ? `Tap the surface to place: ${armedObject.name}`
+                : "Tap an item below to place it"}
+            </Text>
           </View>
         )}
 
