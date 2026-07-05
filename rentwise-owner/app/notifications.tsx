@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 import {
   addDoc,
   collection,
@@ -27,7 +28,6 @@ import {
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
-import { Colors } from "../shared/constants/color";
 
 type OwnerNotification = {
   id: string;
@@ -66,6 +66,20 @@ function categoryLabel(cat: string): string {
   if (cat === "building") return "Building Management Update";
   if (cat === "finance") return "Finance Update";
   return "Account Archive Update";
+}
+
+// Notifications created before the "Approve" → "Acknowledge" wording change
+// still have the old status string in Firestore — treat both as pending.
+function isPendingStatus(status?: string): boolean {
+  return status === "To be Acknowledged" || status === "To be Approved";
+}
+
+// Displays legacy "Approved" / "To be Approved" statuses under the new wording
+// without needing to rewrite the old Firestore records.
+function displayStatus(status?: string): string {
+  if (status === "To be Approved") return "To be Acknowledged";
+  if (status === "Approved") return "Acknowledged";
+  return status ?? "";
 }
 
 export default function Notifications() {
@@ -171,7 +185,7 @@ export default function Notifications() {
       const batch = writeBatch(db);
       for (const item of pending) {
         batch.update(doc(db, "notifications", item.id), {
-          status: "Approved",
+          status: "Acknowledged",
           read: true,
         });
         if (item.updateId) {
@@ -191,7 +205,7 @@ export default function Notifications() {
             const label = data.module ?? categoryLabel(data.category ?? "archive");
             await addDoc(collection(db, "notifications"), {
               userId: data.changedBy,
-              message: `Your "${label}" update was approved by the owner.`,
+              message: `Your "${label}" update was acknowledged by the owner.`,
               read: false,
               createdAt: serverTimestamp(),
             });
@@ -211,7 +225,7 @@ export default function Notifications() {
       }
     } catch (err) {
       console.error("approveAll error:", err);
-      Alert.alert("Error", "Failed to approve all. Please try again.");
+      Alert.alert("Error", "Failed to acknowledge all. Please try again.");
     } finally {
       setApproving(false);
     }
@@ -234,17 +248,17 @@ export default function Notifications() {
   };
 
   const handleApproveAll = () => {
-    const pending = notifications.filter((n) => n.status === "To be Approved");
+    const pending = notifications.filter((n) => isPendingStatus(n.status));
     if (pending.length === 0) {
-      Alert.alert("Nothing Pending", "There are no pending notifications to approve.");
+      Alert.alert("Nothing Pending", "There are no pending notifications to acknowledge.");
       return;
     }
     Alert.alert(
-      "Approve All",
-      `Approve all ${pending.length} pending update(s)?`,
+      "Acknowledge All",
+      `Acknowledge all ${pending.length} pending update(s)?`,
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Approve All", onPress: () => doApproveAll(pending) },
+        { text: "Acknowledge All", onPress: () => doApproveAll(pending) },
       ],
     );
   };
@@ -265,15 +279,15 @@ export default function Notifications() {
     );
   };
 
-  const pendingCount = notifications.filter(
-    (n) => n.status === "To be Approved",
+  const pendingCount = notifications.filter((n) =>
+    isPendingStatus(n.status),
   ).length;
   const busy = approving || clearing;
 
   if (loading) {
     return (
       <View style={styles.loadingBox}>
-        <ActivityIndicator size="large" color={Colors.primary} />
+        <ActivityIndicator size="large" color="#0C2D6B" />
       </View>
     );
   }
@@ -281,24 +295,27 @@ export default function Notifications() {
   return (
     <View style={styles.root}>
       {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top }]}>
+      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
         <TouchableOpacity
           onPress={() => router.back()}
           style={styles.backBtn}
           activeOpacity={0.7}
         >
-          <Text style={styles.backArrow}>◄</Text>
+          <Ionicons name="arrow-back" size={22} color="#E6F1FB" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>RentWise</Text>
         <View style={styles.backBtn} />
       </View>
 
+      {/* Sub-header */}
+      <View style={styles.subHeader}>
+        <Text style={styles.subHeaderText}>Notifications</Text>
+      </View>
+
       <ScrollView
         style={styles.body}
-        contentContainerStyle={{ padding: 14, paddingBottom: insets.bottom + 24 }}
+        contentContainerStyle={{ padding: 16, paddingTop: 20, paddingBottom: insets.bottom + 24 }}
       >
-        <Text style={styles.pageTitle}>Notifications</Text>
-
         {/* Admin password reset requests */}
         {adminResets.length > 0 && (
           <View style={{ marginBottom: 14 }}>
@@ -307,7 +324,7 @@ export default function Notifications() {
               <View key={item.id} style={styles.card}>
                 <View style={styles.cardRow}>
                   <View style={styles.bellCircle}>
-                    <Text style={styles.bellEmoji}>🔑</Text>
+                    <Ionicons name="key-outline" size={20} color="#0C2D6B" />
                   </View>
                   <View style={styles.cardContent}>
                     <Text style={styles.senderName}>
@@ -337,7 +354,7 @@ export default function Notifications() {
                         activeOpacity={0.8}
                       >
                         {resolvingResetId === item.id ? (
-                          <ActivityIndicator color="#1A1A1A" size="small" />
+                          <ActivityIndicator color="#0C2D6B" size="small" />
                         ) : (
                           <Text style={styles.resolveResetBtnText}>
                             Mark resolved
@@ -366,7 +383,7 @@ export default function Notifications() {
                   <ActivityIndicator color="#FFFFFF" size="small" />
                 ) : (
                   <Text style={styles.approveAllText}>
-                    Approve All ({pendingCount})
+                    Acknowledge All ({pendingCount})
                   </Text>
                 )}
               </TouchableOpacity>
@@ -393,7 +410,7 @@ export default function Notifications() {
           </View>
         ) : (
           notifications.map((item) => {
-            const isPending = item.status === "To be Approved";
+            const isPending = isPendingStatus(item.status);
             const isRejected = item.status === "Rejected";
             return (
               <View
@@ -402,7 +419,7 @@ export default function Notifications() {
               >
                 <View style={styles.cardRow}>
                   <View style={styles.bellCircle}>
-                    <Text style={styles.bellEmoji}>🔔</Text>
+                    <Ionicons name="notifications-outline" size={20} color="#0C2D6B" />
                   </View>
 
                   <View style={styles.cardContent}>
@@ -428,22 +445,23 @@ export default function Notifications() {
                                 : styles.statusApproved,
                           ]}
                         >
-                          {item.status}
+                          {displayStatus(item.status)}
                         </Text>
                       </Text>
                     ) : null}
 
-                    {isPending && item.updateId ? (
-                      <TouchableOpacity
-                        style={styles.checkReportBtn}
-                        onPress={() => handleCheckReport(item)}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.checkReportText}>Check Report</Text>
-                      </TouchableOpacity>
-                    ) : null}
                   </View>
                 </View>
+
+                {isPending && item.updateId ? (
+                  <TouchableOpacity
+                    style={[styles.checkReportBtn, styles.checkReportBtnCentered]}
+                    onPress={() => handleCheckReport(item)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.checkReportText}>Check Report</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
             );
           })
@@ -454,92 +472,93 @@ export default function Notifications() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#EBEBEB" },
+  root: { flex: 1, backgroundColor: "#F0F4FA" },
 
   loadingBox: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#EBEBEB",
+    backgroundColor: "#F0F4FA",
   },
 
   header: {
-    backgroundColor: "#1A1A1A",
+    backgroundColor: "#0C2D6B",
+    paddingHorizontal: 20,
+    paddingBottom: 14,
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 16,
-    paddingHorizontal: 16,
   },
-  backBtn: { width: 40 },
-  backArrow: { color: "#FFFFFF", fontSize: 18, fontWeight: "bold" },
+  backBtn: { width: 36, alignItems: "center", justifyContent: "center" },
   headerTitle: {
     flex: 1,
     textAlign: "center",
-    color: "#FFFFFF",
-    fontSize: 20,
-    fontWeight: "bold",
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "500",
+  },
+
+  subHeader: {
+    backgroundColor: "#1A4DA0",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+  },
+  subHeaderText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "500",
+    textAlign: "center",
   },
 
   body: { flex: 1 },
 
-  pageTitle: {
-    fontSize: 22,
-    fontWeight: "bold",
-    color: "#1A1A1A",
-    marginBottom: 10,
-  },
-
   actionRow: {
     flexDirection: "row",
-    gap: 8,
-    marginBottom: 14,
+    gap: 10,
+    marginBottom: 16,
   },
   approveAllBtn: {
     flex: 1,
-    backgroundColor: Colors.success,
-    borderRadius: 8,
-    paddingVertical: 10,
+    backgroundColor: "#0C2D6B",
+    borderRadius: 10,
+    paddingVertical: 11,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 40,
+    minHeight: 42,
   },
   approveAllText: {
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: "600",
     color: "#FFFFFF",
   },
   clearBtn: {
     flex: 1,
-    borderRadius: 8,
-    paddingVertical: 10,
+    borderRadius: 10,
+    paddingVertical: 11,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1.5,
-    borderColor: "#C0392B",
+    borderColor: "#A32D2D",
     backgroundColor: "#FFFFFF",
-    minHeight: 40,
+    minHeight: 42,
   },
   clearText: {
     fontSize: 13,
-    fontWeight: "700",
-    color: "#C0392B",
+    fontWeight: "600",
+    color: "#A32D2D",
   },
   btnDisabled: { opacity: 0.5 },
 
   card: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 10,
+    backgroundColor: "#fff",
+    borderRadius: 14,
     padding: 14,
     marginBottom: 10,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
   },
   cardUnread: {
     borderLeftWidth: 3,
-    borderLeftColor: "#F5C518",
+    borderLeftColor: "#2E6FD9",
   },
 
   cardRow: {
@@ -552,12 +571,11 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: "#F5C518",
+    backgroundColor: "#E6F1FB",
     alignItems: "center",
     justifyContent: "center",
     flexShrink: 0,
   },
-  bellEmoji: { fontSize: 20 },
 
   cardContent: { flex: 1 },
 
@@ -567,36 +585,40 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 4,
   },
-  senderName: { fontSize: 14, fontWeight: "700", color: "#1A1A1A" },
-  timeText: { fontSize: 12, color: "#888888" },
+  senderName: { fontSize: 14, fontWeight: "600", color: "#0C2D6B" },
+  timeText: { fontSize: 12, color: "#888780" },
 
   messageText: {
     fontSize: 13,
-    color: "#444444",
+    color: "#444441",
     lineHeight: 18,
     marginBottom: 6,
   },
 
   statusLine: { fontSize: 13, marginBottom: 8 },
-  statusLabel: { fontWeight: "700", color: "#1A1A1A" },
+  statusLabel: { fontWeight: "600", color: "#0C2D6B" },
   statusValue: { fontWeight: "600" },
-  statusPending: { color: "#E67E22" },
-  statusApproved: { color: "#27AE60" },
-  statusRejected: { color: "#C0392B" },
+  statusPending: { color: "#BA7517" },
+  statusApproved: { color: "#0F6E56" },
+  statusRejected: { color: "#A32D2D" },
 
   checkReportBtn: {
     alignSelf: "flex-start",
-    backgroundColor: "#F5C518",
+    backgroundColor: "#0C2D6B",
     paddingHorizontal: 14,
-    paddingVertical: 5,
+    paddingVertical: 6,
     borderRadius: 20,
   },
-  checkReportText: { fontSize: 12, fontWeight: "700", color: "#1A1A1A" },
+  checkReportBtnCentered: {
+    alignSelf: "center",
+    marginTop: 10,
+  },
+  checkReportText: { fontSize: 12, fontWeight: "600", color: "#FFFFFF" },
 
   sectionTitle: {
     fontSize: 14,
-    fontWeight: "700",
-    color: "#1A1A1A",
+    fontWeight: "600",
+    color: "#0C2D6B",
     marginBottom: 8,
   },
   resetActionsRow: {
@@ -606,15 +628,15 @@ const styles = StyleSheet.create({
   },
   resolveResetBtn: {
     alignSelf: "flex-start",
-    backgroundColor: "#EBEBEB",
+    backgroundColor: "#F0F4FA",
     borderWidth: 1,
-    borderColor: "#B5B5B5",
+    borderColor: "#B5D4F4",
     paddingHorizontal: 14,
-    paddingVertical: 5,
+    paddingVertical: 6,
     borderRadius: 20,
   },
-  resolveResetBtnText: { fontSize: 12, fontWeight: "700", color: "#1A1A1A" },
+  resolveResetBtnText: { fontSize: 12, fontWeight: "600", color: "#0C2D6B" },
 
   empty: { alignItems: "center", paddingTop: 80 },
-  emptyText: { fontSize: 15, color: "#888888" },
+  emptyText: { fontSize: 15, color: "#888780" },
 });

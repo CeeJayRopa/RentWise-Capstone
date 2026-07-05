@@ -1,13 +1,23 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { View, Text, Animated, Easing, StyleSheet, StatusBar } from "react-native";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { onAuthStateChanged } from "firebase/auth";
+import * as SplashScreen from "expo-splash-screen";
+import { auth } from "../shared/firebaseConfig";
 
 export default function EntranceScreen() {
   const pulseScale = useRef(new Animated.Value(0.92)).current;
   const pulseOpacity = useRef(new Animated.Value(0.6)).current;
   const logoAnim = useRef(new Animated.Value(0)).current;
   const textAnim = useRef(new Animated.Value(0)).current;
+
+  // Only once this screen's own green background has actually been laid out
+  // and painted do we dismiss the native splash — so the swap from native
+  // splash to JS screen is green-to-green, with no white gap in between.
+  const onRootLayout = useCallback(() => {
+    SplashScreen.hideAsync().catch(() => {});
+  }, []);
 
   useEffect(() => {
     Animated.loop(
@@ -58,15 +68,29 @@ export default function EntranceScreen() {
       }),
     ]).start();
 
+    // Firebase persists the last signed-in session across app restarts, but
+    // resolves it asynchronously — capture whatever it resolves to (or
+    // hasn't, yet) by the time the entrance animation finishes, then route:
+    // an existing session goes to the quick password-only unlock screen
+    // instead of the full username+password login.
+    let hasSession = false;
+    const unsub = onAuthStateChanged(auth, (user) => {
+      hasSession = !!user;
+    });
+
     const timer = setTimeout(() => {
-      router.replace("/login");
+      unsub();
+      router.replace(hasSession ? "/quick-unlock" : "/login");
     }, 1900);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      unsub();
+    };
   }, []);
 
   return (
-    <View style={styles.root}>
+    <View style={styles.root} onLayout={onRootLayout}>
       <StatusBar barStyle="light-content" backgroundColor="#0F6E56" />
 
       <Animated.View

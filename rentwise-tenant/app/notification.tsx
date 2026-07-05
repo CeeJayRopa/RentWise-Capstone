@@ -5,6 +5,7 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -39,6 +40,7 @@ export default function Notification() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [markingAll, setMarkingAll] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
   const unsubRef = useRef<(() => void) | null>(null);
 
@@ -101,6 +103,34 @@ export default function Notification() {
     }
   };
 
+  const clearAll = async () => {
+    if (notifications.length === 0) return;
+    setClearing(true);
+    try {
+      const batch = writeBatch(db);
+      notifications.forEach((n) => {
+        batch.delete(doc(db, "notifications", n.id));
+      });
+      await batch.commit();
+    } catch (err) {
+      console.log(err);
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  const handleClearAll = () => {
+    if (notifications.length === 0) return;
+    Alert.alert(
+      "Clear Notifications",
+      "Remove all notifications from your list?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Clear All", style: "destructive", onPress: clearAll },
+      ],
+    );
+  };
+
   const formatDate = (ts: any): string => {
     if (!ts) return "";
     const d: Date = ts.toDate ? ts.toDate() : new Date(ts);
@@ -134,18 +164,38 @@ export default function Notification() {
 
         <Text style={styles.headerTitle}>RentWise</Text>
 
-        <TouchableOpacity onPress={markAllRead} disabled={!hasUnread || markingAll}>
-          <Text style={[styles.markAllText, !hasUnread && styles.markAllDisabled]}>
-            {markingAll ? "..." : "Mark all"}
-          </Text>
-        </TouchableOpacity>
+        <View style={{ width: 22 }} />
       </View>
 
       <ScrollView
         style={styles.body}
         contentContainerStyle={[styles.bodyContent, { paddingBottom: insets.bottom + 20 }]}
       >
-        <Text style={styles.pageTitle}>Notifications</Text>
+        <View style={styles.titleRow}>
+          <Text style={styles.pageTitle}>Notifications</Text>
+
+          <View style={styles.actionsRow}>
+            <TouchableOpacity
+              style={[styles.actionCard, styles.markAllCard, (!hasUnread || markingAll) && styles.markAllDisabled]}
+              onPress={markAllRead}
+              disabled={!hasUnread || markingAll}
+            >
+              <Text style={styles.markAllText}>
+                {markingAll ? "..." : "Mark all"}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.actionCard, styles.clearCard, (notifications.length === 0 || clearing) && styles.markAllDisabled]}
+              onPress={handleClearAll}
+              disabled={notifications.length === 0 || clearing}
+            >
+              <Text style={styles.clearText}>
+                {clearing ? "..." : "Clear"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
 
         {notifications.length === 0 ? (
           <View style={styles.empty}>
@@ -210,10 +260,36 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
 
+  // ── Action cards ──────────────────────────────────
+  actionsRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+
+  actionCard: {
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+  },
+
+  markAllCard: {
+    backgroundColor: "#1D9E75",
+  },
+
+  clearCard: {
+    backgroundColor: "#E24B4A",
+  },
+
   markAllText: {
-    color: "#9FE1CB",
+    color: "#fff",
     fontSize: 13,
-    fontWeight: "500",
+    fontWeight: "600",
+  },
+
+  clearText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "600",
   },
 
   markAllDisabled: {
@@ -231,11 +307,17 @@ const styles = StyleSheet.create({
     paddingTop: 20,
   },
 
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 16,
+  },
+
   pageTitle: {
     fontSize: 20,
     fontWeight: "500",
     color: "#085041",
-    marginBottom: 16,
   },
 
   // ── Notification card ─────────────────────────────

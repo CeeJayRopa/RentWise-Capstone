@@ -61,11 +61,15 @@ function isSamePeriod(schedule: string, a: Date, b: Date): boolean {
     );
   }
   if (schedule === 'weekly') {
-    const startA = new Date(a.getFullYear(), a.getMonth(), a.getDate());
-    startA.setDate(startA.getDate() - startA.getDay());
-    const startB = new Date(b.getFullYear(), b.getMonth(), b.getDate());
-    startB.setDate(startB.getDate() - startB.getDay());
-    return startA.getTime() === startB.getTime();
+    // Must match chargedSinceMonthStart/nextPeriodStart's week boundaries —
+    // 7-day chunks counted from the 1st of the month (due on the 1st, 8th,
+    // 15th, 22nd, 29th), NOT real Sunday-starting calendar weeks.
+    const periodIndexOf = (d: Date) => Math.floor((d.getDate() - 1) / 7);
+    return (
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      periodIndexOf(a) === periodIndexOf(b)
+    );
   }
   if (schedule === 'semi-monthly') {
     const halfOf = (d: Date) => (d.getDate() <= 15 ? 0 : 1);
@@ -127,9 +131,15 @@ export async function isPaymentDue(
     }
   }
 
+  // Semi-monthly tenants aren't due until the 15th (first half) or the
+  // last day of the month (second half) — the charge starts accruing on
+  // the 1st/16th internally, but a reminder shouldn't fire before the
+  // actual due date arrives. Mirrors the same gate in dashboard.tsx.
+  const beforeSemiMonthlyDueDate = schedule === 'semi-monthly' && now.getDate() < 15;
+
   const balance = monthTotalCharge - paidThisMonth;
   const hasPaidCurrentPeriod =
-    balance <= 0 || hasPendingThisMonth || hasPaidForCurrentSpecificPeriod;
+    balance <= 0 || hasPendingThisMonth || hasPaidForCurrentSpecificPeriod || beforeSemiMonthlyDueDate;
 
   return !hasPaidCurrentPeriod;
 }
@@ -148,9 +158,10 @@ export async function hasReminderBeenSent(
   if (schedule === 'daily') {
     periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   } else if (schedule === 'weekly') {
-    periodStart = new Date(now);
-    periodStart.setDate(periodStart.getDate() - periodStart.getDay());
-    periodStart.setHours(0, 0, 0, 0);
+    // Month-relative 7-day chunks (1st, 8th, 15th, 22nd, 29th) — matches
+    // isSamePeriod/chargedSinceMonthStart, not real calendar weeks.
+    const periodIndex = Math.floor((now.getDate() - 1) / 7);
+    periodStart = new Date(now.getFullYear(), now.getMonth(), periodIndex * 7 + 1);
   } else if (schedule === 'semi-monthly') {
     periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() <= 15 ? 1 : 16);
   } else {

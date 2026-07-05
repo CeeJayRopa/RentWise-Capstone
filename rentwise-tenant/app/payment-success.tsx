@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { View, Text, ActivityIndicator, StyleSheet, Alert } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, collection, getDocs, query, where } from "firebase/firestore";
 import { auth } from "../shared/firebaseConfig";
 import { db } from "../shared/services/firestore";
 import { getTenantData } from "../services/tenantService";
@@ -23,6 +23,33 @@ function computePeriodCharge(dailyRate: number, schedule: string, date: Date): n
     return dailyRate * daysInHalf;
   }
   return dailyRate * daysInMonth; // monthly
+}
+
+// Mirrors rentwise-tenant/app/dashboard.tsx exactly — sums each billing
+// period's charge for every period from day 1 of the month through today's
+// period, inclusive, so "periods owed" here matches what the dashboard
+// would show as due.
+function chargedSinceMonthStart(dailyRate: number, schedule: string, today: Date): number {
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const monthEndExclusive = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  let total = 0;
+  let cursor = monthStart;
+  let guard = 0;
+  while (cursor <= today && guard < 31) {
+    const periodEnd = new Date(cursor);
+    if (schedule === "daily") periodEnd.setDate(periodEnd.getDate() + 1);
+    else if (schedule === "weekly") periodEnd.setDate(periodEnd.getDate() + 7);
+    else if (schedule === "semi-monthly") {
+      if (periodEnd.getDate() <= 15) periodEnd.setDate(16);
+      else { periodEnd.setMonth(periodEnd.getMonth() + 1); periodEnd.setDate(1); }
+    } else { periodEnd.setMonth(periodEnd.getMonth() + 1); periodEnd.setDate(1); }
+    const cappedEnd = periodEnd < monthEndExclusive ? periodEnd : monthEndExclusive;
+    const daysInChunk = Math.round((cappedEnd.getTime() - cursor.getTime()) / 86400000);
+    total += dailyRate * daysInChunk;
+    cursor = periodEnd;
+    guard++;
+  }
+  return total;
 }
 
 export default function PaymentSuccess() {
@@ -70,8 +97,38 @@ export default function PaymentSuccess() {
           stallData?.paymentSchedule ?? "monthly",
           new Date(),
         );
-        const periodsCovered =
-          scheduleRent > 0 ? Math.max(1, Math.round(paymentAmount / scheduleRent)) : 1;
+
+        // Same split as dashboard.tsx: only the portion beyond what's
+        // already owed (arrears + today) counts as genuine advance.
+        const today = new Date();
+        const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        const paymentsSnap = await getDocs(
+          query(
+            collection(db, "payments"),
+            where("userId", "==", user.uid),
+            where("status", "==", "approved"),
+          ),
+        );
+        const paidThisMonth = paymentsSnap.docs.reduce((sum, d) => {
+          const data = d.data();
+          const pd = data.date?.toDate?.();
+          if (!pd || pd < monthStart) return sum;
+          return sum + Number(data.amount || 0);
+        }, 0);
+        const chargedToDate = chargedSinceMonthStart(
+          stallData?.price ?? 0,
+          stallData?.paymentSchedule ?? "monthly",
+          today,
+        );
+        const paymentDue = chargedToDate - paidThisMonth;
+
+        const owedAmount = Math.max(paymentDue, scheduleRent || 0);
+        const periodsOwed =
+          scheduleRent > 0 ? Math.max(1, Math.round(owedAmount / scheduleRent)) : 1;
+        const advanceAmount = Math.max(0, paymentAmount - owedAmount);
+        const periodsAdvance =
+          scheduleRent > 0 ? Math.round(advanceAmount / scheduleRent) : 0;
+        const periodsCovered = periodsOwed + periodsAdvance;
 
         const receiptData = {
           receiptNo,
@@ -91,6 +148,7 @@ export default function PaymentSuccess() {
           amount: paymentAmount,
           rentAmount: scheduleRent,
           periodsCovered,
+          periodsAdvance,
           method: "online",
           status: "pending",
           tenantName,

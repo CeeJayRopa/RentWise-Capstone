@@ -6,13 +6,13 @@ import {
   ScrollView,
   TouchableOpacity,
   Pressable,
-  Linking,
+  Modal,
+  Image,
   Alert,
   RefreshControl,
 } from "react-native";
 import * as Print from "expo-print";
-import * as Sharing from "expo-sharing";
-import { File, Paths } from "expo-file-system";
+import RNBlobUtil from "react-native-blob-util";
 
 import { useEffect, useState } from "react";
 import { useLocalSearchParams, router } from "expo-router";
@@ -103,6 +103,8 @@ export default function TenantPreview() {
   const [refreshing, setRefreshing] = useState(false);
   const [sending, setSending] = useState(false);
   const [generatingReceipt, setGeneratingReceipt] = useState(false);
+  const [imageViewerUrl, setImageViewerUrl] = useState<string | null>(null);
+  const [digitalReceipt, setDigitalReceipt] = useState<any>(null);
 
   useEffect(() => {
     loadTenant();
@@ -164,6 +166,15 @@ export default function TenantPreview() {
         });
       });
 
+      // Latest payment first — Firestore doesn't guarantee doc order, and
+      // sorting client-side avoids needing a composite index for the
+      // userId + date query.
+      list.sort((a, b) => {
+        const aMs = a.date?.toMillis ? a.date.toMillis() : 0;
+        const bMs = b.date?.toMillis ? b.date.toMillis() : 0;
+        return bMs - aMs;
+      });
+
       setPayments(list);
     } catch (error) {
       console.log(error);
@@ -172,13 +183,10 @@ export default function TenantPreview() {
     }
   }
 
-  async function viewOnlineReceipt(payment: any) {
-    if (generatingReceipt) return;
+  async function downloadOnlineReceipt(rd: any) {
+    if (generatingReceipt || !rd) return;
     setGeneratingReceipt(true);
     try {
-      const rd = payment.receiptData;
-      if (!rd) return;
-
       const html = `
         <html><body style="font-family:Arial;padding:30px;">
           <h1 style="text-align:center;">RentWise</h1>
@@ -192,6 +200,7 @@ export default function TenantPreview() {
           <p><b>Payment Method:</b> ${rd.paymentMethod ?? ""}</p>
           <p><b>Rent Amount:</b> ₱${rd.rentAmount ?? 0}</p>
           <p><b>Amount Paid:</b> ₱${rd.payment ?? 0}</p>
+          ${rd.change > 0 ? `<p><b>Change:</b> ₱${rd.change}</p>` : ""}
           <p><b>Approval Status:</b> ${rd.status ?? ""}</p>
           <hr/>
           <h3 style="text-align:center;">Pending Admin Approval</h3>
@@ -199,19 +208,17 @@ export default function TenantPreview() {
       `;
 
       const { base64 } = await Print.printToFileAsync({ html, base64: true });
-      const destFile = new File(Paths.cache, `online-receipt-${rd.receiptNo ?? Date.now()}.pdf`);
-      destFile.write(base64!, { encoding: "base64" });
+      const fileName = `online-receipt-${rd.receiptNo ?? Date.now()}.pdf`;
+      const cachePath = `${RNBlobUtil.fs.dirs.CacheDir}/${fileName}`;
+      await RNBlobUtil.fs.writeFile(cachePath, base64!, "base64");
+      await RNBlobUtil.MediaCollection.copyToMediaStore(
+        { name: fileName, parentFolder: "", mimeType: "application/pdf" },
+        "Download",
+        cachePath,
+      );
+      RNBlobUtil.fs.unlink(cachePath).catch(() => {});
 
-      const canShare = await Sharing.isAvailableAsync();
-      if (canShare) {
-        await Sharing.shareAsync(destFile.uri, {
-          mimeType: "application/pdf",
-          dialogTitle: "View Receipt",
-          UTI: "com.adobe.pdf",
-        });
-      } else {
-        Alert.alert("Not Available", "Sharing is not supported on this device.");
-      }
+      Alert.alert("Downloaded", "Receipt saved to your Downloads folder.");
     } catch (err) {
       console.log("ONLINE RECEIPT ERROR", err);
       Alert.alert("Error", "Failed to generate receipt.");
@@ -323,13 +330,15 @@ export default function TenantPreview() {
             <Text style={styles.bannerName}>
               {tenant?.firstName} {tenant?.lastName}
             </Text>
-            <Text style={styles.bannerContact}>{tenant?.contactNo}</Text>
+            <Text style={styles.bannerContact}>
+              {tenant?.contactNo ? `+63 ${tenant.contactNo}` : ""}
+            </Text>
           </View>
         </View>
 
         {/* CARD 1 — RENTAL PAYMENT INFORMATION */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Rental payment information</Text>
+          <Text style={styles.cardTitle}>Rental Payment Information</Text>
 
           <InfoRow
             label="Payment"
@@ -353,7 +362,7 @@ export default function TenantPreview() {
 
         {/* CARD 2 — MONTHLY PAYMENT HISTORY */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Monthly payment history</Text>
+          <Text style={styles.cardTitle}>Monthly Payment History</Text>
 
           {/* Table header */}
           <View style={styles.tableHeader}>
@@ -409,22 +418,17 @@ export default function TenantPreview() {
                 <View style={{ flex: 1, alignItems: "flex-end" }}>
                   {item.receipt ? (
                     <TouchableOpacity
-                      onPress={() => Linking.openURL(item.receipt)}
+                      onPress={() => setImageViewerUrl(item.receipt)}
                       activeOpacity={0.7}
                     >
                       <Ionicons name="receipt-outline" size={20} color="#1D9E75" />
                     </TouchableOpacity>
                   ) : item.receiptData ? (
                     <TouchableOpacity
-                      onPress={() => viewOnlineReceipt(item)}
+                      onPress={() => setDigitalReceipt(item.receiptData)}
                       activeOpacity={0.7}
-                      disabled={generatingReceipt}
                     >
-                      {generatingReceipt ? (
-                        <ActivityIndicator size="small" color="#1D9E75" />
-                      ) : (
-                        <Ionicons name="receipt-outline" size={20} color="#1D9E75" />
-                      )}
+                      <Ionicons name="receipt-outline" size={20} color="#1D9E75" />
                     </TouchableOpacity>
                   ) : (
                     <Text style={styles.paymentDate}>—</Text>
@@ -435,6 +439,67 @@ export default function TenantPreview() {
           )}
         </View>
       </ScrollView>
+
+      {/* CASH RECEIPT IMAGE VIEWER */}
+      <Modal visible={!!imageViewerUrl} transparent animationType="fade">
+        <Pressable
+          style={styles.imageViewerBg}
+          onPress={() => setImageViewerUrl(null)}
+        >
+          {imageViewerUrl && (
+            <Image
+              source={{ uri: imageViewerUrl }}
+              style={styles.imageViewerImage}
+              resizeMode="contain"
+            />
+          )}
+        </Pressable>
+      </Modal>
+
+      {/* ONLINE PAYMENT DIGITAL RECEIPT */}
+      <Modal visible={!!digitalReceipt} transparent animationType="fade">
+        <View style={styles.modalBg}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Tenant's Digital Receipt</Text>
+
+            <Text style={styles.modalRow}>Receipt No: {digitalReceipt?.receiptNo ?? ""}</Text>
+            <Text style={styles.modalRow}>Tenant Name: {digitalReceipt?.tenantName ?? ""}</Text>
+            <Text style={styles.modalRow}>Building Number: {digitalReceipt?.buildingNumber ?? ""}</Text>
+            <Text style={styles.modalRow}>Space ID: {digitalReceipt?.spaceId ?? ""}</Text>
+            <Text style={styles.modalRow}>
+              Date: {digitalReceipt?.date ? new Date(digitalReceipt.date).toLocaleDateString() : ""}
+            </Text>
+            <Text style={styles.modalRow}>Payment Method: {digitalReceipt?.paymentMethod ?? ""}</Text>
+            <Text style={styles.modalRow}>Rent Amount: ₱{digitalReceipt?.rentAmount ?? 0}</Text>
+            <Text style={styles.modalRow}>Amount Paid: ₱{digitalReceipt?.payment ?? 0}</Text>
+            {digitalReceipt?.change > 0 && (
+              <Text style={styles.modalRow}>Change: ₱{digitalReceipt.change}</Text>
+            )}
+            <Text style={styles.modalRow}>Approval Status: {digitalReceipt?.status ?? ""}</Text>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.modalBtnSecondary}
+                onPress={() => setDigitalReceipt(null)}
+              >
+                <Text style={styles.modalBtnSecondaryText}>Close</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.modalBtnPrimary}
+                onPress={() => downloadOnlineReceipt(digitalReceipt)}
+                disabled={generatingReceipt}
+              >
+                {generatingReceipt ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={styles.modalBtnPrimaryText}>Download Receipt</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -659,4 +724,73 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#B4B2A9",
   },
+
+  // ── Receipt viewers ──────────────────────────────────────────────────────────
+
+  imageViewerBg: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  imageViewerImage: {
+    width: "100%",
+    height: "80%",
+  },
+
+  modalBg: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  modalBox: {
+    width: "85%",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    padding: 20,
+  },
+
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    marginBottom: 15,
+    color: "#0C2D6B",
+  },
+
+  modalRow: {
+    fontSize: 14,
+    color: "#444441",
+    marginBottom: 6,
+  },
+
+  modalButtons: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginTop: 16,
+    gap: 10,
+  },
+
+  modalBtnSecondary: {
+    borderWidth: 1,
+    borderColor: "#B5D4F4",
+    borderRadius: 8,
+    paddingVertical: 9,
+    paddingHorizontal: 18,
+  },
+
+  modalBtnSecondaryText: { fontSize: 14, color: "#0C2D6B" },
+
+  modalBtnPrimary: {
+    backgroundColor: "#0C2D6B",
+    borderRadius: 8,
+    paddingVertical: 9,
+    paddingHorizontal: 18,
+    minWidth: 130,
+    alignItems: "center",
+  },
+
+  modalBtnPrimaryText: { fontSize: 14, fontWeight: "600", color: "#FFFFFF" },
 });

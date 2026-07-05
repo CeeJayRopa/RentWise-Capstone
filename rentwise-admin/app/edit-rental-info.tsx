@@ -7,6 +7,7 @@ import {
   Pressable,
   ScrollView,
   Animated,
+  Easing,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
@@ -61,10 +62,12 @@ export default function EditRentalInfo() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
 
   // UI-only: focused field & toast animation
   const [focusedField, setFocusedField] = useState<string | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const toastTranslateY = useRef(new Animated.Value(20)).current;
 
   useEffect(() => {
     return () => {
@@ -93,10 +96,17 @@ export default function EditRentalInfo() {
   useEffect(() => {
     if (!saved) return;
     fadeAnim.setValue(0);
+    toastTranslateY.setValue(20);
     Animated.sequence([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
-      Animated.delay(1800),
-      Animated.timing(fadeAnim, { toValue: 0, duration: 250, useNativeDriver: true }),
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 1, duration: 450, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+        Animated.timing(toastTranslateY, { toValue: 0, duration: 450, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      ]),
+      Animated.delay(1000),
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 0, duration: 450, easing: Easing.in(Easing.back(1.5)), useNativeDriver: true }),
+        Animated.timing(toastTranslateY, { toValue: -10, duration: 450, easing: Easing.in(Easing.back(1.5)), useNativeDriver: true }),
+      ]),
     ]).start();
   }, [saved]);
 
@@ -220,6 +230,7 @@ export default function EditRentalInfo() {
       }
 
       setSaved(true);
+      setIsEditing(false);
       // Brief success display, then return to Building Management
       setTimeout(() => {
         if (mountedRef.current) router.back();
@@ -299,6 +310,7 @@ export default function EditRentalInfo() {
                 <TextInput
                   style={[
                     styles.input,
+                    !isEditing && styles.inputReadOnly,
                     focusedField === "length" && styles.inputFocused,
                     lengthError ? styles.inputError : null,
                   ]}
@@ -312,7 +324,7 @@ export default function EditRentalInfo() {
                   }}
                   onFocus={() => setFocusedField("length")}
                   onBlur={() => setFocusedField(null)}
-                  editable={!saving && !saved}
+                  editable={isEditing && !saving && !saved}
                 />
                 {lengthError ? <Text style={styles.fieldError}>{lengthError}</Text> : null}
               </View>
@@ -323,6 +335,7 @@ export default function EditRentalInfo() {
                 <TextInput
                   style={[
                     styles.input,
+                    !isEditing && styles.inputReadOnly,
                     focusedField === "width" && styles.inputFocused,
                     widthError ? styles.inputError : null,
                   ]}
@@ -336,7 +349,7 @@ export default function EditRentalInfo() {
                   }}
                   onFocus={() => setFocusedField("width")}
                   onBlur={() => setFocusedField(null)}
-                  editable={!saving && !saved}
+                  editable={isEditing && !saving && !saved}
                 />
                 {widthError ? <Text style={styles.fieldError}>{widthError}</Text> : null}
               </View>
@@ -347,6 +360,7 @@ export default function EditRentalInfo() {
                 <View
                   style={[
                     styles.currencyRow,
+                    !isEditing && styles.currencyRowReadOnly,
                     focusedField === "rate" && styles.currencyRowFocused,
                     rateError ? styles.inputError : null,
                   ]}
@@ -355,7 +369,7 @@ export default function EditRentalInfo() {
                     <Text style={styles.currencySymbol}>₱</Text>
                   </View>
                   <TextInput
-                    style={styles.currencyInput}
+                    style={[styles.currencyInput, !isEditing && styles.inputReadOnly]}
                     keyboardType="numeric"
                     placeholder="0"
                     placeholderTextColor="#B4B2A9"
@@ -366,7 +380,7 @@ export default function EditRentalInfo() {
                     }}
                     onFocus={() => setFocusedField("rate")}
                     onBlur={() => setFocusedField(null)}
-                    editable={!saving && !saved}
+                    editable={isEditing && !saving && !saved}
                   />
                 </View>
                 {rateError ? <Text style={styles.fieldError}>{rateError}</Text> : null}
@@ -375,7 +389,7 @@ export default function EditRentalInfo() {
               {/* PAYMENT SCHEDULE */}
               <View style={[styles.field, { marginTop: 4, marginBottom: 24 }]}>
                 <Text style={styles.fieldLabel}>Payment schedule</Text>
-                <View style={styles.scheduleRow}>
+                <View style={[styles.scheduleRow, !isEditing && styles.scheduleRowReadOnly]}>
                   {(["daily", "weekly", "semi-monthly", "monthly"] as const).map((s) => (
                     <TouchableOpacity
                       key={s}
@@ -388,7 +402,7 @@ export default function EditRentalInfo() {
                         if (scheduleError) setScheduleError("");
                       }}
                       activeOpacity={0.7}
-                      disabled={saving || saved}
+                      disabled={!isEditing || saving || saved}
                     >
                       <Text
                         style={[
@@ -407,34 +421,38 @@ export default function EditRentalInfo() {
               {/* SAVE ERROR */}
               {saveError ? <Text style={styles.saveError}>{saveError}</Text> : null}
 
-              {/* SAVE BUTTON */}
+              {/* EDIT / SAVE BUTTON */}
               <Pressable
                 style={({ pressed }) => [
                   styles.saveBtn,
                   (saving || saved) && styles.saveBtnDisabled,
                   pressed && !saving && !saved && styles.saveBtnPressed,
                 ]}
-                onPress={handleSave}
+                onPress={isEditing ? handleSave : () => setIsEditing(true)}
                 disabled={saving || saved}
               >
                 {saving ? (
                   <ActivityIndicator color="#fff" size="small" />
                 ) : (
-                  <Text style={styles.saveBtnText}>Save changes</Text>
+                  <Text style={styles.saveBtnText}>
+                    {isEditing ? "Save changes" : "Modify Rental Info"}
+                  </Text>
                 )}
               </Pressable>
-
-              {/* SUCCESS TOAST */}
-              {saved && (
-                <Animated.View style={[styles.toast, { opacity: fadeAnim }]}>
-                  <Ionicons name="checkmark-circle" size={18} color="#B5D4F4" />
-                  <Text style={styles.toastText}>Rental info updated.</Text>
-                </Animated.View>
-              )}
             </>
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* SUCCESS TOAST */}
+      {saved && (
+        <Animated.View style={[styles.overlay, { opacity: fadeAnim }]}>
+          <Animated.View style={[styles.toast, { transform: [{ translateY: toastTranslateY }] }]}>
+            <Ionicons name="checkmark-circle" size={22} color="#7AAEF0" />
+            <Text style={styles.toastText}>Rental Info Updated</Text>
+          </Animated.View>
+        </Animated.View>
+      )}
     </View>
   );
 }
@@ -541,6 +559,11 @@ const styles = StyleSheet.create({
     borderColor: "#2E6FD9",
   },
 
+  inputReadOnly: {
+    backgroundColor: "#EEF2FA",
+    color: "#6B87B8",
+  },
+
   inputError: {
     borderColor: "#A32D2D",
   },
@@ -565,6 +588,10 @@ const styles = StyleSheet.create({
 
   currencyRowFocused: {
     borderColor: "#2E6FD9",
+  },
+
+  currencyRowReadOnly: {
+    backgroundColor: "#EEF2FA",
   },
 
   currencyPrefix: {
@@ -596,6 +623,10 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 10,
     marginTop: 2,
+  },
+
+  scheduleRowReadOnly: {
+    opacity: 0.6,
   },
 
   scheduleTab: {
@@ -665,20 +696,26 @@ const styles = StyleSheet.create({
 
   // ── Success toast ─────────────────────────────────────────────────────────────
 
+  overlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
   toast: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "#0C2D6B",
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginTop: 14,
   },
 
   toastText: {
-    fontSize: 14,
+    color: "#B5D4F4",
+    fontSize: 18,
     fontWeight: "500",
-    color: "#fff",
   },
 });

@@ -123,11 +123,11 @@ export default function OwnerSidebar({ visible, onClose }: Props) {
         {/* Menu items */}
         <View style={styles.menu}>
           <MenuItem icon="home-outline"            label="Home"                onPress={() => navigate("/dashboard")} />
+          <MenuItem icon="document-text-outline"   label="Daily Reports"       onPress={() => navigate("/daily-reports")} />
           <MenuItem icon="wallet-outline"          label="Financials"          onPress={() => navigate("/financials")} />
           <MenuItem icon="business-outline"        label="Building Management" onPress={() => navigate("/building")} />
-          <MenuItem icon="archive-outline"         label="Account Archives"    onPress={() => navigate("/archives")} />
-          <MenuItem icon="document-text-outline"   label="Daily Reports"       onPress={() => navigate("/daily-reports")} />
           <MenuItem icon="shield-checkmark-outline" label="Manage Admin"       onPress={() => navigate("/manage-admin")} />
+          <MenuItem icon="archive-outline"         label="Account Archives"    onPress={() => navigate("/archives")} />
         </View>
 
         <View style={styles.divider} />

@@ -15,6 +15,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { Ionicons } from "@expo/vector-icons";
 
 import { auth } from "../shared/services/auth";
+import { getUserById } from "../shared/services/userServices";
 
 export default function Welcome() {
   const insets = useSafeAreaInsets();
@@ -31,13 +32,18 @@ export default function Welcome() {
   const buttonAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) {
         router.replace("/login");
         return;
       }
-      setDisplayName(user.displayName ?? "Owner");
       setPhotoURL(user.photoURL ?? null);
+      try {
+        const data = await getUserById(user.uid);
+        setDisplayName(data?.firstName ? `Owner ${data.firstName}` : "Owner");
+      } catch {
+        setDisplayName("Owner");
+      }
       setChecking(false);
     });
     return unsub;

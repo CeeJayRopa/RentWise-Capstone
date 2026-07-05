@@ -54,6 +54,7 @@ export default function ManageAdmin() {
   const [changingPw, setChangingPw] = useState(false);
 
   const toastAnim = useRef(new Animated.Value(0)).current;
+  const toastTranslateY = useRef(new Animated.Value(20)).current;
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
 
@@ -95,21 +96,32 @@ export default function ManageAdmin() {
     setToastMsg(msg);
     setToastVisible(true);
     toastAnim.setValue(0);
+    toastTranslateY.setValue(20);
     Animated.sequence([
-      Animated.timing(toastAnim, { toValue: 1, duration: 250, easing: Easing.out(Easing.ease), useNativeDriver: true }),
-      Animated.delay(1800),
-      Animated.timing(toastAnim, { toValue: 0, duration: 300, easing: Easing.in(Easing.ease), useNativeDriver: true }),
+      Animated.parallel([
+        Animated.timing(toastAnim, { toValue: 1, duration: 450, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+        Animated.timing(toastTranslateY, { toValue: 0, duration: 450, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      ]),
+      Animated.delay(1000),
+      Animated.parallel([
+        Animated.timing(toastAnim, { toValue: 0, duration: 450, easing: Easing.in(Easing.back(1.5)), useNativeDriver: true }),
+        Animated.timing(toastTranslateY, { toValue: -10, duration: 450, easing: Easing.in(Easing.back(1.5)), useNativeDriver: true }),
+      ]),
     ]).start(() => setToastVisible(false));
   };
 
   const handleSave = async () => {
     if (!admin) return;
+    const fn = firstName.trim();
+    const ln = lastName.trim();
+    const un = username.trim();
+    const cn = contactNo.trim();
+    if (!fn || !ln || !un || !cn) {
+      Alert.alert("Missing Information", "All fields are required.");
+      return;
+    }
     setSaving(true);
     try {
-      const fn = firstName.trim();
-      const ln = lastName.trim();
-      const un = username.trim();
-      const cn = contactNo.trim();
       await updateDoc(doc(db, "users", admin.uid), { firstName: fn, lastName: ln, username: un, contactNo: cn });
       setOriginal({ firstName: fn, lastName: ln, username: un, contactNo: cn });
       showToast("Profile saved!");
@@ -168,6 +180,9 @@ export default function ManageAdmin() {
     lastName !== original.lastName ||
     username !== original.username ||
     contactNo !== original.contactNo;
+
+  const hasEmptyField =
+    !firstName.trim() || !lastName.trim() || !username.trim() || !contactNo.trim();
 
   if (checking || loading) {
     return (
@@ -255,9 +270,9 @@ export default function ManageAdmin() {
 
           {/* Save Button */}
           <TouchableOpacity
-            style={[styles.saveBtn, (saving || !profileChanged) && styles.btnDisabled]}
+            style={[styles.saveBtn, (saving || hasEmptyField || !profileChanged) && styles.btnDisabled]}
             onPress={handleSave}
-            disabled={saving || !profileChanged}
+            disabled={saving || hasEmptyField || !profileChanged}
             activeOpacity={0.8}
           >
             {saving
@@ -327,17 +342,11 @@ export default function ManageAdmin() {
 
       {/* Toast */}
       {toastVisible && (
-        <Animated.View
-          style={[
-            styles.toast,
-            {
-              opacity: toastAnim,
-              transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }],
-            },
-          ]}
-        >
-          <Ionicons name="checkmark-circle-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
-          <Text style={styles.toastText}>{toastMsg}</Text>
+        <Animated.View style={[styles.overlay, { opacity: toastAnim }]}>
+          <Animated.View style={[styles.toast, { transform: [{ translateY: toastTranslateY }] }]}>
+            <Ionicons name="checkmark-circle" size={22} color="#7AAEF0" />
+            <Text style={styles.toastText}>{toastMsg}</Text>
+          </Animated.View>
         </Animated.View>
       )}
     </View>
@@ -486,25 +495,24 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
 
-  toast: {
+  overlay: {
     position: "absolute",
-    bottom: 380,
-    alignSelf: "center",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  toast: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#0C2D6B",
-    borderRadius: 24,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    elevation: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
+    gap: 8,
   },
   toastText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "600",
+    color: "#B5D4F4",
+    fontSize: 18,
+    fontWeight: "500",
   },
 });

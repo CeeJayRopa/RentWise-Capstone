@@ -32,6 +32,9 @@ paymongo-api/node_modules/
 .DS_Store
 Thumbs.db
 
+# Personal notes
+CAPSTONE_NOTES.txt
+
 # Logs
 *.log
 npm-debug.log*

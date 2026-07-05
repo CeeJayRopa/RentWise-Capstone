@@ -8,10 +8,12 @@ import {
   Pressable,
   Dimensions,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
   ScrollView,
   Modal,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useRef, useEffect } from "react";
@@ -20,6 +22,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { loginUser } from "../services/authService";
 import { collection, query, where, getDocs, addDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../shared/firebaseConfig";
+import {
+  checkLockout,
+  recordFailedAttempt,
+  resetLockout,
+  formatLockoutRemaining,
+} from "../shared/services/loginLockout";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -31,6 +39,8 @@ export default function Login() {
   const [emailFocused, setEmailFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
+  const [, setLockoutTick] = useState(0);
 
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [fpEmail, setFpEmail] = useState("");
@@ -46,6 +56,61 @@ export default function Login() {
   const emailAnim = useRef(new Animated.Value(0)).current;
   const passwordAnim = useRef(new Animated.Value(0)).current;
   const buttonAnim = useRef(new Animated.Value(0)).current;
+  const scrollRef = useRef<ScrollView>(null);
+  const emailInputRef = useRef<TextInput>(null);
+  const passwordInputRef = useRef<TextInput>(null);
+  const buttonRef = useRef<View>(null);
+  const scrollViewHeightRef = useRef(SCREEN_HEIGHT);
+
+  // Always scrolls to the SAME fixed target — the sign-in button — no matter
+  // which of the two fields was tapped. Measuring each field individually
+  // used to land in a different spot depending on whether the keyboard was
+  // already open (email vs. password), which looked inconsistent.
+  //
+  // The target is computed against the ScrollView's OWN current height
+  // (which KeyboardAvoidingView actually shrinks once the keyboard is up),
+  // not a guessed pixel constant — a fixed offset would either undershoot
+  // on tall keyboards or overshoot far enough to scroll the entire green
+  // header off-screen, leaving nothing but the white card filling the
+  // whole screen.
+  function scrollToRevealForm() {
+    setTimeout(() => {
+      const target = buttonRef.current;
+      const scroller = scrollRef.current;
+      if (!target || !scroller) return;
+      target.measureLayout(
+        scroller as unknown as React.ComponentRef<typeof View>,
+        (_x: number, y: number, _w: number, h: number) => {
+          const bottomPadding = 24;
+          const desired = y + h + bottomPadding - scrollViewHeightRef.current;
+          scroller.scrollTo({ y: Math.max(desired, 0), animated: true });
+        },
+        () => {},
+      );
+    }, 100);
+  }
+
+  // Ticks every second while locked out so the countdown text stays live,
+  // and clears the lockout automatically once it expires.
+  useEffect(() => {
+    if (!lockoutUntil) return;
+    const interval = setInterval(() => {
+      if (Date.now() >= lockoutUntil) {
+        setLockoutUntil(null);
+      } else {
+        setLockoutTick((t) => t + 1);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [lockoutUntil]);
+
+  useEffect(() => {
+    // onFocus fires before the keyboard has finished animating in, so a
+    // fixed delay can land short if the OS is still resizing the window —
+    // scroll again once Android/iOS confirms the keyboard is fully shown.
+    const sub = Keyboard.addListener("keyboardDidShow", scrollToRevealForm);
+    return () => sub.remove();
+  }, []);
 
   useEffect(() => {
     Animated.loop(
@@ -156,23 +221,49 @@ export default function Login() {
   }
 
   async function handleLogin() {
+    setErrorMsg("");
+    const identifier = email.trim();
+
+    const existingLockout = await checkLockout(identifier);
+    if (existingLockout) {
+      setLockoutUntil(existingLockout);
+      return;
+    }
+
     try {
-      await loginUser(email, password);
+      await loginUser(identifier, password);
+      await resetLockout(identifier);
       router.replace({ pathname: "/welcome" });
     } catch (error) {
-      setErrorMsg("Incorrect email or password");
+      const { lockoutUntil: newLockout, remainingAttempts, lockoutLevel } =
+        await recordFailedAttempt(identifier);
+      if (newLockout) {
+        setLockoutUntil(newLockout);
+        if (lockoutLevel >= 3) {
+          Alert.alert(
+            "Forgot your password?",
+            "It seems that you really forgot the password, please click the forgot password to request for a password reset to the admin.",
+          );
+        }
+      } else {
+        setErrorMsg(
+          `Incorrect email or password. ${remainingAttempts} attempt${remainingAttempts === 1 ? "" : "s"} remaining.`,
+        );
+      }
     }
   }
 
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: "#0F6E56" }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={{ flexGrow: 1 }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        onLayout={(e) => { scrollViewHeightRef.current = e.nativeEvent.layout.height; }}
       >
         <View style={{ flex: 1, minHeight: SCREEN_HEIGHT }}>
           {/* Top green section */}
@@ -215,6 +306,7 @@ export default function Login() {
                   style={styles.leftIcon}
                 />
                 <TextInput
+                  ref={emailInputRef}
                   style={[styles.textInput, emailFocused && styles.textInputFocused]}
                   value={email}
                   onChangeText={setEmail}
@@ -222,8 +314,12 @@ export default function Login() {
                   placeholderTextColor="#B4B2A9"
                   autoCapitalize="none"
                   keyboardType="email-address"
-                  onFocus={() => setEmailFocused(true)}
-                  onBlur={() => setEmailFocused(false)}
+                  editable={!lockoutUntil}
+                  onFocus={() => { setEmailFocused(true); scrollToRevealForm(); }}
+                  onBlur={() => {
+                    setEmailFocused(false);
+                    checkLockout(email.trim()).then((u) => { if (u) setLockoutUntil(u); });
+                  }}
                 />
               </View>
             </Animated.View>
@@ -241,13 +337,15 @@ export default function Login() {
                   style={styles.leftIcon}
                 />
                 <TextInput
+                  ref={passwordInputRef}
                   style={[styles.textInput, passwordFocused && styles.textInputFocused]}
                   value={password}
                   onChangeText={setPassword}
                   secureTextEntry={!showPassword}
                   placeholder="Enter your Password"
                   placeholderTextColor="#B4B2A9"
-                  onFocus={() => setPasswordFocused(true)}
+                  editable={!lockoutUntil}
+                  onFocus={() => { setPasswordFocused(true); scrollToRevealForm(); }}
                   onBlur={() => setPasswordFocused(false)}
                 />
                 <Pressable
@@ -271,21 +369,29 @@ export default function Login() {
               <Text style={styles.forgotLinkText}>Forgot password?</Text>
             </Pressable>
 
-            {/* Error banner */}
-            {errorMsg ? (
+            {/* Lockout / error banner */}
+            {lockoutUntil ? (
+              <View style={styles.errorBanner}>
+                <Text style={styles.errorText}>
+                  Too many failed attempts. Try again in {formatLockoutRemaining(lockoutUntil)}.
+                </Text>
+              </View>
+            ) : errorMsg ? (
               <View style={styles.errorBanner}>
                 <Text style={styles.errorText}>{errorMsg}</Text>
               </View>
             ) : null}
 
             {/* Sign in button */}
-            <Animated.View style={[{ marginTop: 28 }, slideIn(buttonAnim)]}>
+            <Animated.View ref={buttonRef} style={[{ marginTop: 28 }, slideIn(buttonAnim)]}>
               <Pressable
                 style={({ pressed }) => [
                   styles.signInBtn,
-                  pressed && { backgroundColor: "#085041", transform: [{ scale: 0.98 }] },
+                  !!lockoutUntil && styles.signInBtnDisabled,
+                  pressed && !lockoutUntil && { backgroundColor: "#085041", transform: [{ scale: 0.98 }] },
                 ]}
                 onPress={handleLogin}
+                disabled={!!lockoutUntil}
               >
                 <Text style={styles.signInText}>Sign in</Text>
               </Pressable>
@@ -420,7 +526,8 @@ const styles = StyleSheet.create({
   card: {
     flex: 1,
     backgroundColor: "#FFFFFF",
-    borderRadius: 24,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     marginTop: -16,
     paddingHorizontal: 28,
     paddingTop: 28,
@@ -494,6 +601,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#0F6E56",
     paddingVertical: 15,
     alignItems: "center",
+  },
+  signInBtnDisabled: {
+    opacity: 0.5,
   },
   signInText: {
     color: "#FFFFFF",

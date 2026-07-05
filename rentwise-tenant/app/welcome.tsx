@@ -7,14 +7,25 @@ import {
   Pressable,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { auth } from "../shared/firebaseConfig";
+import { getTenantData } from "../services/tenantService";
 
 export default function Welcome() {
   const insets = useSafeAreaInsets();
-  const displayName = auth.currentUser?.displayName ?? "Tenant";
+  const [displayName, setDisplayName] = useState("Tenant");
+
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    getTenantData(uid)
+      .then((data) => {
+        if (data?.firstName) setDisplayName(`Tenant ${data.firstName}`);
+      })
+      .catch(() => {});
+  }, []);
 
   const pulseScale = useRef(new Animated.Value(1.0)).current;
   const pulseOpacity = useRef(new Animated.Value(0.4)).current;

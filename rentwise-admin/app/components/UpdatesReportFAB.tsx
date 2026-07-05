@@ -169,7 +169,7 @@ export default function UpdatesReportFAB({
     if (pendingUpdates.length === 0) {
       Alert.alert(
         "No Pending Updates",
-        "All changes have already been approved.",
+        "All changes have already been acknowledged.",
       );
       return;
     }
@@ -199,7 +199,7 @@ export default function UpdatesReportFAB({
             {
               userId: ownerDoc.id,
               message: `Admin made some changes in ${location}.`,
-              status: "To be Approved",
+              status: "To be Acknowledged",
               read: false,
               updateId: u.id,
               createdAt: serverTimestamp(),
@@ -219,7 +219,7 @@ export default function UpdatesReportFAB({
 
       Alert.alert(
         "Changes Submitted",
-        `${pendingUpdates.length} update(s) submitted to the Owner for approval.`,
+        `${pendingUpdates.length} update(s) submitted to the Owner for acknowledgment.`,
         [{ text: "OK", onPress: closeModal }],
       );
     } catch (err) {
@@ -302,8 +302,9 @@ export default function UpdatesReportFAB({
                   title="Building Management"
                   open={buildingOpen}
                   onToggle={() => toggle(setBuildingOpen)}
-                  columns={["Space No.", "Field Changed", "Change"]}
+                  columns={["Building No.", "Space No.", "Field Changed", "Change"]}
                   rows={buildingUpdates.map((u) => [
+                    u.buildingNo ?? "—",
                     u.spaceNo ?? "—",
                     u.module ? (u.fieldChanged ?? u.type ?? "—") : (u.status ?? "—"),
                     u.module
@@ -382,8 +383,8 @@ type AccordionSectionProps = {
   title: string;
   open: boolean;
   onToggle: () => void;
-  columns: [string, string, string];
-  rows: [string, string, string][];
+  columns: string[];
+  rows: string[][];
 };
 
 function AccordionSection({

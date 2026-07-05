@@ -12,6 +12,15 @@
           "color": "#F5C518",
           "defaultChannel": "default"
         }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/android-icon-foreground.png",
+          "imageWidth": 100,
+          "resizeMode": "contain",
+          "backgroundColor": "#0F6E56"
+        }
       ]
     ],
     "version": "1.0.0",
@@ -37,9 +46,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "fe8386dc-027a-402d-9915-3c1f4da22a13"
+        "projectId": "da395cf3-d504-46d4-8386-aeafe1f745f8"
       }
     },
-    "owner": "ceejay27"
+    "owner": "cean27"
   }
 }

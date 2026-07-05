@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "rentwise-owner",
+    "name": "RentWise",
     "slug": "rentwise-owner",
     "scheme": "rentwiseowner",
     "version": "1.0.0",
@@ -50,14 +50,23 @@
           "color": "#F5C518",
           "defaultChannel": "default"
         }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/android-icon-foreground.png",
+          "imageWidth": 100,
+          "resizeMode": "contain",
+          "backgroundColor": "#0C2D6B"
+        }
       ]
     ],
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "97db2331-27c8-419a-af19-5878464120be"
+        "projectId": "df9d5151-9d10-4a39-a9a0-b1f1bce21e68"
       }
     },
-    "owner": "ceejay27"
+    "owner": "cean27"
   }
 }

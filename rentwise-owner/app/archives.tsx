@@ -3,14 +3,16 @@ import {
   View,
   Text,
   FlatList,
+  Pressable,
   TouchableOpacity,
+  Modal,
   ActivityIndicator,
   StyleSheet,
   RefreshControl,
 } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Timestamp } from "firebase/firestore";
 
@@ -18,6 +20,10 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
+import {
+  restoreTenant,
+  deleteArchivedTenant,
+} from "../shared/services/accountServices";
 
 import OwnerSidebar from "./components/OwnerSidebar";
 
@@ -48,6 +54,15 @@ export default function Archives() {
   const [refreshing, setRefreshing] = useState(false);
   const [archives, setArchives] = useState<ArchiveEntry[]>([]);
   const [sidebarVisible, setSidebarVisible] = useState(false);
+
+  const [confirmTarget, setConfirmTarget] = useState<ArchiveEntry | null>(null);
+  const [checkingStall, setCheckingStall] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreError, setRestoreError] = useState("");
+
+  const [deleteTarget, setDeleteTarget] = useState<ArchiveEntry | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -90,6 +105,68 @@ export default function Archives() {
   }, [fetchData]);
 
   useFocusEffect(useCallback(() => { if (!checking) fetchData(); }, [checking, fetchData]));
+
+  const handleRestorePress = async (item: ArchiveEntry) => {
+    setRestoreError("");
+    if (item.stallId) {
+      setCheckingStall(true);
+      try {
+        const stallSnap = await getDoc(doc(db, "stalls", item.stallId));
+        if (stallSnap.exists() && stallSnap.data().status === "occupied") {
+          router.push({
+            pathname: "/tenant-relocation",
+            params: {
+              uid: item.uid,
+              firstName: item.firstName,
+              lastName: item.lastName,
+              username: item.username,
+              buildingNumber: item.buildingNumber,
+              spaceId: item.spaceId,
+              stallId: item.stallId,
+            },
+          } as any);
+          return;
+        }
+      } catch {
+        setRestoreError("Could not check stall availability. Try again.");
+        return;
+      } finally {
+        setCheckingStall(false);
+      }
+    }
+    setConfirmTarget(item);
+  };
+
+  const handleRestore = async () => {
+    if (!confirmTarget) return;
+    setRestoring(true);
+    setRestoreError("");
+    try {
+      await restoreTenant(confirmTarget.uid);
+      setConfirmTarget(null);
+      fetchData();
+    } catch {
+      setRestoreError("Failed to restore. Please try again.");
+    } finally {
+      setRestoring(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await deleteArchivedTenant(deleteTarget.uid);
+      setDeleteTarget(null);
+      fetchData();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : JSON.stringify(err);
+      setDeleteError(msg);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -151,8 +228,31 @@ export default function Archives() {
                 </Text>
                 <Text style={styles.cardDate}>Archived: {formatDate(item.archivedAt)}</Text>
               </View>
-              <View style={styles.archivedBadge}>
-                <Text style={styles.archivedBadgeText}>Archived</Text>
+              <View style={styles.cardActions}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.restoreBtn,
+                    pressed && styles.restoreBtnPressed,
+                  ]}
+                  onPress={() => handleRestorePress(item)}
+                  disabled={checkingStall}
+                >
+                  {checkingStall ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text style={styles.restoreBtnText}>Restore</Text>
+                  )}
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.deleteBtn,
+                    pressed && styles.deleteBtnPressed,
+                  ]}
+                  onPress={() => { setDeleteError(""); setDeleteTarget(item); }}
+                >
+                  <Text style={styles.deleteBtnText}>Delete</Text>
+                </Pressable>
               </View>
             </View>
           )}
@@ -160,6 +260,120 @@ export default function Archives() {
       )}
 
       <OwnerSidebar visible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
+
+      {/* RESTORE CONFIRMATION MODAL */}
+      <Modal
+        visible={!!confirmTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!restoring) setConfirmTarget(null); }}
+      >
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => { if (!restoring) setConfirmTarget(null); }}
+          />
+          {confirmTarget && (
+            <View style={styles.modalCard}>
+              <View style={styles.modalTitleBar}>
+                <Text style={styles.modalTitle}>Restore account?</Text>
+              </View>
+              <View style={styles.modalBody}>
+                <Text style={styles.modalMessage}>
+                  This will restore the tenant's account and they will regain access to the app.
+                </Text>
+                {restoreError ? (
+                  <Text style={styles.modalError}>{restoreError}</Text>
+                ) : null}
+                <View style={styles.modalBtns}>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, styles.modalBtnOutline]}
+                    onPress={() => setConfirmTarget(null)}
+                    activeOpacity={0.7}
+                    disabled={restoring}
+                  >
+                    <Text style={styles.modalBtnOutlineText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.modalBtn,
+                      styles.modalBtnPrimary,
+                      restoring && styles.modalBtnDisabled,
+                    ]}
+                    onPress={handleRestore}
+                    activeOpacity={0.8}
+                    disabled={restoring}
+                  >
+                    {restoring ? (
+                      <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                      <Text style={styles.modalBtnPrimaryText}>Restore</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+        </View>
+      </Modal>
+
+      {/* DELETE CONFIRMATION MODAL */}
+      <Modal
+        visible={!!deleteTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!deleting) setDeleteTarget(null); }}
+      >
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => { if (!deleting) setDeleteTarget(null); }}
+          />
+          {deleteTarget && (
+            <View style={styles.modalCard}>
+              <View style={styles.modalTitleBar}>
+                <Text style={styles.modalTitle}>Permanently delete?</Text>
+              </View>
+              <View style={styles.modalBody}>
+                <Text style={styles.modalMessage}>
+                  This action cannot be undone. The tenant's account and all data will be permanently removed.
+                </Text>
+                {deleteError ? (
+                  <Text style={styles.modalError}>{deleteError}</Text>
+                ) : null}
+                <View style={styles.modalBtns}>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, styles.modalBtnOutline]}
+                    onPress={() => setDeleteTarget(null)}
+                    activeOpacity={0.7}
+                    disabled={deleting}
+                  >
+                    <Text style={styles.modalBtnOutlineText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.modalBtn,
+                      styles.modalBtnDanger,
+                      deleting && styles.modalBtnDisabled,
+                    ]}
+                    onPress={handleDelete}
+                    activeOpacity={0.8}
+                    disabled={deleting}
+                  >
+                    {deleting ? (
+                      <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                      <Text style={styles.modalBtnDangerText}>Delete</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -234,13 +448,147 @@ const styles = StyleSheet.create({
   cardStall: { fontSize: 13, color: "#888780", marginTop: 2 },
   cardDate: { fontSize: 12, color: "#B4B2A9", marginTop: 4 },
 
-  archivedBadge: {
-    backgroundColor: "#FAEEDA",
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    alignSelf: "flex-start",
+  cardActions: {
+    gap: 8,
+    alignItems: "stretch",
   },
-  archivedBadgeText: { fontSize: 12, fontWeight: "500", color: "#BA7517" },
+
+  restoreBtn: {
+    backgroundColor: "#0C2D6B",
+    borderRadius: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    alignItems: "center",
+    transform: [{ scale: 1 }],
+  },
+  restoreBtnPressed: {
+    backgroundColor: "#091f4a",
+    transform: [{ scale: 0.97 }],
+  },
+  restoreBtnText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "500",
+    textAlign: "center",
+  },
+
+  deleteBtn: {
+    backgroundColor: "#FCEBEB",
+    borderRadius: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#F5C2C2",
+    transform: [{ scale: 1 }],
+  },
+  deleteBtnPressed: {
+    backgroundColor: "#F5C2C2",
+    transform: [{ scale: 0.97 }],
+  },
+  deleteBtnText: {
+    color: "#A32D2D",
+    fontSize: 13,
+    fontWeight: "500",
+    textAlign: "center",
+  },
+
+  // ── Confirmation modals ───────────────────────────────────────────────────────
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+
+  modalCard: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
+    width: "100%",
+    overflow: "hidden",
+  },
+
+  modalTitleBar: {
+    backgroundColor: "#E6F1FB",
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+  },
+
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#0C2D6B",
+  },
+
+  modalBody: {
+    padding: 20,
+  },
+
+  modalMessage: {
+    fontSize: 14,
+    color: "#444441",
+    lineHeight: 22,
+    marginBottom: 20,
+  },
+
+  modalError: {
+    fontSize: 13,
+    color: "#A32D2D",
+    marginBottom: 12,
+    textAlign: "center",
+  },
+
+  modalBtns: {
+    flexDirection: "row",
+    gap: 10,
+  },
+
+  modalBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 44,
+  },
+
+  modalBtnOutline: {
+    borderWidth: 1.5,
+    borderColor: "#B5D4F4",
+  },
+
+  modalBtnOutlineText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0C2D6B",
+  },
+
+  modalBtnPrimary: {
+    backgroundColor: "#0C2D6B",
+  },
+
+  modalBtnPrimaryText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#fff",
+  },
+
+  modalBtnDanger: {
+    backgroundColor: "#A32D2D",
+  },
+
+  modalBtnDangerText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#fff",
+  },
+
+  modalBtnDisabled: {
+    opacity: 0.5,
+  },
 });
 

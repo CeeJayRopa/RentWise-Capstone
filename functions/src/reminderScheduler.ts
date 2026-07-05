@@ -6,15 +6,15 @@ import { isPaymentDue, hasReminderBeenSent } from './paymentChecker';
 // ─────────────────────────────────────────────────────────────────────────────
 // PAYMENT REMINDER SCHEDULER
 //
-// Runs daily at 3:00 PM Asia/Manila (Philippine Time).
+// Runs daily at 2:30 PM Asia/Manila (Philippine Time).
 // Firebase Cloud Scheduler resolves the cron in the given timezone natively —
 // no manual UTC offset calculation is needed.
 //
-// Cron: "0 15 * * *"  →  minute=0, hour=15 (3 PM), every day
+// Cron: "30 14 * * *"  →  minute=30, hour=14 (2:30 PM), every day
 // ─────────────────────────────────────────────────────────────────────────────
 export const sendPaymentReminders = onSchedule(
   {
-    schedule: '0 15 * * *',
+    schedule: '30 14 * * *',
     timeZone: 'Asia/Manila',
     maxInstances: 1,
   },

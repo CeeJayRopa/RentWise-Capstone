@@ -233,7 +233,7 @@ export default function TenantManagement() {
                     </Text>
                   ) : null}
                   {item.contactNo ? (
-                    <Text style={styles.cardContact}>{item.contactNo}</Text>
+                    <Text style={styles.cardContact}>+63 {item.contactNo}</Text>
                   ) : null}
                 </View>
 

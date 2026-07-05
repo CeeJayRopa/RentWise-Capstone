@@ -142,11 +142,18 @@ function isSamePeriod(schedule: string, a: Date, b: Date): boolean {
     );
   }
   if (schedule === "weekly") {
-    const startA = new Date(a.getFullYear(), a.getMonth(), a.getDate());
-    startA.setDate(startA.getDate() - startA.getDay());
-    const startB = new Date(b.getFullYear(), b.getMonth(), b.getDate());
-    startB.setDate(startB.getDate() - startB.getDay());
-    return startA.getTime() === startB.getTime();
+    // Must match chargedSinceMonthStart/nextPeriodStart's week boundaries —
+    // 7-day chunks counted from the 1st of the month (due on the 1st, 8th,
+    // 15th, 22nd, 29th), NOT real Sunday-starting calendar weeks. Using
+    // calendar weeks here let the Pay Online button reopen mid-period even
+    // after that period was already paid, whenever the 1st of the month
+    // wasn't a Sunday.
+    const periodIndexOf = (d: Date) => Math.floor((d.getDate() - 1) / 7);
+    return (
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      periodIndexOf(a) === periodIndexOf(b)
+    );
   }
   if (schedule === "semi-monthly") {
     const halfOf = (d: Date) => (d.getDate() <= 15 ? 0 : 1);
@@ -198,14 +205,16 @@ function ReceiptCardContent({ data }: { data: any }) {
         <Text style={styles.receiptFieldLabel}>Payment</Text>
         <Text style={styles.receiptFieldValue}>₱{data.payment}</Text>
       </View>
-      <View style={styles.receiptFieldRow}>
-        <Text style={styles.receiptFieldLabel}>Change</Text>
-        <Text style={styles.receiptFieldValue}>₱{data.change}</Text>
-      </View>
+      {data.change > 0 && (
+        <View style={styles.receiptFieldRow}>
+          <Text style={styles.receiptFieldLabel}>Change</Text>
+          <Text style={styles.receiptFieldValue}>₱{data.change}</Text>
+        </View>
+      )}
       <View style={styles.receiptFieldRow}>
         <Text style={styles.receiptFieldLabel}>Status</Text>
         <Text style={[styles.receiptFieldValue, styles.textApproved]}>
-          {data.status}
+          {data.status === "Approved" ? "PAID" : data.status}
         </Text>
       </View>
     </View>
@@ -380,10 +389,17 @@ export default function Dashboard() {
         stall?.paymentSchedule ?? "monthly",
         new Date(),
       );
-      // Paying more than one period's rent in a single transaction counts as
-      // an advance payment covering that many future periods.
-      const periodsCovered =
-        scheduleRent > 0 ? Math.max(1, Math.round(paymentAmount / scheduleRent)) : 1;
+      // Paying more than one period's worth only counts as "advance" for the
+      // periods beyond what was already owed (arrears + today, per
+      // paymentDue) — catching up on a backlog of unpaid periods is not the
+      // same as paying ahead of schedule, even though both cover >1 period.
+      const owedAmount = Math.max(paymentDue, scheduleRent || 0);
+      const periodsOwed =
+        scheduleRent > 0 ? Math.max(1, Math.round(owedAmount / scheduleRent)) : 1;
+      const advanceAmount = Math.max(0, paymentAmount - owedAmount);
+      const periodsAdvance =
+        scheduleRent > 0 ? Math.round(advanceAmount / scheduleRent) : 0;
+      const periodsCovered = periodsOwed + periodsAdvance;
       const receiptData = {
         receiptNo,
         tenantName,
@@ -401,6 +417,7 @@ export default function Dashboard() {
         amount: paymentAmount,
         rentAmount: scheduleRent,
         periodsCovered,
+        periodsAdvance,
         method: "online",
         status: "pending",
         tenantName,
@@ -592,8 +609,16 @@ export default function Dashboard() {
     if (!d) return false;
     return isSamePeriod(paymentSchedule, d, today);
   });
+  // Semi-monthly tenants shouldn't see Pay Online open on day 1 just
+  // because the first half's charge already started accruing — their due
+  // date is the 15th (for the first half) and the last day of the month
+  // (for the second half). Once the 15th arrives it stays open the rest of
+  // the month so a missed due date can still be caught up on.
+  const beforeSemiMonthlyDueDate =
+    paymentSchedule === "semi-monthly" && today.getDate() < 15;
+
   const hasPaidCurrentPeriod =
-    balance <= 0 || hasPendingThisMonth || hasPaidForCurrentSpecificPeriod;
+    balance <= 0 || hasPendingThisMonth || hasPaidForCurrentSpecificPeriod || beforeSemiMonthlyDueDate;
 
   const history = paymentHistory
     .filter((p) => {
@@ -756,7 +781,7 @@ export default function Dashboard() {
                               : styles.textPending,
                         ]}
                       >
-                        {item.status.toUpperCase()}
+                        {item.status === "approved" ? "PAID" : item.status.toUpperCase()}
                       </Text>
                     </View>
                   </View>
@@ -866,6 +891,13 @@ export default function Dashboard() {
               style={styles.menuItem}
               onPress={() => {
                 setShowMenu(false);
+                if (beforeSemiMonthlyDueDate) {
+                  Alert.alert(
+                    "Nothing Due Yet",
+                    "Your next payment isn't due until the 15th.",
+                  );
+                  return;
+                }
                 if (hasPaidCurrentPeriod) {
                   Alert.alert(
                     "Already Paid",
@@ -1557,10 +1589,16 @@ const styles = StyleSheet.create({
     resizeMode: "contain",
   },
 
+  // Positioned within the visible viewport (not pushed off-canvas) — on real
+  // devices, views placed entirely outside the screen bounds can get skipped
+  // by Android's rendering pipeline as a clipping optimization, which made
+  // captureRef() grab a blank/failed snapshot. opacity: 0 keeps it fully
+  // rendered (so it captures correctly) while staying invisible to the user.
   receiptCaptureOffscreen: {
     position: "absolute",
     top: 0,
-    left: -2000,
+    left: 0,
+    opacity: 0,
   },
 
   receiptCaptureCard: {

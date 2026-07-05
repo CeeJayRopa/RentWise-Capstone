@@ -10,7 +10,6 @@ import {
   ActivityIndicator,
   StyleSheet,
   Alert,
-  Image,
   RefreshControl,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
@@ -37,9 +36,8 @@ import { logDetailedUpdate } from "../shared/services/updatesService";
 import Sidebar from "./components/Sidebar";
 import NotificationBell from "./components/NotificationBell";
 import UpdatesReportFAB from "./components/UpdatesReportFAB";
-import { File, Paths } from "expo-file-system";
 import * as Print from "expo-print";
-import * as Sharing from "expo-sharing";
+import RNBlobUtil from "react-native-blob-util";
 
 type StatusFilter = "All" | "Paid" | "Unpaid" | "Pending";
 
@@ -122,6 +120,17 @@ function chargedSinceMonthStart(dailyRate: number, schedule: string, today: Date
   return total;
 }
 
+// Names the tenant's own billing unit instead of the generic "periods" —
+// reads more naturally, especially "cutoffs" for semi-monthly, which is
+// the term actually used locally for that schedule.
+function periodUnitLabel(schedule: string, count: number): string {
+  const plural = count !== 1;
+  if (schedule === "daily") return plural ? "days" : "day";
+  if (schedule === "weekly") return plural ? "weeks" : "week";
+  if (schedule === "semi-monthly") return plural ? "cutoffs" : "cutoff";
+  return plural ? "months" : "month";
+}
+
 export default function Financials() {
   const insets = useSafeAreaInsets();
 
@@ -129,7 +138,7 @@ export default function Financials() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(false);
-  const [filter, setFilter] = useState<StatusFilter>("Unpaid");
+  const [filter, setFilter] = useState<StatusFilter>("All");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [rows, setRows] = useState<TenantRow[]>([]);
   const [selectedTenant, setSelectedTenant] = useState<TenantRow | null>(null);
@@ -144,7 +153,6 @@ export default function Financials() {
   const [receiptPreviewModal, setReceiptPreviewModal] = useState(false);
   const [onlineConfirmModal, setOnlineConfirmModal] = useState(false);
   const [selectedOnlinePayment, setSelectedOnlinePayment] = useState<any>(null);
-  const [receiptImageViewer, setReceiptImageViewer] = useState(false);
 
   const userDocsRef = useRef<any[]>([]);
   const stallMapRef = useRef<Map<string, StallInfo>>(new Map());
@@ -170,7 +178,6 @@ export default function Financials() {
 
     const year = today.getFullYear();
     const month = today.getMonth();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
 
     const tenantList: TenantRow[] = userDocs.map((d) => {
       const u = d.data();
@@ -179,17 +186,12 @@ export default function Financials() {
       const schedule = stall?.paymentSchedule ?? "monthly";
       const dailyRate = stall?.price ?? 0;
 
-      // Month-scoped balance (matches rentwise-tenant/app/dashboard.tsx):
-      // the whole calendar month's total rent minus everything approved so
-      // far *this month*. Resets every new month.
-      const monthTotalCharge = dailyRate * daysInMonth;
       const paidThisMonth = tenantPayments.reduce((sum, p) => {
         if (p.status !== "approved") return sum;
         const pd = p.date?.toDate?.();
         if (!pd || pd.getFullYear() !== year || pd.getMonth() !== month) return sum;
         return sum + Number(p.amount || 0);
       }, 0);
-      const balance = monthTotalCharge - paidThisMonth;
 
       const chargedToDate = chargedSinceMonthStart(dailyRate, schedule, today);
       const paymentDue = chargedToDate - paidThisMonth;
@@ -198,12 +200,18 @@ export default function Financials() {
       let paymentId: null | string = null;
 
       // A pending online payment always needs admin action (confirm it),
-      // regardless of whether the month's overall balance is settled.
+      // regardless of whether the tenant is otherwise caught up.
       const pendingPayment = tenantPayments.find((p) => p.status === "pending");
       if (pendingPayment) {
         tenantStatus = "online";
         paymentId = pendingPayment.id;
-      } else if (balance <= 0) {
+      } else if (paymentDue <= 0) {
+        // Caught up through today's period — this is exactly what the "Set
+        // to Paid" modal clears (computedRent === paymentDue), so paying
+        // that amount should immediately flip the badge to Paid. The old
+        // check required the tenant to have prepaid the ENTIRE calendar
+        // month, which kept them stuck on Unpaid even right after paying
+        // exactly what was due.
         tenantStatus = "paid";
       }
 
@@ -342,26 +350,20 @@ export default function Financials() {
 
       const { base64 } = await Print.printToFileAsync({ html, base64: true });
 
-      const destFile = new File(Paths.cache, `receipt-${receiptNo}.pdf`);
-      destFile.write(base64!, { encoding: "base64" });
+      const fileName = `receipt-${receiptNo}.pdf`;
+      const cachePath = `${RNBlobUtil.fs.dirs.CacheDir}/${fileName}`;
+      await RNBlobUtil.fs.writeFile(cachePath, base64!, "base64");
+      await RNBlobUtil.MediaCollection.copyToMediaStore(
+        { name: fileName, parentFolder: "", mimeType: "application/pdf" },
+        "Download",
+        cachePath,
+      );
+      RNBlobUtil.fs.unlink(cachePath).catch(() => {});
 
-      const canShare = await Sharing.isAvailableAsync();
-
-      if (canShare) {
-        await Sharing.shareAsync(destFile.uri, {
-          mimeType: "application/pdf",
-          dialogTitle: "Save Receipt",
-          UTI: "com.adobe.pdf",
-        });
-      } else {
-        Alert.alert(
-          "Not Available",
-          "Sharing is not supported on this device.",
-        );
-      }
+      Alert.alert("Downloaded", "Receipt saved to your Downloads folder.");
     } catch (error) {
       console.log("PDF ERROR", error);
-      Alert.alert("Error", "Failed to generate or share the receipt.");
+      Alert.alert("Error", "Failed to generate or download the receipt.");
     }
   };
 
@@ -446,18 +448,37 @@ export default function Financials() {
 
       setSelectedTenant(row);
 
+      // `date` can come back as a Firestore Timestamp, a plain Date, an ISO
+      // string, or (briefly, if read right after a serverTimestamp() write
+      // resolves from local cache) missing entirely — handle all of them
+      // instead of only the Timestamp case, and fall back to "now" rather
+      // than showing a blank field. Kept as an actual Date object (not a
+      // string) — `receiptData` is shared with the cash-payment "Tenant's
+      // Digital Receipt" modal below, which calls `.toDateString()` on it
+      // directly since Modal still renders hidden children in RN.
+      const rawDate = payment.date;
+      const parsedDate =
+        rawDate?.toDate?.() ??
+        (rawDate instanceof Date ? rawDate : null) ??
+        (rawDate ? new Date(rawDate) : null);
+      const resolvedDate =
+        parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate : new Date();
+
       setReceiptData({
+        receiptNo: payment.receiptNo ?? "",
         tenantName: row.name,
         buildingNumber: row.buildingNumber,
         spaceId: row.spaceId,
+        date: resolvedDate,
 
         // IMPORTANT PART
         rentAmount: payment.rentAmount,
         payment: payment.amount,
+        change: payment.change ?? 0,
 
         status: payment.status,
-        receiptImageUrl: payment.receipt ?? null,
         periodsCovered: payment.periodsCovered ?? 1,
+        periodsAdvance: payment.periodsAdvance ?? 0,
       });
 
       setOnlineConfirmModal(true);
@@ -616,33 +637,7 @@ export default function Financials() {
                         ]}
                         onPress={async () => {
                           if (item.status === "online") {
-                            setSelectedTenant(item);
-
-                            if (!item.paymentId) return;
-
-                            const paymentSnap = await getDoc(
-                              doc(db, "payments", item.paymentId),
-                            );
-
-                            if (!paymentSnap.exists()) return;
-
-                            const onlinePayment = paymentSnap.data();
-
-                            setReceiptData({
-                              tenantName: item.name,
-                              buildingNumber: item.buildingNumber,
-                              spaceId: item.spaceId,
-                              rentAmount: computePeriodCharge(
-                                item.rent,
-                                item.paymentSchedule,
-                                new Date(),
-                              ),
-                              payment: onlinePayment.amount ?? 0,
-                              receipt: onlinePayment.receipt,
-                              paymentId: item.paymentId,
-                            });
-
-                            setOnlineConfirmModal(true);
+                            await confirmOnlinePayment(item);
                           } else if (item.status === "unpaid") {
                             setSelectedTenant(item);
                             setCashReceived("");
@@ -763,7 +758,11 @@ export default function Financials() {
                       stallId: selectedTenant.stallId,
                       buildingNumber: selectedTenant.buildingNumber,
                       spaceId: selectedTenant.spaceId,
-                      amount: payment,
+                      // Only the actual rent due counts toward what the tenant
+                      // has paid — any excess cash tendered is handed back as
+                      // change (see `change` below), not credited as an
+                      // advance payment toward future periods.
+                      amount: computedRent,
                       rentAmount: computedRent,
                       cashReceived: payment,
                       change: Math.max(0, payment - computedRent),
@@ -781,6 +780,7 @@ export default function Financials() {
                         tenantName: selectedTenant.name,
                         buildingNumber: selectedTenant.buildingNumber,
                         spaceId: selectedTenant.spaceId,
+                        paymentMethod: "Cash",
                         rentAmount: computedRent,
                         payment,
                         change: Math.max(0, payment - computedRent),
@@ -793,7 +793,7 @@ export default function Financials() {
                       tenantId: selectedTenant.id,
                       tenantName: selectedTenant.name,
                       spaceNo: selectedTenant.spaceId,
-                      paymentAmount: payment,
+                      paymentAmount: computedRent,
                       paymentMethod: "cash",
                       oldValue: "Unpaid",
                       newValue: "Paid",
@@ -928,56 +928,29 @@ export default function Financials() {
           <View style={styles.modalBox}>
             <Text style={styles.modalTitle}>Tenant's Online Receipt</Text>
 
-            <Text>
-              Tenant Name:
-              {receiptData?.tenantName}
+            <Text style={styles.modalRow}>Receipt No: {receiptData?.receiptNo}</Text>
+            <Text style={styles.modalRow}>Tenant Name: {receiptData?.tenantName}</Text>
+            <Text style={styles.modalRow}>Building Number: {receiptData?.buildingNumber}</Text>
+            <Text style={styles.modalRow}>Space ID: {receiptData?.spaceId}</Text>
+            <Text style={styles.modalRow}>
+              Date: {receiptData?.date?.toLocaleDateString?.() ?? ""}
             </Text>
-
-            <Text>
-              Building Number:
-              {receiptData?.buildingNumber}
-            </Text>
-
-            <Text>
-              Space ID:
-              {receiptData?.spaceId}
-            </Text>
-
-            {receiptData?.receiptImageUrl ? (
-              <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => setReceiptImageViewer(true)}
-                style={styles.receiptImageThumb}
-              >
-                <Image
-                  source={{ uri: receiptData.receiptImageUrl }}
-                  style={styles.receiptImageThumbImg}
-                  resizeMode="cover"
-                />
-              </TouchableOpacity>
-            ) : (
-              <View
-                style={{
-                  height: 150,
-                  backgroundColor: "#ddd",
-                  marginVertical: 20,
-                  justifyContent: "center",
-                  alignItems: "center",
-                }}
-              >
-                <Text>Payment Receipt Image</Text>
-              </View>
+            <Text style={styles.modalRow}>Rent Amount: ₱{receiptData?.rentAmount}</Text>
+            <Text style={styles.modalRow}>Payment: ₱{receiptData?.payment}</Text>
+            {receiptData?.change > 0 && (
+              <Text style={styles.modalRow}>Change: ₱{receiptData.change}</Text>
             )}
 
-            <Text>Rent Amount: ₱{receiptData?.rentAmount}</Text>
-
-            <Text>Payment: ₱{receiptData?.payment}</Text>
-
             {receiptData?.periodsCovered > 1 && (
-              <Text>
-                Covers: {receiptData.periodsCovered} periods (today +{" "}
-                {receiptData.periodsCovered - 1} advance)
-              </Text>
+              <View style={styles.coversBox}>
+                <Text style={styles.coversBoxText}>
+                  Covers: {receiptData.periodsCovered}{" "}
+                  {periodUnitLabel(selectedTenant?.paymentSchedule ?? "monthly", receiptData.periodsCovered)}
+                  {receiptData?.periodsAdvance > 0
+                    ? ` (${receiptData.periodsCovered - receiptData.periodsAdvance} due + ${receiptData.periodsAdvance} advance)`
+                    : " (no advance payment)"}
+                </Text>
+              </View>
             )}
 
             <View style={styles.modalButtons}>
@@ -985,7 +958,6 @@ export default function Financials() {
                 style={styles.modalBtnSecondary}
                 onPress={() => {
                   setOnlineConfirmModal(false);
-                  setReceiptImageViewer(false);
                 }}
               >
                 <Text>Cancel</Text>
@@ -1000,6 +972,7 @@ export default function Financials() {
                     doc(db, "payments", selectedTenant.paymentId),
                     {
                       status: "approved",
+                      date: serverTimestamp(),
                       approvedAt: serverTimestamp(),
                       verifiedBy: "admin",
                       paidAt: serverTimestamp(),
@@ -1022,7 +995,6 @@ export default function Financials() {
                   });
 
                   setOnlineConfirmModal(false);
-                  setReceiptImageViewer(false);
                 }}
               >
                 <Text style={styles.modalBtnPrimaryText}>Confirm Payment</Text>
@@ -1030,27 +1002,6 @@ export default function Financials() {
             </View>
           </View>
         </View>
-      </Modal>
-
-      {/* FULL-SCREEN RECEIPT IMAGE VIEWER */}
-      <Modal
-        visible={receiptImageViewer}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setReceiptImageViewer(false)}
-      >
-        <Pressable
-          style={styles.imageViewerBg}
-          onPress={() => setReceiptImageViewer(false)}
-        >
-          {receiptData?.receiptImageUrl && (
-            <Image
-              source={{ uri: receiptData.receiptImageUrl }}
-              style={styles.imageViewerImage}
-              resizeMode="contain"
-            />
-          )}
-        </Pressable>
       </Modal>
 
       {/* TENANT DIGITAL RECEIPT */}
@@ -1333,6 +1284,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#F0F0F0",
   },
+  coversBox: {
+    backgroundColor: "#F0F4FA",
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginTop: 10,
+  },
+  coversBoxText: {
+    fontSize: 12,
+    color: "#1A4DA0",
+    fontWeight: "500",
+  },
   modalLabel: { fontSize: 13, color: "#555555" },
   modalValue: { fontSize: 13, fontWeight: "600", color: "#1A1A1A" },
   modalBodyText: { fontSize: 14, color: "#444444", marginBottom: 16 },
@@ -1370,28 +1333,4 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
   },
 
-  receiptImageThumb: {
-    height: 150,
-    borderRadius: 8,
-    marginVertical: 20,
-    overflow: "hidden",
-    backgroundColor: "#ddd",
-  },
-
-  receiptImageThumbImg: {
-    width: "100%",
-    height: "100%",
-  },
-
-  imageViewerBg: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.9)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  imageViewerImage: {
-    width: "100%",
-    height: "80%",
-  },
 });

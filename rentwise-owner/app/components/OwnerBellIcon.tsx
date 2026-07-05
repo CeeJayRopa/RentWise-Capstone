@@ -1,4 +1,4 @@
-import { View, TouchableOpacity, StyleSheet } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { useEffect, useState } from "react";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { router } from "expo-router";
@@ -41,6 +41,8 @@ export default function OwnerBellIcon() {
     };
   }, []);
 
+  const totalCount = unreadCount + pendingResetCount;
+
   return (
     <TouchableOpacity
       style={styles.btn}
@@ -48,7 +50,11 @@ export default function OwnerBellIcon() {
       activeOpacity={0.7}
     >
       <Ionicons name="notifications-outline" size={24} color="#E6F1FB" />
-      {unreadCount + pendingResetCount > 0 && <View style={styles.dot} />}
+      {totalCount > 0 && (
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>{totalCount > 9 ? "9+" : totalCount}</Text>
+        </View>
+      )}
     </TouchableOpacity>
   );
 }
@@ -59,13 +65,21 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
     justifyContent: "center",
   },
-  dot: {
+  badge: {
     position: "absolute",
-    top: -2,
+    top: -4,
     right: -2,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#EF9F27",
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#D64545",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 3,
+  },
+  badgeText: {
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "700",
   },
 });

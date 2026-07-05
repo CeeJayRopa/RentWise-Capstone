@@ -321,7 +321,7 @@ export default function Building() {
 
         {/* STALL LIST — all spaces live in one card; the card itself scrolls
             internally as more stalls get added over time */}
-        <View style={[styles.listCard, { marginBottom: insets.bottom + 40 }]}>
+        <View style={[styles.listCard, { marginBottom: insets.bottom + 64 }]}>
           {loading ? (
             <View style={styles.listCardCenteredBox}>
               <ActivityIndicator size="large" color="#0C2D6B" />

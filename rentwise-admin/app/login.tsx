@@ -8,11 +8,13 @@ import {
   Pressable,
   Dimensions,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
   Modal,
+  Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useRef, useEffect } from "react";
@@ -23,6 +25,12 @@ import { collection, query, where, getDocs, addDoc, serverTimestamp } from "fire
 import { loginUser } from "../shared/services/auth";
 import { getUserByUsername } from "../shared/services/userServices";
 import { db } from "../shared/services/firestore";
+import {
+  checkLockout,
+  recordFailedAttempt,
+  resetLockout,
+  formatLockoutRemaining,
+} from "../shared/services/loginLockout";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -35,6 +43,8 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [emailFocused, setEmailFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
+  const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
+  const [, setLockoutTick] = useState(0);
 
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [fpEmail, setFpEmail] = useState("");
@@ -50,6 +60,61 @@ export default function Login() {
   const emailAnim = useRef(new Animated.Value(0)).current;
   const passwordAnim = useRef(new Animated.Value(0)).current;
   const buttonAnim = useRef(new Animated.Value(0)).current;
+  const scrollRef = useRef<ScrollView>(null);
+  const emailInputRef = useRef<TextInput>(null);
+  const passwordInputRef = useRef<TextInput>(null);
+  const buttonRef = useRef<View>(null);
+  const scrollViewHeightRef = useRef(SCREEN_HEIGHT);
+
+  // Always scrolls to the SAME fixed target — the sign-in button — no matter
+  // which of the two fields was tapped. Measuring each field individually
+  // used to land in a different spot depending on whether the keyboard was
+  // already open (email vs. password), which looked inconsistent.
+  //
+  // The target is computed against the ScrollView's OWN current height
+  // (which KeyboardAvoidingView actually shrinks once the keyboard is up),
+  // not a guessed pixel constant — a fixed offset would either undershoot
+  // on tall keyboards or overshoot far enough to scroll the entire navy
+  // header off-screen, leaving nothing but the white card filling the
+  // whole screen.
+  function scrollToRevealForm() {
+    setTimeout(() => {
+      const target = buttonRef.current;
+      const scroller = scrollRef.current;
+      if (!target || !scroller) return;
+      target.measureLayout(
+        scroller as unknown as React.ComponentRef<typeof View>,
+        (_x: number, y: number, _w: number, h: number) => {
+          const bottomPadding = 24;
+          const desired = y + h + bottomPadding - scrollViewHeightRef.current;
+          scroller.scrollTo({ y: Math.max(desired, 0), animated: true });
+        },
+        () => {},
+      );
+    }, 100);
+  }
+
+  useEffect(() => {
+    // onFocus fires before the keyboard has finished animating in, so a
+    // fixed delay can land short if the OS is still resizing the window —
+    // scroll again once Android/iOS confirms the keyboard is fully shown.
+    const sub = Keyboard.addListener("keyboardDidShow", scrollToRevealForm);
+    return () => sub.remove();
+  }, []);
+
+  // Ticks every second while locked out so the countdown text stays live,
+  // and clears the lockout automatically once it expires.
+  useEffect(() => {
+    if (!lockoutUntil) return;
+    const interval = setInterval(() => {
+      if (Date.now() >= lockoutUntil) {
+        setLockoutUntil(null);
+      } else {
+        setLockoutTick((t) => t + 1);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [lockoutUntil]);
 
   useEffect(() => {
     Animated.loop(
@@ -89,14 +154,22 @@ export default function Login() {
 
   const handleLogin = async () => {
     setError("");
-    if (!username.trim() || !password.trim()) {
+    const identifier = username.trim();
+    if (!identifier || !password.trim()) {
       setError("Please enter your username and password.");
       return;
     }
+
+    const existingLockout = await checkLockout(identifier);
+    if (existingLockout) {
+      setLockoutUntil(existingLockout);
+      return;
+    }
+
     setLoading(true);
     try {
-      let email = username.trim();
-      const userDoc = await getUserByUsername(username.trim());
+      let email = identifier;
+      const userDoc = await getUserByUsername(identifier);
       if (userDoc) {
         email = userDoc.email;
       } else if (!email.includes("@")) {
@@ -111,9 +184,24 @@ export default function Login() {
         setError("Access denied. Admin account required.");
         return;
       }
+      await resetLockout(identifier);
       router.replace("/welcome");
     } catch {
-      setError("Invalid username or password.");
+      const { lockoutUntil: newLockout, remainingAttempts, lockoutLevel } =
+        await recordFailedAttempt(identifier);
+      if (newLockout) {
+        setLockoutUntil(newLockout);
+        if (lockoutLevel >= 3) {
+          Alert.alert(
+            "Forgot your password?",
+            "It seems that you really forgot the password, please click the forgot password to request for a password reset to the owner.",
+          );
+        }
+      } else {
+        setError(
+          `Invalid username or password. ${remainingAttempts} attempt${remainingAttempts === 1 ? "" : "s"} remaining.`,
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -171,12 +259,14 @@ export default function Login() {
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: "#0C2D6B" }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={{ flexGrow: 1 }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        onLayout={(e) => { scrollViewHeightRef.current = e.nativeEvent.layout.height; }}
       >
         <View style={{ flex: 1, minHeight: SCREEN_HEIGHT }}>
 
@@ -216,6 +306,7 @@ export default function Login() {
               <View style={styles.inputWrapper}>
                 <Mail size={17} color="#2E6FD9" style={styles.leftIcon} />
                 <TextInput
+                  ref={emailInputRef}
                   style={[styles.textInput, emailFocused && styles.textInputFocused]}
                   value={username}
                   onChangeText={(t) => { setUsername(t); setError(""); }}
@@ -224,9 +315,12 @@ export default function Login() {
                   autoCapitalize="none"
                   autoCorrect={false}
                   keyboardType="email-address"
-                  editable={!loading}
-                  onFocus={() => setEmailFocused(true)}
-                  onBlur={() => setEmailFocused(false)}
+                  editable={!loading && !lockoutUntil}
+                  onFocus={() => { setEmailFocused(true); scrollToRevealForm(); }}
+                  onBlur={() => {
+                    setEmailFocused(false);
+                    checkLockout(username.trim()).then((u) => { if (u) setLockoutUntil(u); });
+                  }}
                 />
               </View>
             </Animated.View>
@@ -237,14 +331,15 @@ export default function Login() {
               <View style={styles.inputWrapper}>
                 <Lock size={17} color="#2E6FD9" style={styles.leftIcon} />
                 <TextInput
+                  ref={passwordInputRef}
                   style={[styles.textInput, passwordFocused && styles.textInputFocused]}
                   value={password}
                   onChangeText={(t) => { setPassword(t); setError(""); }}
                   secureTextEntry={!showPassword}
                   placeholder="Enter your password"
                   placeholderTextColor="#B4B2A9"
-                  editable={!loading}
-                  onFocus={() => setPasswordFocused(true)}
+                  editable={!loading && !lockoutUntil}
+                  onFocus={() => { setPasswordFocused(true); scrollToRevealForm(); }}
                   onBlur={() => setPasswordFocused(false)}
                 />
                 <TouchableOpacity
@@ -265,8 +360,15 @@ export default function Login() {
               <Text style={styles.forgotLinkText}>Forgot password?</Text>
             </Pressable>
 
-            {/* Error banner */}
-            {!!error && (
+            {/* Lockout / error banner */}
+            {lockoutUntil ? (
+              <View style={styles.errorBanner}>
+                <AlertCircle size={16} color="#A32D2D" style={{ marginRight: 8 }} />
+                <Text style={styles.errorText}>
+                  Too many failed attempts. Try again in {formatLockoutRemaining(lockoutUntil)}.
+                </Text>
+              </View>
+            ) : !!error && (
               <View style={styles.errorBanner}>
                 <AlertCircle size={16} color="#A32D2D" style={{ marginRight: 8 }} />
                 <Text style={styles.errorText}>{error}</Text>
@@ -274,15 +376,15 @@ export default function Login() {
             )}
 
             {/* Sign in button */}
-            <Animated.View style={[{ marginTop: 28 }, slideIn(buttonAnim)]}>
+            <Animated.View ref={buttonRef} style={[{ marginTop: 28 }, slideIn(buttonAnim)]}>
               <Pressable
                 style={({ pressed }) => [
                   styles.signInBtn,
-                  loading && styles.signInBtnDisabled,
-                  pressed && !loading && { backgroundColor: "#091f4a", transform: [{ scale: 0.98 }] },
+                  (loading || !!lockoutUntil) && styles.signInBtnDisabled,
+                  pressed && !loading && !lockoutUntil && { backgroundColor: "#091f4a", transform: [{ scale: 0.98 }] },
                 ]}
                 onPress={handleLogin}
-                disabled={loading}
+                disabled={loading || !!lockoutUntil}
               >
                 {loading ? (
                   <ActivityIndicator color="#fff" size="small" />
@@ -419,7 +521,8 @@ const styles = StyleSheet.create({
   card: {
     flex: 1,
     backgroundColor: "#FFFFFF",
-    borderRadius: 24,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     marginTop: -16,
     paddingHorizontal: 28,
     paddingTop: 28,

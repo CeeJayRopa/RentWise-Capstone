@@ -10,14 +10,36 @@ import {
   Alert,
   Animated,
   Easing,
+  Modal,
+  FlatList,
 } from "react-native";
 import { router } from "expo-router";
-import { onAuthStateChanged, updatePassword } from "firebase/auth";
+import {
+  onAuthStateChanged,
+  updatePassword,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+} from "firebase/auth";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 
 import { auth } from "../shared/services/auth";
+import { firebaseApp } from "../shared/firebaseConfig";
 import { getUserById, updateUserProfile, isUsernameTaken } from "../shared/services/userServices";
+
+const cloudFunctions = getFunctions(firebaseApp);
+
+const SECURITY_QUESTIONS = [
+  "When did Ka Domeng start?",
+  "What is your mother's maiden name?",
+  "What was the name of your elementary school?",
+  "What city were you born in?",
+  "What was the make of your first vehicle?",
+  "What is your favorite childhood nickname?",
+  "What was the name of the admin of the market?",
+  "What is the name of your best friend growing up?",
+];
 
 export default function OwnerProfile() {
   const insets = useSafeAreaInsets();
@@ -39,7 +61,15 @@ export default function OwnerProfile() {
   const [confirmError, setConfirmError] = useState("");
   const [changingPw, setChangingPw] = useState(false);
 
+  const [secQuestions, setSecQuestions] = useState<[string, string, string]>(["", "", ""]);
+  const [secAnswers, setSecAnswers] = useState<[string, string, string]>(["", "", ""]);
+  const [secCurrentPassword, setSecCurrentPassword] = useState("");
+  const [showSecCurrentPass, setShowSecCurrentPass] = useState(false);
+  const [pickerSlot, setPickerSlot] = useState<0 | 1 | 2 | null>(null);
+  const [savingSecQ, setSavingSecQ] = useState(false);
+
   const toastAnim = useRef(new Animated.Value(0)).current;
+  const toastTranslateY = useRef(new Animated.Value(20)).current;
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
 
@@ -77,10 +107,17 @@ export default function OwnerProfile() {
     setToastMsg(msg);
     setToastVisible(true);
     toastAnim.setValue(0);
+    toastTranslateY.setValue(20);
     Animated.sequence([
-      Animated.timing(toastAnim, { toValue: 1, duration: 250, easing: Easing.out(Easing.ease), useNativeDriver: true }),
-      Animated.delay(1800),
-      Animated.timing(toastAnim, { toValue: 0, duration: 300, easing: Easing.in(Easing.ease), useNativeDriver: true }),
+      Animated.parallel([
+        Animated.timing(toastAnim, { toValue: 1, duration: 450, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+        Animated.timing(toastTranslateY, { toValue: 0, duration: 450, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      ]),
+      Animated.delay(1000),
+      Animated.parallel([
+        Animated.timing(toastAnim, { toValue: 0, duration: 450, easing: Easing.in(Easing.back(1.5)), useNativeDriver: true }),
+        Animated.timing(toastTranslateY, { toValue: -10, duration: 450, easing: Easing.in(Easing.back(1.5)), useNativeDriver: true }),
+      ]),
     ]).start(() => setToastVisible(false));
   };
 
@@ -156,6 +193,14 @@ export default function OwnerProfile() {
     setChangingPw(true);
     try {
       await updatePassword(user, newPassword);
+      try {
+        const syncFn = httpsCallable(cloudFunctions, "ownerSyncRecoveryPassword");
+        await syncFn({ callerUid: user.uid, newPassword });
+      } catch (syncErr) {
+        // Non-fatal: the Auth password change already succeeded. Recovery
+        // will just show the old password until the owner re-syncs it.
+        console.error("Failed to sync recovery password:", syncErr);
+      }
       setNewPassword("");
       setConfirmPassword("");
       showToast("Password updated!");
@@ -167,6 +212,54 @@ export default function OwnerProfile() {
       }
     } finally {
       setChangingPw(false);
+    }
+  };
+
+  const secSlotsFilled =
+    secQuestions.every((q) => !!q) && secAnswers.every((a) => a.trim().length > 0);
+  const secQuestionsDuplicated = new Set(secQuestions).size !== secQuestions.filter(Boolean).length;
+
+  const handleSaveSecurityQuestions = async () => {
+    if (!secSlotsFilled) {
+      Alert.alert("Incomplete", "Please pick all 3 questions and answer each one.");
+      return;
+    }
+    if (secQuestionsDuplicated) {
+      Alert.alert("Duplicate Questions", "Please choose 3 different questions.");
+      return;
+    }
+    if (!secCurrentPassword) {
+      Alert.alert("Current Password Required", "Enter your current password to confirm.");
+      return;
+    }
+
+    const user = auth.currentUser;
+    if (!user || !user.email) return;
+    setSavingSecQ(true);
+    try {
+      // Confirms secCurrentPassword is actually correct before it's ever
+      // stored/returned as the "recovered" password later.
+      await reauthenticateWithCredential(
+        user,
+        EmailAuthProvider.credential(user.email, secCurrentPassword),
+      );
+      const saveFn = httpsCallable(cloudFunctions, "ownerSaveSecurityQuestions");
+      await saveFn({
+        callerUid: user.uid,
+        securityQuestions: secQuestions.map((q, i) => ({ question: q, answer: secAnswers[i] })),
+        currentPassword: secCurrentPassword,
+      });
+      setSecCurrentPassword("");
+      showToast("Security questions saved!");
+    } catch (err: any) {
+      if (err?.code === "auth/invalid-credential" || err?.code === "auth/wrong-password") {
+        Alert.alert("Incorrect Password", "Your current password is incorrect.");
+      } else {
+        console.error(err);
+        Alert.alert("Error", "Failed to save security questions.");
+      }
+    } finally {
+      setSavingSecQ(false);
     }
   };
 
@@ -326,21 +419,120 @@ export default function OwnerProfile() {
             }
           </TouchableOpacity>
         )}
+
+        {/* Divider */}
+        <View style={styles.divider} />
+
+        <Text style={styles.sectionTitle}>Security Questions</Text>
+        <Text style={styles.pwHint}>
+          Set 3 questions so you can recover your password later if you forget it.
+        </Text>
+
+        {[0, 1, 2].map((slot) => (
+          <View key={slot} style={{ width: "100%", marginTop: slot === 0 ? 12 : 0 }}>
+            <Text style={styles.fieldLabel}>Question {slot + 1}</Text>
+            <TouchableOpacity
+              style={[styles.rowField, !isEditing && styles.rowFieldReadOnly, { paddingHorizontal: 14, paddingVertical: 12 }]}
+              onPress={() => isEditing && setPickerSlot(slot as 0 | 1 | 2)}
+              disabled={!isEditing}
+              activeOpacity={0.7}
+            >
+              <Text style={[{ flex: 1, fontSize: 15, color: secQuestions[slot] ? "#0C2D6B" : "#B5D4F4" }]}>
+                {secQuestions[slot] || "Select a question"}
+              </Text>
+              <Ionicons name="chevron-down" size={16} color="#1A4DA0" />
+            </TouchableOpacity>
+
+            <TextInput
+              style={[styles.input, !isEditing && styles.inputReadOnly, { marginTop: 8 }]}
+              value={secAnswers[slot]}
+              onChangeText={(t) => setSecAnswers((prev) => {
+                const next = [...prev] as [string, string, string];
+                next[slot] = t;
+                return next;
+              })}
+              placeholder="Your answer"
+              placeholderTextColor="#B5D4F4"
+              autoCapitalize="none"
+              editable={isEditing}
+            />
+          </View>
+        ))}
+
+        {isEditing && (
+          <>
+            <Text style={styles.fieldLabel}>Current Password</Text>
+            <View style={styles.pwField}>
+              <TextInput
+                style={styles.pwInput}
+                value={secCurrentPassword}
+                onChangeText={setSecCurrentPassword}
+                secureTextEntry={!showSecCurrentPass}
+                placeholder="Confirm it's you"
+                placeholderTextColor="#B5D4F4"
+                autoCapitalize="none"
+              />
+              <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowSecCurrentPass((v) => !v)} activeOpacity={0.7}>
+                <Ionicons name={showSecCurrentPass ? "eye-outline" : "eye-off-outline"} size={18} color="#1A4DA0" />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.updatePwBtn,
+                (savingSecQ || !secSlotsFilled || !secCurrentPassword) && styles.btnDisabled,
+              ]}
+              onPress={handleSaveSecurityQuestions}
+              disabled={savingSecQ || !secSlotsFilled || !secCurrentPassword}
+              activeOpacity={0.8}
+            >
+              {savingSecQ
+                ? <ActivityIndicator color="#FFFFFF" size="small" />
+                : <Text style={styles.saveBtnText}>Save Security Questions</Text>
+              }
+            </TouchableOpacity>
+          </>
+        )}
       </ScrollView>
+
+      {/* Security question picker */}
+      <Modal visible={pickerSlot !== null} transparent animationType="fade" onRequestClose={() => setPickerSlot(null)}>
+        <TouchableOpacity style={styles.pickerOverlay} activeOpacity={1} onPress={() => setPickerSlot(null)}>
+          <View style={styles.pickerCard} onStartShouldSetResponder={() => true}>
+            <Text style={styles.pickerTitle}>Choose a question</Text>
+            <FlatList
+              data={SECURITY_QUESTIONS.filter(
+                (q) => !secQuestions.includes(q) || q === secQuestions[pickerSlot ?? 0],
+              )}
+              keyExtractor={(item) => item}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.pickerItem}
+                  onPress={() => {
+                    if (pickerSlot === null) return;
+                    setSecQuestions((prev) => {
+                      const next = [...prev] as [string, string, string];
+                      next[pickerSlot] = item;
+                      return next;
+                    });
+                    setPickerSlot(null);
+                  }}
+                >
+                  <Text style={styles.pickerItemText}>{item}</Text>
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Toast */}
       {toastVisible && (
-        <Animated.View
-          style={[
-            styles.toast,
-            {
-              opacity: toastAnim,
-              transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }],
-            },
-          ]}
-        >
-          <Ionicons name="checkmark-circle-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
-          <Text style={styles.toastText}>{toastMsg}</Text>
+        <Animated.View style={[styles.overlay, { opacity: toastAnim }]}>
+          <Animated.View style={[styles.toast, { transform: [{ translateY: toastTranslateY }] }]}>
+            <Ionicons name="checkmark-circle" size={22} color="#7AAEF0" />
+            <Text style={styles.toastText}>{toastMsg}</Text>
+          </Animated.View>
         </Animated.View>
       )}
     </View>
@@ -497,25 +689,54 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
 
-  toast: {
+  pickerOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(12,45,107,0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  pickerCard: {
+    width: "100%",
+    maxHeight: "70%",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    padding: 16,
+  },
+  pickerTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#0C2D6B",
+    marginBottom: 10,
+  },
+  pickerItem: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF2FA",
+  },
+  pickerItemText: {
+    fontSize: 14,
+    color: "#0C2D6B",
+  },
+
+  overlay: {
     position: "absolute",
-    bottom: 40,
-    alignSelf: "center",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  toast: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#0C2D6B",
-    borderRadius: 24,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    elevation: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
+    gap: 8,
   },
   toastText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "600",
+    color: "#B5D4F4",
+    fontSize: 18,
+    fontWeight: "500",
   },
 });

@@ -27,23 +27,45 @@ import OwnerSidebar from "./components/OwnerSidebar";
 
 type ReportDoc = {
   id: string;
-  category: "building" | "finance" | "archive";
-  status: string;
+  // Legacy schema
+  category?: "building" | "finance" | "archive";
+  status?: string;
+  change?: string;
+  // New schema
+  module?: string;
+  type?: string;
+  fieldChanged?: string;
+  oldValue?: string;
+  newValue?: string;
+  // Common
   spaceNo?: string;
   tenantName?: string;
-  change?: string;
   approvalStatus?: string;
   createdAt?: any;
 };
 
+function moduleToCategory(module: string): "building" | "finance" | "archive" {
+  if (module === "Building Management") return "building";
+  if (module === "Financials") return "finance";
+  return "archive";
+}
+
+function resolveCategory(r: ReportDoc): "building" | "finance" | "archive" {
+  if (r.module) return moduleToCategory(r.module);
+  return r.category ?? "archive";
+}
+
 function categoryLabel(cat: string): string {
-  if (cat === "building") return "Building Management Update Approved";
-  if (cat === "finance") return "Financial Change Approved";
-  return "Account Archive Update Approved";
+  if (cat === "building") return "Building Management Update Acknowledged";
+  if (cat === "finance") return "Financial Change Acknowledged";
+  return "Account Archive Update Acknowledged";
 }
 
 function reportDesc(r: ReportDoc): string {
-  const detail = r.change ?? r.status ?? null;
+  const detail =
+    r.oldValue && r.newValue
+      ? `${r.oldValue} → ${r.newValue}`
+      : (r.change ?? r.status ?? r.fieldChanged ?? r.type ?? null);
   const detailStr = detail && detail !== 'undefined' ? detail : '—';
   if (r.spaceNo) return `Space ${r.spaceNo} — ${detailStr}`;
   if (r.tenantName) return `${r.tenantName} — ${detailStr}`;
@@ -82,7 +104,7 @@ function buildHtml(groups: { date: string; items: ReportDoc[] }[]): string {
       (g) => `
       <div class="group">
         <h3>${g.date}</h3>
-        ${g.items.map((r) => `<div class="item"><strong>${categoryLabel(r.category)}</strong><p>${reportDesc(r)}</p></div>`).join("")}
+        ${g.items.map((r) => `<div class="item"><strong>${categoryLabel(resolveCategory(r))}</strong><p>${reportDesc(r)}</p></div>`).join("")}
       </div>`,
     )
     .join("");
@@ -178,7 +200,7 @@ export default function DailyReports() {
     try {
       const filtered = reports.filter((r) => isSameDay(r, selectedDate));
       if (filtered.length === 0) {
-        Alert.alert("No Reports", `No approved reports found for ${formatDate({ toDate: () => selectedDate })}.`);
+        Alert.alert("No Reports", `No acknowledged reports found for ${formatDate({ toDate: () => selectedDate })}.`);
         return;
       }
 
@@ -285,13 +307,23 @@ export default function DailyReports() {
             <View>
               <Text style={styles.groupDate}>{group.date}</Text>
               {group.items.map((r) => (
-                <View key={r.id} style={styles.reportCard}>
+                <TouchableOpacity
+                  key={r.id}
+                  style={styles.reportCard}
+                  activeOpacity={0.7}
+                  onPress={() =>
+                    router.push({
+                      pathname: "/update-confirmation",
+                      params: { id: r.id },
+                    } as any)
+                  }
+                >
                   <View style={styles.cardIcon}>
                     <Ionicons
                       name={
-                        r.category === "archive"
+                        resolveCategory(r) === "archive"
                           ? "archive-outline"
-                          : r.category === "finance"
+                          : resolveCategory(r) === "finance"
                           ? "cash-outline"
                           : "document-text-outline"
                       }
@@ -300,10 +332,11 @@ export default function DailyReports() {
                     />
                   </View>
                   <View style={styles.cardText}>
-                    <Text style={styles.reportTitle}>{categoryLabel(r.category)}</Text>
+                    <Text style={styles.reportTitle}>{categoryLabel(resolveCategory(r))}</Text>
                     <Text style={styles.reportDesc}>{reportDesc(r)}</Text>
                   </View>
-                </View>
+                  <Ionicons name="chevron-forward" size={18} color="#B5D4F4" />
+                </TouchableOpacity>
               ))}
             </View>
           )}

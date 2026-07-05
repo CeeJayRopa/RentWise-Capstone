@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Stack } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
+import * as SplashScreen from "expo-splash-screen";
 
 import { auth } from "../shared/services/auth";
 import {
@@ -9,6 +10,13 @@ import {
 } from "../shared/services/pushNotifications";
 
 configurePushNotifications();
+
+// Keeps the native (navy) splash on screen until the JS entrance screen has
+// actually painted its own content — without this, the native splash hides
+// itself as soon as the root view mounts, exposing a brief flash of the
+// app's default white background before the entrance screen's navy
+// background and logo render underneath it.
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
   useEffect(() => {

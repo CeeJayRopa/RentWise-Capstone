@@ -27,6 +27,7 @@ import { db } from "../shared/services/firestore";
 import { getPaidTenantUserIds } from "../shared/services/financeServices";
 import Sidebar from "./components/Sidebar";
 import NotificationBell from "./components/NotificationBell";
+import UpdatesReportFAB from "./components/UpdatesReportFAB";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const CHART_WIDTH = SCREEN_WIDTH - 68;
@@ -44,7 +45,8 @@ type Stats = {
   unoccupiedCount: number;
   paidCount: number;
   unpaidCount: number;
-  collectedAmount: number;
+  collectedToday: number;
+  collectedThisMonth: number;
 };
 
 const ZERO_STATS: Stats = {
@@ -53,7 +55,8 @@ const ZERO_STATS: Stats = {
   unoccupiedCount: 0,
   paidCount: 0,
   unpaidCount: 0,
-  collectedAmount: 0,
+  collectedToday: 0,
+  collectedThisMonth: 0,
 };
 
 function formatCurrency(amount: number): string {
@@ -95,16 +98,21 @@ export default function Dashboard() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await fetchData();
+    // Pull-to-refresh already shows the native spinner via `refreshing` —
+    // skip the full-screen loader so the existing content stays visible
+    // instead of both spinners showing at once.
+    await fetchData(false);
     setRefreshing(false);
   };
 
-  const fetchData = async () => {
-    setLoading(true);
+  const fetchData = async (showFullLoader = true) => {
+    if (showFullLoader) setLoading(true);
     try {
       const now = new Date();
-      const startTS = Timestamp.fromDate(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0));
-      const endTS = Timestamp.fromDate(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999));
+      const todayStartTS = Timestamp.fromDate(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0));
+      const todayEndTS = Timestamp.fromDate(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999));
+      const monthStartTS = Timestamp.fromDate(new Date(now.getFullYear(), now.getMonth(), 1));
+      const monthEndTS = Timestamp.fromDate(new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999));
 
       const [usersSnap, stallsSnap, paymentsSnap] = await Promise.all([
         getDocs(query(collection(db, "users"), where("role", "==", "tenant"))),
@@ -116,19 +124,27 @@ export default function Dashboard() {
       const occupiedCount = stallsSnap.docs.filter((d) => d.data().status === "occupied").length;
       const unoccupiedCount = stallsSnap.docs.filter((d) => d.data().status === "unoccupied").length;
 
-      const startMs = startTS.toMillis();
-      const endMs = endTS.toMillis();
+      const todayStartMs = todayStartTS.toMillis();
+      const todayEndMs = todayEndTS.toMillis();
+      const monthStartMs = monthStartTS.toMillis();
+      const monthEndMs = monthEndTS.toMillis();
+
+      const todayPayments = paymentsSnap.docs.filter((d) => {
+        const date = d.data().date as Timestamp | undefined;
+        if (!date?.toMillis) return false;
+        return date.toMillis() >= todayStartMs && date.toMillis() <= todayEndMs;
+      });
       const monthPayments = paymentsSnap.docs.filter((d) => {
         const date = d.data().date as Timestamp | undefined;
         if (!date?.toMillis) return false;
-        return date.toMillis() >= startMs && date.toMillis() <= endMs;
+        return date.toMillis() >= monthStartMs && date.toMillis() <= monthEndMs;
       });
 
       const paidUids = getPaidTenantUserIds(monthPayments);
-      const collectedAmount = monthPayments.reduce(
-        (sum, d) => sum + ((d.data().amount ?? d.data().paymentAmount ?? 0) as number),
-        0,
-      );
+      const sumAmounts = (docs: typeof paymentsSnap.docs) =>
+        docs.reduce((sum, d) => sum + ((d.data().amount ?? d.data().paymentAmount ?? 0) as number), 0);
+      const collectedToday = sumAmounts(todayPayments);
+      const collectedThisMonth = sumAmounts(monthPayments);
       const paidCount = activeTenants.filter((d) => paidUids.has(d.id)).length;
 
       setStats({
@@ -137,7 +153,8 @@ export default function Dashboard() {
         unoccupiedCount,
         paidCount,
         unpaidCount: activeTenants.length - paidCount,
-        collectedAmount,
+        collectedToday,
+        collectedThisMonth,
       });
     } catch (err) {
       console.error("DASHBOARD FETCH ERROR:", err);
@@ -185,7 +202,7 @@ export default function Dashboard() {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 10 }]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
@@ -248,13 +265,28 @@ export default function Dashboard() {
             <View style={styles.collectedCard}>
               <View style={styles.collectedLeft}>
                 <Wallet size={22} color="#0C2D6B" style={{ marginRight: 10 }} />
-                <Text style={styles.collectedLabel}>Total collected</Text>
+                <Text style={styles.collectedLabel}>Total payment collected</Text>
               </View>
-              <Text style={styles.collectedAmount}>{formatCurrency(stats.collectedAmount)}</Text>
+
+              <View style={styles.collectedRow}>
+                <Text style={styles.collectedRowLabel}>Today</Text>
+                <Text style={styles.collectedRowAmount}>{formatCurrency(stats.collectedToday)}</Text>
+              </View>
+
+              <View style={styles.collectedDivider} />
+
+              <View style={styles.collectedRow}>
+                <Text style={styles.collectedRowLabel}>This month</Text>
+                <Text style={[styles.collectedRowAmount, styles.collectedRowAmountEmphasis]}>
+                  {formatCurrency(stats.collectedThisMonth)}
+                </Text>
+              </View>
             </View>
           </>
         )}
       </ScrollView>
+
+      <UpdatesReportFAB disabled={sidebarVisible} />
 
       <Sidebar visible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
     </View>
@@ -333,14 +365,24 @@ const styles = StyleSheet.create({
     padding: 18,
     borderWidth: 0.5,
     borderColor: "#B5D4F4",
+    marginBottom: 32,
+  },
+  collectedLeft: { flexDirection: "row", alignItems: "center", marginBottom: 14 },
+  collectedLabel: { fontSize: 13, color: "#1A4DA0", fontWeight: "500" },
+  collectedRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 32,
+    paddingVertical: 4,
   },
-  collectedLeft: { flexDirection: "row", alignItems: "center" },
-  collectedLabel: { fontSize: 13, color: "#1A4DA0" },
-  collectedAmount: { fontSize: 22, fontWeight: "500", color: "#0C2D6B" },
+  collectedRowLabel: { fontSize: 13, color: "#5F5E5A" },
+  collectedRowAmount: { fontSize: 16, fontWeight: "500", color: "#0C2D6B" },
+  collectedRowAmountEmphasis: { fontSize: 22 },
+  collectedDivider: {
+    height: 0.5,
+    backgroundColor: "#B5D4F4",
+    marginVertical: 8,
+  },
 
   noData: { fontSize: 14, color: "#888780", paddingVertical: 40 },
 });

@@ -22,10 +22,10 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
-import { Colors } from "../shared/constants/color";
 
 type UpdateDoc = {
   id: string;
@@ -75,7 +75,7 @@ function formatDate(ts: any): string {
 
 async function markLinkedNotifications(
   updateId: string,
-  status: "Approved" | "Rejected",
+  status: "Acknowledged" | "Rejected",
 ) {
   const snap = await getDocs(
     query(collection(db, "notifications"), where("updateId", "==", updateId)),
@@ -117,13 +117,13 @@ export default function UpdateConfirmation() {
       await updateDoc(doc(db, "updates", update.id), {
         approvalStatus: "approved",
       });
-      await markLinkedNotifications(update.id, "Approved");
+      await markLinkedNotifications(update.id, "Acknowledged");
       if (update.changedBy) {
         const label =
           update.type ?? update.module ?? categoryLabel(update.category ?? "archive");
         await addDoc(collection(db, "notifications"), {
           userId: update.changedBy,
-          message: `Your "${label}" update was approved by the owner.`,
+          message: `Your "${label}" update was acknowledged by the owner.`,
           read: false,
           createdAt: serverTimestamp(),
         });
@@ -139,7 +139,7 @@ export default function UpdateConfirmation() {
         date: serverTimestamp(),
         createdAt: serverTimestamp(),
       });
-      Alert.alert("Approved", "Update has been approved.", [
+      Alert.alert("Acknowledged", "Update has been acknowledged.", [
         { text: "OK", onPress: () => router.back() },
       ]);
     } catch (err) {
@@ -153,7 +153,7 @@ export default function UpdateConfirmation() {
   if (loading) {
     return (
       <View style={styles.fullCenter}>
-        <ActivityIndicator color={Colors.primary} size="large" />
+        <ActivityIndicator color="#0C2D6B" size="large" />
       </View>
     );
   }
@@ -219,16 +219,21 @@ export default function UpdateConfirmation() {
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
         <TouchableOpacity
           onPress={() => router.back()}
           style={styles.backBtn}
           activeOpacity={0.7}
         >
-          <Text style={styles.backArrow}>◄</Text>
+          <Ionicons name="arrow-back" size={22} color="#E6F1FB" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>RentWise</Text>
         <View style={styles.backBtn} />
+      </View>
+
+      {/* Sub-header */}
+      <View style={styles.subHeader}>
+        <Text style={styles.subHeaderText}>Update Report</Text>
       </View>
 
       <ScrollView
@@ -237,14 +242,12 @@ export default function UpdateConfirmation() {
           { paddingBottom: insets.bottom + 32 },
         ]}
       >
-        <Text style={styles.pageTitle}>Update Report</Text>
-
         <View style={styles.card}>
           <View style={styles.cardHeaderRow}>
             <Text style={styles.cardHeader}>{updateTitle}</Text>
             {update.approvalStatus === "approved" && (
               <View style={[styles.statusChip, styles.chipApproved]}>
-                <Text style={styles.chipText}>Approved</Text>
+                <Text style={styles.chipText}>Acknowledged</Text>
               </View>
             )}
             {update.approvalStatus === "rejected" && (
@@ -280,7 +283,7 @@ export default function UpdateConfirmation() {
               {saving ? (
                 <ActivityIndicator color="#FFFFFF" size="small" />
               ) : (
-                <Text style={styles.actionBtnText}>Approve</Text>
+                <Text style={styles.actionBtnText}>Acknowledge</Text>
               )}
             </TouchableOpacity>
           </View>
@@ -301,43 +304,50 @@ export default function UpdateConfirmation() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: Colors.background },
+  screen: { flex: 1, backgroundColor: "#F0F4FA" },
   fullCenter: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: Colors.background,
+    backgroundColor: "#F0F4FA",
   },
   header: {
-    backgroundColor: "#1A1A1A",
+    backgroundColor: "#0C2D6B",
+    paddingHorizontal: 20,
     paddingBottom: 14,
-    paddingHorizontal: 16,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
   },
-  backBtn: { width: 36 },
-  backArrow: { fontSize: 18, color: "#FFFFFF", fontWeight: "bold" },
-  headerTitle: { fontSize: 20, fontWeight: "700", color: "#FFFFFF" },
+  backBtn: { width: 36, alignItems: "center", justifyContent: "center" },
+  headerTitle: {
+    flex: 1,
+    textAlign: "center",
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "500",
+  },
 
-  content: { padding: 16 },
-  pageTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: Colors.textPrimary,
-    marginBottom: 16,
+  subHeader: {
+    backgroundColor: "#1A4DA0",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
   },
+  subHeaderText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "500",
+    textAlign: "center",
+  },
+
+  content: { padding: 16, paddingTop: 20 },
 
   card: {
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
+    backgroundColor: "#fff",
+    borderRadius: 14,
     padding: 16,
     marginBottom: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.07,
-    shadowRadius: 6,
-    elevation: 3,
+    borderWidth: 0.5,
+    borderColor: "#B5D4F4",
   },
   cardHeaderRow: {
     flexDirection: "row",
@@ -348,8 +358,8 @@ const styles = StyleSheet.create({
   },
   cardHeader: {
     fontSize: 15,
-    fontWeight: "700",
-    color: Colors.primary,
+    fontWeight: "600",
+    color: "#0C2D6B",
     flex: 1,
   },
   statusChip: {
@@ -357,9 +367,9 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 10,
   },
-  chipApproved: { backgroundColor: "#D4EDDA" },
-  chipRejected: { backgroundColor: "#F8D7DA" },
-  chipText: { fontSize: 11, fontWeight: "700", color: "#1A1A1A" },
+  chipApproved: { backgroundColor: "#E1F5EE" },
+  chipRejected: { backgroundColor: "#FCEBEB" },
+  chipText: { fontSize: 11, fontWeight: "700", color: "#0C2D6B" },
 
   row: {
     flexDirection: "row",
@@ -369,18 +379,18 @@ const styles = StyleSheet.create({
   },
   rowLabel: {
     fontSize: 13,
-    color: Colors.textSecondary,
+    color: "#888780",
     fontWeight: "500",
     flex: 1,
   },
   rowValue: {
     fontSize: 13,
-    color: Colors.textPrimary,
+    color: "#0C2D6B",
     fontWeight: "600",
     flex: 2,
     textAlign: "right",
   },
-  divider: { height: 1, backgroundColor: Colors.border },
+  divider: { height: 1, backgroundColor: "#E6F1FB" },
 
   actionRow: {
     flexDirection: "row",
@@ -395,24 +405,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     minHeight: 48,
   },
-  approveBtn: { backgroundColor: Colors.success },
-  actionBtnText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
+  approveBtn: { backgroundColor: "#0C2D6B" },
+  actionBtnText: { color: "#FFFFFF", fontSize: 15, fontWeight: "600" },
 
   backBtnBottom: {
-    backgroundColor: Colors.surface,
+    backgroundColor: "#fff",
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: "center",
     borderWidth: 1.5,
-    borderColor: Colors.border,
+    borderColor: "#B5D4F4",
   },
   backBtnBottomText: {
-    color: Colors.textSecondary,
+    color: "#0C2D6B",
     fontSize: 15,
-    fontWeight: "700",
+    fontWeight: "600",
   },
 
   btnDisabled: { opacity: 0.5 },
-  errorText: { fontSize: 16, color: Colors.textSecondary, marginBottom: 12 },
-  backLink: { fontSize: 14, color: Colors.primary, fontWeight: "600" },
+  errorText: { fontSize: 16, color: "#888780", marginBottom: 12 },
+  backLink: { fontSize: 14, color: "#2E6FD9", fontWeight: "600" },
 });

@@ -7,6 +7,7 @@ import {
   Pressable,
   ActivityIndicator,
   Animated,
+  Easing,
   StyleSheet,
   Alert,
   ScrollView,
@@ -35,6 +36,7 @@ export default function AdminProfile() {
 
   const [focusedField, setFocusedField] = useState<string | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const toastTranslateY = useRef(new Animated.Value(20)).current;
   const originalRef = useRef({ firstName: "", lastName: "", contactNo: "" });
 
   useEffect(() => {
@@ -49,10 +51,17 @@ export default function AdminProfile() {
   useEffect(() => {
     if (!saved) return;
     fadeAnim.setValue(0);
+    toastTranslateY.setValue(20);
     Animated.sequence([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
-      Animated.delay(1800),
-      Animated.timing(fadeAnim, { toValue: 0, duration: 250, useNativeDriver: true }),
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 1, duration: 450, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+        Animated.timing(toastTranslateY, { toValue: 0, duration: 450, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      ]),
+      Animated.delay(1000),
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 0, duration: 450, easing: Easing.in(Easing.back(1.5)), useNativeDriver: true }),
+        Animated.timing(toastTranslateY, { toValue: -10, duration: 450, easing: Easing.in(Easing.back(1.5)), useNativeDriver: true }),
+      ]),
     ]).start(() => setSaved(false));
   }, [saved]);
 
@@ -228,9 +237,11 @@ export default function AdminProfile() {
 
       {/* SUCCESS TOAST */}
       {saved && (
-        <Animated.View style={[styles.toast, { opacity: fadeAnim }]}>
-          <Ionicons name="checkmark-circle" size={22} color="#B5D4F4" />
-          <Text style={styles.toastText}>Profile updated.</Text>
+        <Animated.View style={[styles.overlay, { opacity: fadeAnim }]}>
+          <Animated.View style={[styles.toast, { transform: [{ translateY: toastTranslateY }] }]}>
+            <Ionicons name="checkmark-circle" size={22} color="#7AAEF0" />
+            <Text style={styles.toastText}>Profile Updated</Text>
+          </Animated.View>
         </Animated.View>
       )}
 
@@ -403,23 +414,26 @@ const styles = StyleSheet.create({
 
   // ── Toast ─────────────────────────────────────────────────────────────────────
 
-  toast: {
+  overlay: {
     position: "absolute",
-    bottom: 40,
-    left: 20,
-    right: 20,
-    backgroundColor: "#0C2D6B",
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 18,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  toast: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: 8,
   },
 
   toastText: {
-    color: "#fff",
-    fontSize: 15,
+    color: "#B5D4F4",
+    fontSize: 18,
     fontWeight: "500",
   },
 });

@@ -8,6 +8,7 @@ import {
   StyleSheet,
   TextInput,
   RefreshControl,
+  Modal,
 } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
@@ -28,6 +29,18 @@ import OwnerSidebar from "./components/OwnerSidebar";
 type StatusFilter = "All" | "Paid" | "Unpaid";
 type DateFilter = "All" | "Daily" | "Weekly" | "Semi-Monthly" | "Monthly";
 
+type ReceiptInfo = {
+  receiptNo: string;
+  tenantName: string;
+  buildingNumber: string;
+  spaceId: string;
+  paymentMethod: string;
+  date: Timestamp | null;
+  rentAmount: number;
+  payment: number;
+  change: number;
+};
+
 type PaymentRow = {
   id: string;
   tenantName: string;
@@ -36,6 +49,7 @@ type PaymentRow = {
   amount: number;
   status: "paid" | "unpaid";
   date: Timestamp | null;
+  receipt: ReceiptInfo | null;
 };
 
 function getDateRangeForSchedule(schedule: string): { start: Date; end: Date } {
@@ -88,11 +102,12 @@ export default function Financials() {
   const [refreshing, setRefreshing] = useState(false);
   const [rows, setRows] = useState<PaymentRow[]>([]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
-  const [dateFilter, setDateFilter] = useState<DateFilter>("Monthly");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("All");
   const [search, setSearch] = useState("");
   const [showPeriodDropdown, setShowPeriodDropdown] = useState(false);
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(false);
+  const [viewingReceipt, setViewingReceipt] = useState<ReceiptInfo | null>(null);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -162,6 +177,8 @@ export default function Financials() {
 
         if (paidUids.has(uid)) return;
         paidUids.add(uid);
+        const rentAmount = (data.rentAmount ?? data.amount ?? data.paymentAmount ?? 0) as number;
+        const paymentAmt = (data.cashReceived ?? data.amount ?? data.paymentAmount ?? 0) as number;
         result.push({
           id: d.id,
           tenantName: tenant.name,
@@ -170,6 +187,17 @@ export default function Financials() {
           amount: (data.amount ?? data.paymentAmount ?? 0) as number,
           status: "paid",
           date,
+          receipt: {
+            receiptNo: data.receiptNo ?? d.id,
+            tenantName: tenant.name,
+            buildingNumber: stall?.buildingNumber ?? "—",
+            spaceId: stall?.spaceId ?? "—",
+            paymentMethod: data.method === "cash" ? "Cash" : (data.paymentMethod ?? "Online"),
+            date,
+            rentAmount,
+            payment: paymentAmt,
+            change: (data.change ?? 0) as number,
+          },
         });
       });
 
@@ -187,6 +215,7 @@ export default function Financials() {
           amount: 0,
           status: "unpaid",
           date: null,
+          receipt: null,
         });
       });
 
@@ -345,22 +374,93 @@ export default function Financials() {
                     Building {item.buildingNumber} {"·"} {item.spaceId}
                   </Text>
                 </View>
-                <View style={[
-                  styles.badge,
-                  item.status === "paid" ? styles.badgePaid : styles.badgeUnpaid,
-                ]}>
-                  <Text style={[
-                    styles.badgeText,
-                    item.status === "paid" ? styles.badgePaidText : styles.badgeUnpaidText,
+                <View style={styles.cardRight}>
+                  {item.status === "paid" && item.receipt && (
+                    <TouchableOpacity
+                      style={styles.receiptBtn}
+                      onPress={() => setViewingReceipt(item.receipt)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="receipt-outline" size={13} color="#1A4DA0" style={{ marginRight: 4 }} />
+                      <Text style={styles.receiptBtnText}>Receipt</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  <View style={[
+                    styles.badge,
+                    item.status === "paid" ? styles.badgePaid : styles.badgeUnpaid,
                   ]}>
-                    {item.status === "paid" ? "Paid" : "Unpaid"}
-                  </Text>
+                    <Text style={[
+                      styles.badgeText,
+                      item.status === "paid" ? styles.badgePaidText : styles.badgeUnpaidText,
+                    ]}>
+                      {item.status === "paid" ? "Paid" : "Unpaid"}
+                    </Text>
+                  </View>
                 </View>
               </View>
             )}
           />
         )}
       </View>
+
+      {/* Receipt modal */}
+      <Modal visible={!!viewingReceipt} transparent animationType="fade" onRequestClose={() => setViewingReceipt(null)}>
+        <View style={styles.modalBg}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Payment Receipt</Text>
+
+            <View style={styles.modalRow}>
+              <Text style={styles.modalLabel}>Receipt No</Text>
+              <Text style={styles.modalValue}>{viewingReceipt?.receiptNo}</Text>
+            </View>
+            <View style={styles.modalRow}>
+              <Text style={styles.modalLabel}>Tenant Name</Text>
+              <Text style={styles.modalValue}>{viewingReceipt?.tenantName}</Text>
+            </View>
+            <View style={styles.modalRow}>
+              <Text style={styles.modalLabel}>Building No</Text>
+              <Text style={styles.modalValue}>{viewingReceipt?.buildingNumber}</Text>
+            </View>
+            <View style={styles.modalRow}>
+              <Text style={styles.modalLabel}>Space ID</Text>
+              <Text style={styles.modalValue}>{viewingReceipt?.spaceId}</Text>
+            </View>
+            <View style={styles.modalRow}>
+              <Text style={styles.modalLabel}>Payment Method</Text>
+              <Text style={styles.modalValue}>{viewingReceipt?.paymentMethod}</Text>
+            </View>
+            <View style={styles.modalRow}>
+              <Text style={styles.modalLabel}>Date</Text>
+              <Text style={styles.modalValue}>
+                {viewingReceipt?.date?.toDate?.().toLocaleDateString() ?? ""}
+              </Text>
+            </View>
+            <View style={styles.modalRow}>
+              <Text style={styles.modalLabel}>Rent Amount</Text>
+              <Text style={styles.modalValue}>₱{viewingReceipt?.rentAmount}</Text>
+            </View>
+            <View style={styles.modalRow}>
+              <Text style={styles.modalLabel}>Payment</Text>
+              <Text style={styles.modalValue}>₱{viewingReceipt?.payment}</Text>
+            </View>
+            {viewingReceipt?.paymentMethod === "Cash" && (
+              <View style={styles.modalRow}>
+                <Text style={styles.modalLabel}>Change</Text>
+                <Text style={styles.modalValue}>₱{viewingReceipt.change}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.modalCloseBtn}
+              onPress={() => setViewingReceipt(null)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.modalCloseBtnText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <OwnerSidebar visible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
     </View>
@@ -505,6 +605,8 @@ const styles = StyleSheet.create({
   tenantName: { fontSize: 15, fontWeight: "500", color: "#0C2D6B" },
   stallInfo: { fontSize: 13, color: "#888780", marginTop: 2 },
 
+  cardRight: { flexDirection: "row", alignItems: "center", gap: 8 },
+
   badge: {
     paddingHorizontal: 12,
     paddingVertical: 5,
@@ -515,4 +617,73 @@ const styles = StyleSheet.create({
   badgeText: { fontSize: 12, fontWeight: "500" },
   badgePaidText: { color: "#0F6E56" },
   badgeUnpaidText: { color: "#A32D2D" },
+
+  receiptBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#B5D4F4",
+    backgroundColor: "#F0F4FA",
+  },
+  receiptBtnText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#1A4DA0",
+  },
+
+  // ── Receipt modal ──────────────────────────────────
+  modalBg: {
+    flex: 1,
+    backgroundColor: "rgba(12,45,107,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  modalBox: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    padding: 22,
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#0C2D6B",
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  modalRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 7,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF2FA",
+  },
+  modalLabel: {
+    fontSize: 13,
+    color: "#888780",
+  },
+  modalValue: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#0C2D6B",
+    maxWidth: "60%",
+    textAlign: "right",
+  },
+  modalCloseBtn: {
+    marginTop: 20,
+    backgroundColor: "#0C2D6B",
+    borderRadius: 12,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  modalCloseBtnText: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "600",
+  },
 });
