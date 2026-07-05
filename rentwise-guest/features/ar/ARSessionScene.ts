@@ -22,6 +22,14 @@ interface PlacedObject extends PlacedObjectInfo {
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 3;
 
+// How much of each frame's reticle movement to apply (0-1): lower = smoother but laggier,
+// higher = snappier but jitterier. Damps out ARCore's frame-to-frame tracking noise.
+const RETICLE_SMOOTHING = 0.35;
+
+// Reject hit-test surfaces tilted more than this from horizontal (walls, slanted objects),
+// since the catalog is furniture meant to sit on floors/tables/desks.
+const MAX_SURFACE_TILT_DEG = 25;
+
 function cloneWithOwnMaterials(source: THREE.Object3D): THREE.Group {
   const clone = source.clone(true) as THREE.Group;
   clone.traverse((node) => {
@@ -47,6 +55,17 @@ export class ARSessionScene {
   private hitTestSourceRequested = false;
   private raycaster = new THREE.Raycaster();
   private tempMatrix = new THREE.Matrix4();
+
+  // Smoothed reticle transform (see RETICLE_SMOOTHING) and scratch space for the
+  // per-result horizontal-surface check, reused every frame to avoid GC churn.
+  private reticlePosition = new THREE.Vector3();
+  private reticleQuaternion = new THREE.Quaternion();
+  private reticleTargetPosition = new THREE.Vector3();
+  private reticleTargetQuaternion = new THREE.Quaternion();
+  private reticleHasTarget = false;
+  private hitCheckMatrix = new THREE.Matrix4();
+  private hitCheckNormal = new THREE.Vector3();
+  private static readonly WORLD_UP = new THREE.Vector3(0, 1, 0);
 
   private modelCache = new Map<string, THREE.Group>();
   private armedObjectId: string | null = null;
@@ -133,6 +152,7 @@ export class ARSessionScene {
     this.session = null;
     this.hitTestSource = null;
     this.hitTestSourceRequested = false;
+    this.reticleHasTarget = false;
     this.reticle.visible = false;
 
     this.placedGroup.clear();
@@ -253,7 +273,7 @@ export class ARSessionScene {
       this.hitTestSourceRequested = true;
       const session = this.session;
       session.requestReferenceSpace("viewer").then((viewerSpace: any) => {
-        session.requestHitTestSource({ space: viewerSpace }).then((source: any) => {
+        session.requestHitTestSource({ space: viewerSpace, entityTypes: ["plane"] }).then((source: any) => {
           this.hitTestSource = source;
         });
       });
@@ -261,18 +281,52 @@ export class ARSessionScene {
 
     if (this.hitTestSource && referenceSpace) {
       const hitTestResults = frame.getHitTestResults(this.hitTestSource);
-      if (hitTestResults.length > 0) {
-        const pose = hitTestResults[0].getPose(referenceSpace);
+      const hitMatrix = this.findHorizontalHit(hitTestResults, referenceSpace);
+
+      if (hitMatrix) {
+        this.reticleTargetPosition.setFromMatrixPosition(hitMatrix);
+        this.reticleTargetQuaternion.setFromRotationMatrix(hitMatrix);
+
+        if (!this.reticleHasTarget) {
+          // First acquisition this session: snap instead of lerping from the origin.
+          this.reticlePosition.copy(this.reticleTargetPosition);
+          this.reticleQuaternion.copy(this.reticleTargetQuaternion);
+          this.reticleHasTarget = true;
+        } else {
+          this.reticlePosition.lerp(this.reticleTargetPosition, RETICLE_SMOOTHING);
+          this.reticleQuaternion.slerp(this.reticleTargetQuaternion, RETICLE_SMOOTHING);
+        }
+
+        this.reticle.matrix.compose(this.reticlePosition, this.reticleQuaternion, new THREE.Vector3(1, 1, 1));
+        if (!this.reticle.visible) this.onReticleVisible(true);
         this.reticle.visible = true;
-        this.reticle.matrix.fromArray(pose.transform.matrix);
-        this.onReticleVisible(true);
       } else {
+        this.reticleHasTarget = false;
         if (this.reticle.visible) this.onReticleVisible(false);
         this.reticle.visible = false;
       }
     }
 
     this.renderer.render(this.scene, this.camera);
+  }
+
+  // Returns the transform of the first hit-test result whose surface normal is close
+  // enough to world-up to count as "horizontal" (floor/tabletop/desk), or null if every
+  // result is too steep (walls) or there are no results at all.
+  private findHorizontalHit(hitTestResults: any[], referenceSpace: any): THREE.Matrix4 | null {
+    for (const result of hitTestResults) {
+      const pose = result.getPose(referenceSpace);
+      if (!pose) continue;
+
+      this.hitCheckMatrix.fromArray(pose.transform.matrix);
+      this.hitCheckNormal.setFromMatrixColumn(this.hitCheckMatrix, 1).normalize();
+      const tiltDeg = THREE.MathUtils.radToDeg(this.hitCheckNormal.angleTo(ARSessionScene.WORLD_UP));
+
+      if (tiltDeg <= MAX_SURFACE_TILT_DEG) {
+        return this.hitCheckMatrix;
+      }
+    }
+    return null;
   }
 
   dispose() {

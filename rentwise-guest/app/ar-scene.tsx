@@ -120,6 +120,18 @@ export default function ARScene() {
 
   const armedObject = objects.find((o) => o.id === armedId) ?? null;
 
+  // If no surface has been found for a while, add a more actionable tip on top of the
+  // basic "move your phone" hint — flat, textured, well-lit surfaces detect fastest.
+  const [showSurfaceTip, setShowSurfaceTip] = useState(false);
+  useEffect(() => {
+    if (!sessionActive || reticleVisible) {
+      setShowSurfaceTip(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowSurfaceTip(true), 6000);
+    return () => clearTimeout(timer);
+  }, [sessionActive, reticleVisible]);
+
   const selectedPlacedObjectId = placedState.selectedId
     ? placedState.placed.find((p) => p.id === placedState.selectedId)?.objectId
     : null;
@@ -187,7 +199,9 @@ export default function ARScene() {
               {arming
                 ? `Loading ${armedObject?.name ?? "item"}…`
                 : !reticleVisible
-                ? "Move your phone slowly to find a surface…"
+                ? showSurfaceTip
+                  ? "Still looking… try a flat, well-lit, textured surface like a floor or tabletop (avoid blank walls or glossy surfaces)"
+                  : "Move your phone slowly to find a surface…"
                 : armedObject
                 ? `Tap the surface to place: ${armedObject.name}`
                 : "Tap an item below to place it"}
