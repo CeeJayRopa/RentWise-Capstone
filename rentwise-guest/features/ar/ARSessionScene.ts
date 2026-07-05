@@ -100,7 +100,10 @@ export class ARSessionScene {
   private static readonly WORLD_UP = new THREE.Vector3(0, 1, 0);
   private static readonly UNIT_SCALE = new THREE.Vector3(1, 1, 1);
 
-  private modelCache = new Map<string, { template: THREE.Group; groundOffset: number; wallOffset: number }>();
+  private modelCache = new Map<
+    string,
+    { template: THREE.Group; groundOffset: number; wallOffset: number; boundingBox: THREE.Box3 }
+  >();
   private armedObjectId: string | null = null;
   private armedModel: THREE.Group | null = null;
   private armedGroundOffset = 0;
@@ -108,6 +111,21 @@ export class ARSessionScene {
   private currentSurfaceType: SurfaceType | null = null;
   private scratchCamDir = new THREE.Vector3();
   private scratchLookMatrix = new THREE.Matrix4();
+
+  // Wireframe box that reparents onto whichever placed object is currently selected, so it
+  // inherits that object's position/rotation/scale automatically instead of needing to be
+  // repositioned every frame.
+  private selectionOutline: THREE.LineSegments;
+
+  // Two-finger pinch-to-resize state, tracked from the gesture's start so the applied scale
+  // is the total distance ratio since the pinch began — not compounded per touchmove event,
+  // which would resize far too fast.
+  private overlayRoot: HTMLElement | null = null;
+  private pinchStartDistance: number | null = null;
+  private pinchStartScale: AxisScale | null = null;
+  private onTouchStart = (e: TouchEvent) => this.handleTouchStart(e);
+  private onTouchMove = (e: TouchEvent) => this.handleTouchMove(e);
+  private onTouchEnd = (e: TouchEvent) => this.handleTouchEnd(e);
 
   private placed: PlacedObject[] = [];
   private selected: PlacedObject | null = null;
@@ -130,6 +148,17 @@ export class ARSessionScene {
     const directional = new THREE.DirectionalLight(0xffffff, 0.8);
     directional.position.set(0.5, 1, 0.25);
     this.scene.add(directional);
+
+    const outlineGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+    this.selectionOutline = new THREE.LineSegments(
+      outlineGeometry,
+      // depthTest: false + a high renderOrder guarantee this always draws on top of the
+      // model's own mesh, instead of potentially being hidden/z-fighting behind surfaces
+      // that sit exactly on (or inside) the bounding box the outline is sized to.
+      new THREE.LineBasicMaterial({ color: 0xffaa00, depthTest: false, toneMapped: false })
+    );
+    this.selectionOutline.renderOrder = 999;
+    this.selectionOutline.visible = false;
   }
 
   setCallbacks(
@@ -180,7 +209,61 @@ export class ARSessionScene {
     controller.addEventListener("select", () => this.onSelect(controller));
     this.scene.add(controller);
 
+    this.overlayRoot = overlayRoot;
+    overlayRoot.addEventListener("touchstart", this.onTouchStart, { passive: true });
+    overlayRoot.addEventListener("touchmove", this.onTouchMove, { passive: false });
+    overlayRoot.addEventListener("touchend", this.onTouchEnd, { passive: true });
+    overlayRoot.addEventListener("touchcancel", this.onTouchEnd, { passive: true });
+
     await this.renderer.xr.setSession(session);
+  }
+
+  private removeTouchListeners() {
+    if (!this.overlayRoot) return;
+    this.overlayRoot.removeEventListener("touchstart", this.onTouchStart);
+    this.overlayRoot.removeEventListener("touchmove", this.onTouchMove);
+    this.overlayRoot.removeEventListener("touchend", this.onTouchEnd);
+    this.overlayRoot.removeEventListener("touchcancel", this.onTouchEnd);
+    this.overlayRoot = null;
+  }
+
+  private touchDistance(touches: TouchList): number {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  private handleTouchStart(e: TouchEvent) {
+    if (e.touches.length === 2 && this.selected) {
+      // A 2-finger pinch is never a placement tap, but the same leaking-select-event issue
+      // buttons had applies here too — suppress it for the gesture's duration.
+      this.beginUIInteraction();
+      this.pinchStartDistance = this.touchDistance(e.touches);
+      this.pinchStartScale = { ...this.selected.scale };
+    }
+  }
+
+  private handleTouchMove(e: TouchEvent) {
+    if (e.touches.length !== 2 || !this.selected || this.pinchStartDistance == null || !this.pinchStartScale) {
+      return;
+    }
+    // Two-finger touchmove is always our pinch gesture, never a page scroll/zoom we'd want
+    // to allow, so it's safe to always prevent the browser's own default handling here.
+    e.preventDefault();
+
+    const factor = this.touchDistance(e.touches) / this.pinchStartDistance;
+    const base = this.pinchStartScale;
+    (["x", "y", "z"] as ScaleAxis[]).forEach((axis) => {
+      this.setAxisScale(axis, base[axis] * factor);
+    });
+  }
+
+  private handleTouchEnd(e: TouchEvent) {
+    if (e.touches.length < 2) {
+      if (this.pinchStartDistance != null) this.endUIInteraction();
+      this.pinchStartDistance = null;
+      this.pinchStartScale = null;
+    }
   }
 
   async endSession() {
@@ -196,10 +279,14 @@ export class ARSessionScene {
     this.reticleHasTarget = false;
     this.currentSurfaceType = null;
     this.reticle.visible = false;
+    this.removeTouchListeners();
+    this.pinchStartDistance = null;
+    this.pinchStartScale = null;
 
     this.placedGroup.clear();
     this.placed = [];
     this.selected = null;
+    this.updateSelectionOutline();
     this.onPlacedChange({ placed: [], selectedId: null });
     this.onReticleVisible(false, null);
   }
@@ -250,6 +337,7 @@ export class ARSessionScene {
 
   private selectPlaced(placedObject: PlacedObject) {
     this.selected = placedObject;
+    this.updateSelectionOutline();
     this.notifyPlacedChange();
   }
 
@@ -258,6 +346,38 @@ export class ARSessionScene {
       placed: this.placed.map(({ id, objectId }) => ({ id, objectId })),
       selectedId: this.selected?.id ?? null,
     });
+  }
+
+  // Reparents the shared outline box onto whichever object is currently selected, sized to
+  // that model's own local bounding box, so it visually tracks the object's position,
+  // rotation, and scale automatically (as a child, it inherits all of those for free).
+  private updateSelectionOutline() {
+    if (!this.selected) {
+      if (this.selectionOutline.parent) this.selectionOutline.parent.remove(this.selectionOutline);
+      this.selectionOutline.visible = false;
+      return;
+    }
+
+    const cached = this.modelCache.get(this.selected.objectId);
+    if (!cached) {
+      this.selectionOutline.visible = false;
+      return;
+    }
+
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    cached.boundingBox.getSize(size);
+    cached.boundingBox.getCenter(center);
+
+    // Slightly larger than the exact bounding box so it reads as a highlight around the
+    // object rather than sitting flush on its surface.
+    const OUTLINE_MARGIN = 1.08;
+    this.selectionOutline.scale.copy(size).multiplyScalar(OUTLINE_MARGIN);
+    this.selectionOutline.position.copy(center);
+    if (this.selectionOutline.parent !== this.selected.group) {
+      this.selected.group.add(this.selectionOutline);
+    }
+    this.selectionOutline.visible = true;
   }
 
   private placeArmedAtReticle() {
@@ -292,6 +412,7 @@ export class ARSessionScene {
     this.placedGroup.add(group);
     this.placed.push(placedObject);
     this.selected = placedObject;
+    this.updateSelectionOutline();
     this.notifyPlacedChange();
   }
 
@@ -309,7 +430,7 @@ export class ARSessionScene {
       // once per model here, not assumed, since it depends on where each .glb's own origin
       // and orientation happen to be.
       const wallOffset = Number.isFinite(box.max.z) ? -box.max.z : 0;
-      cached = { template, groundOffset, wallOffset };
+      cached = { template, groundOffset, wallOffset, boundingBox: box };
       this.modelCache.set(objectId, cached);
     }
     this.armedObjectId = objectId;
@@ -368,8 +489,15 @@ export class ARSessionScene {
   // item can be stretched/squashed to fit a spot rather than only resized uniformly.
   scaleSelectedAxis(axis: ScaleAxis, factor: number) {
     if (!this.selected) return;
+    this.setAxisScale(axis, this.selected.scale[axis] * factor);
+  }
+
+  // Shared by scaleSelectedAxis (button-driven, relative factor) and the pinch-to-resize
+  // handler (which computes an absolute target scale from the gesture's start).
+  private setAxisScale(axis: ScaleAxis, targetValue: number) {
+    if (!this.selected) return;
     const prev = this.selected.scale[axis];
-    const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev * factor));
+    const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, targetValue));
     this.selected.scale[axis] = next;
     this.selected.group.scale.set(this.selected.scale.x, this.selected.scale.y, this.selected.scale.z);
 
@@ -404,9 +532,11 @@ export class ARSessionScene {
 
   deleteSelected() {
     if (!this.selected) return;
-    this.placedGroup.remove(this.selected.group);
-    this.placed = this.placed.filter((p) => p.id !== this.selected!.id);
+    const toRemove = this.selected;
     this.selected = null;
+    this.updateSelectionOutline(); // detaches the outline from toRemove.group before it's removed
+    this.placedGroup.remove(toRemove.group);
+    this.placed = this.placed.filter((p) => p.id !== toRemove.id);
     this.notifyPlacedChange();
   }
 
@@ -532,6 +662,7 @@ export class ARSessionScene {
   dispose() {
     window.removeEventListener("resize", this.resizeHandler);
     if (this.uiInteractionClearTimer) clearTimeout(this.uiInteractionClearTimer);
+    this.removeTouchListeners();
     if (this.session) {
       this.session.end().catch(() => {});
     }
