@@ -193,13 +193,15 @@ export default function ARScene() {
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Arrange in AR</Text>
           <TouchableOpacity
-            style={styles.doneBtn}
+            style={styles.toggleBtn}
             disabled={!placedState.selectedId}
             onPressIn={suppressPressIn}
             onPressOut={suppressPressOut}
             onPress={() => setControlsOpen((v) => !v)}
           >
-            {placedState.selectedId && <Text style={styles.doneBtnText}>⋮</Text>}
+            {placedState.selectedId && (
+              <Text style={styles.toggleBtnText}>{controlsOpen ? "Hide buttons" : "Show buttons"}</Text>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -265,6 +267,34 @@ export default function ARScene() {
                   onPress={() => sceneRef.current?.rotateSelected(-15)}
                 >
                   <Text style={styles.controlBtnText}>↺</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.dropdownRow}>
+              <Text style={styles.dropdownRowLabel}>Width + Height</Text>
+              <View style={styles.dropdownRowBtns}>
+                <TouchableOpacity
+                  style={styles.controlBtnSmall}
+                  onPressIn={suppressPressIn}
+                  onPressOut={suppressPressOut}
+                  onPress={() => {
+                    sceneRef.current?.scaleSelectedAxis("x", 0.9);
+                    sceneRef.current?.scaleSelectedAxis("y", 0.9);
+                  }}
+                >
+                  <Text style={styles.controlBtnText}>−</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.controlBtnSmall}
+                  onPressIn={suppressPressIn}
+                  onPressOut={suppressPressOut}
+                  onPress={() => {
+                    sceneRef.current?.scaleSelectedAxis("x", 1.1);
+                    sceneRef.current?.scaleSelectedAxis("y", 1.1);
+                  }}
+                >
+                  <Text style={styles.controlBtnText}>+</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -359,6 +389,8 @@ const styles = StyleSheet.create({
   doneBtn: { width: 48, alignItems: "center" },
   doneBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
   headerTitle: { color: "#fff", fontSize: 16, fontWeight: "bold" },
+  toggleBtn: { minWidth: 48, alignItems: "flex-end" },
+  toggleBtnText: { color: "#fff", fontSize: 13, fontWeight: "700" },
 
   centerPrompt: {
     position: "absolute",
