@@ -13,7 +13,13 @@ import { useEffect, useRef, useState } from "react";
 
 import { getARObjects, getModelDownloadUrl } from "../services/modelService";
 import type { ARObject } from "../shared/types/arObject";
-import { ARSessionScene, PlacedState } from "../features/ar/ARSessionScene";
+import { ARSessionScene, PlacedState, ScaleAxis } from "../features/ar/ARSessionScene";
+
+const AXES: { axis: ScaleAxis; label: string }[] = [
+  { axis: "x", label: "Width" },
+  { axis: "y", label: "Height" },
+  { axis: "z", label: "Depth" },
+];
 
 export default function ARScene() {
   const [objects, setObjects] = useState<ARObject[]>([]);
@@ -25,6 +31,7 @@ export default function ARScene() {
   const [reticleVisible, setReticleVisible] = useState(false);
   const [placedState, setPlacedState] = useState<PlacedState>({ placed: [], selectedId: null });
   const [error, setError] = useState<string | null>(null);
+  const [controlsOpen, setControlsOpen] = useState(false);
 
   const canvasContainerRef = useRef<View>(null);
   const overlayRef = useRef<View>(null);
@@ -93,6 +100,14 @@ export default function ARScene() {
     }
   };
 
+  // Runs a control-panel action while suppressing the AR session's next placement tap,
+  // so pressing rotate/scale/move/delete doesn't also place or select something in the
+  // scene underneath the button (see ARSessionScene.suppressNextSelect).
+  const act = (fn: () => void) => {
+    sceneRef.current?.suppressNextSelect();
+    fn();
+  };
+
   const arm = async (o: ARObject) => {
     if (!sceneRef.current) return;
     sceneRef.current.suppressNextSelect();
@@ -138,6 +153,10 @@ export default function ARScene() {
     : null;
   const selectedCatalogObject = objects.find((o) => o.id === selectedPlacedObjectId) ?? null;
 
+  useEffect(() => {
+    if (!placedState.selectedId) setControlsOpen(false);
+  }, [placedState.selectedId]);
+
   if (Platform.OS !== "web") {
     return (
       <View style={styles.webScreen}>
@@ -170,7 +189,71 @@ export default function ARScene() {
             <Text style={styles.doneBtnText}>{sessionActive ? "Done" : "◀"}</Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Arrange in AR</Text>
-          <View style={styles.doneBtn} />
+          <TouchableOpacity
+            style={styles.doneBtn}
+            disabled={!placedState.selectedId}
+            onPress={() => setControlsOpen((v) => !v)}
+          >
+            {placedState.selectedId && <Text style={styles.doneBtnText}>⋮</Text>}
+          </TouchableOpacity>
+
+          {controlsOpen && placedState.selectedId && (
+            <View style={styles.controlDropdown} pointerEvents="box-none">
+              <Text style={styles.controlLabel}>{selectedCatalogObject?.name ?? "Selected item"}</Text>
+
+              <View style={styles.dropdownRow}>
+                <Text style={styles.dropdownRowLabel}>Rotate</Text>
+                <View style={styles.dropdownRowBtns}>
+                  <TouchableOpacity
+                    style={styles.controlBtnSmall}
+                    onPress={() => act(() => sceneRef.current?.rotateSelected(15))}
+                  >
+                    <Text style={styles.controlBtnText}>↻</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.controlBtnSmall}
+                    onPress={() => act(() => sceneRef.current?.rotateSelected(-15))}
+                  >
+                    <Text style={styles.controlBtnText}>↺</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {AXES.map(({ axis, label }) => (
+                <View key={axis} style={styles.dropdownRow}>
+                  <Text style={styles.dropdownRowLabel}>{label}</Text>
+                  <View style={styles.dropdownRowBtns}>
+                    <TouchableOpacity
+                      style={styles.controlBtnSmall}
+                      onPress={() => act(() => sceneRef.current?.scaleSelectedAxis(axis, 0.9))}
+                    >
+                      <Text style={styles.controlBtnText}>−</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.controlBtnSmall}
+                      onPress={() => act(() => sceneRef.current?.scaleSelectedAxis(axis, 1.1))}
+                    >
+                      <Text style={styles.controlBtnText}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+
+              <TouchableOpacity
+                style={[styles.controlBtn, !reticleVisible && styles.controlBtnDisabled]}
+                disabled={!reticleVisible}
+                onPress={() => act(() => sceneRef.current?.moveSelectedToReticle())}
+              >
+                <Text style={styles.controlBtnText}>Move here</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.controlBtn, styles.deleteBtn]}
+                onPress={() => act(() => sceneRef.current?.deleteSelected())}
+              >
+                <Text style={styles.controlBtnText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
 
         {!sessionActive && (
@@ -210,69 +293,6 @@ export default function ARScene() {
             {error && (
               <Text style={[styles.hintText, styles.hintErrorText]}>{error}</Text>
             )}
-          </View>
-        )}
-
-        {sessionActive && placedState.selectedId && (
-          <View style={styles.controlPanel} pointerEvents="box-none">
-            <Text style={styles.controlLabel}>{selectedCatalogObject?.name ?? "Selected item"}</Text>
-            <View style={styles.controlRow}>
-              <TouchableOpacity
-                style={styles.controlBtn}
-                onPress={() => {
-                  sceneRef.current?.suppressNextSelect();
-                  sceneRef.current?.rotateSelected(-15);
-                }}
-              >
-                <Text style={styles.controlBtnText}>↺</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.controlBtn}
-                onPress={() => {
-                  sceneRef.current?.suppressNextSelect();
-                  sceneRef.current?.rotateSelected(15);
-                }}
-              >
-                <Text style={styles.controlBtnText}>↻</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.controlBtn}
-                onPress={() => {
-                  sceneRef.current?.suppressNextSelect();
-                  sceneRef.current?.scaleSelected(0.9);
-                }}
-              >
-                <Text style={styles.controlBtnText}>−</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.controlBtn}
-                onPress={() => {
-                  sceneRef.current?.suppressNextSelect();
-                  sceneRef.current?.scaleSelected(1.1);
-                }}
-              >
-                <Text style={styles.controlBtnText}>+</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.controlBtn, !reticleVisible && styles.controlBtnDisabled]}
-                disabled={!reticleVisible}
-                onPress={() => {
-                  sceneRef.current?.suppressNextSelect();
-                  sceneRef.current?.moveSelectedToReticle();
-                }}
-              >
-                <Text style={styles.controlBtnText}>Move here</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.controlBtn, styles.deleteBtn]}
-                onPress={() => {
-                  sceneRef.current?.suppressNextSelect();
-                  sceneRef.current?.deleteSelected();
-                }}
-              >
-                <Text style={styles.controlBtnText}>Delete</Text>
-              </TouchableOpacity>
-            </View>
           </View>
         )}
 
@@ -361,27 +381,38 @@ const styles = StyleSheet.create({
     color: "#fff",
   },
 
-  controlPanel: {
+  controlDropdown: {
     position: "absolute",
-    bottom: 110,
-    left: 16,
+    top: "100%",
     right: 16,
-    backgroundColor: "rgba(26,26,26,0.85)",
-    borderRadius: 16,
+    marginTop: 8,
+    backgroundColor: "rgba(26,26,26,0.92)",
+    borderRadius: 14,
     padding: 12,
-    gap: 8,
+    gap: 10,
+    minWidth: 190,
   },
   controlLabel: { color: "#fff", fontSize: 13, fontWeight: "700", textAlign: "center" },
-  controlRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center" },
   controlBtn: {
     backgroundColor: "#6b5b45",
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 14,
+    alignItems: "center",
   },
   controlBtnDisabled: { opacity: 0.4 },
   controlBtnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
   deleteBtn: { backgroundColor: "#8b3d3d" },
+
+  dropdownRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  dropdownRowLabel: { color: "#fff", fontSize: 13 },
+  dropdownRowBtns: { flexDirection: "row", gap: 6 },
+  controlBtnSmall: {
+    backgroundColor: "#6b5b45",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+  },
 
   catalogScroll: {
     position: "absolute",
