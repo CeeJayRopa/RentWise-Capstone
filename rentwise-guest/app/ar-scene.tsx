@@ -252,7 +252,11 @@ export default function ARScene() {
               {selectedCatalogObject?.name ?? "Selected item"}
             </Text>
 
-            <View style={styles.controlRow}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.controlRow}
+            >
               <TouchableOpacity
                 style={styles.controlBtn}
                 onPressIn={suppressPressIn}
@@ -268,31 +272,6 @@ export default function ARScene() {
                 onPress={() => sceneRef.current?.rotateSelected(-15)}
               >
                 <Text style={styles.controlBtnText}>↺</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.controlBtn}
-                onPressIn={suppressPressIn}
-                onPressOut={suppressPressOut}
-                onPress={() => {
-                  sceneRef.current?.scaleSelectedAxis("x", 0.9);
-                  sceneRef.current?.scaleSelectedAxis("y", 0.9);
-                  sceneRef.current?.scaleSelectedAxis("z", 0.9);
-                }}
-              >
-                <Text style={styles.controlBtnText}>▼</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.controlBtn}
-                onPressIn={suppressPressIn}
-                onPressOut={suppressPressOut}
-                onPress={() => {
-                  sceneRef.current?.scaleSelectedAxis("x", 1.1);
-                  sceneRef.current?.scaleSelectedAxis("y", 1.1);
-                  sceneRef.current?.scaleSelectedAxis("z", 1.1);
-                }}
-              >
-                <Text style={styles.controlBtnText}>▲</Text>
               </TouchableOpacity>
 
               {AXIS_ICONS.map(({ axis, icon }) => (
@@ -333,7 +312,7 @@ export default function ARScene() {
               >
                 <Text style={styles.controlBtnText}>🗑</Text>
               </TouchableOpacity>
-            </View>
+            </ScrollView>
           </View>
         )}
 
@@ -437,7 +416,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   controlLabel: { color: "#fff", fontSize: 12, fontWeight: "700", textAlign: "center" },
-  controlRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, justifyContent: "center" },
+  controlRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 4 },
   controlBtnPair: { flexDirection: "row", gap: 6 },
   controlBtn: {
     backgroundColor: "#6b5b45",
