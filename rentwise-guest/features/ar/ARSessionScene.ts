@@ -41,9 +41,11 @@ const RETICLE_SMOOTHING = 0.35;
 
 // Ignore hit-test movement smaller than this (meters) when updating the reticle's target —
 // freezes residual sensor noise at the source instead of letting the smoothing filter chase
-// tiny, meaningless fluctuations forever.
-const RETICLE_POSITION_DEADZONE = 0.004;
-const RETICLE_ROTATION_DEADZONE_DEG = 1.5;
+// tiny, meaningless fluctuations forever. Slightly larger than the bare minimum since
+// hit-testing now also accepts raw feature points (see entityTypes below), which are
+// noisier than fully-formed planes.
+const RETICLE_POSITION_DEADZONE = 0.006;
+const RETICLE_ROTATION_DEADZONE_DEG = 2;
 
 // Surface classification, by angle between the hit-test surface normal and world-up:
 // near 0° = floor/tabletop/desk, near 90° = wall. Anything in between (slanted surfaces,
@@ -500,7 +502,11 @@ export class ARSessionScene {
       this.hitTestSourceRequested = true;
       const session = this.session;
       session.requestReferenceSpace("viewer").then((viewerSpace: any) => {
-        session.requestHitTestSource({ space: viewerSpace, entityTypes: ["plane"] }).then((source: any) => {
+        // "point" lets a hit register against raw feature points before ARCore has fully
+        // formed a recognized plane (which takes several frames of coplanar points) — much
+        // faster first detection. The floor/wall angle filter, hysteresis, and smoothing
+        // already in place keep these noisier point-based hits stable regardless.
+        session.requestHitTestSource({ space: viewerSpace, entityTypes: ["plane", "point"] }).then((source: any) => {
           this.hitTestSource = source;
         });
       });
