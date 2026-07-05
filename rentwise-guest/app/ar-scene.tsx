@@ -266,6 +266,36 @@ export default function ARScene() {
                 </View>
               </View>
 
+              <View style={styles.carouselItem}>
+                <Text style={styles.carouselItemLabel}>Size</Text>
+                <View style={styles.controlBtnPair}>
+                  <TouchableOpacity
+                    style={styles.controlBtn}
+                    onPressIn={suppressPressIn}
+                    onPressOut={suppressPressOut}
+                    onPress={() => {
+                      sceneRef.current?.scaleSelectedAxis("x", 0.9);
+                      sceneRef.current?.scaleSelectedAxis("y", 0.9);
+                      sceneRef.current?.scaleSelectedAxis("z", 0.9);
+                    }}
+                  >
+                    <Text style={styles.controlBtnText}>▼</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.controlBtn}
+                    onPressIn={suppressPressIn}
+                    onPressOut={suppressPressOut}
+                    onPress={() => {
+                      sceneRef.current?.scaleSelectedAxis("x", 1.1);
+                      sceneRef.current?.scaleSelectedAxis("y", 1.1);
+                      sceneRef.current?.scaleSelectedAxis("z", 1.1);
+                    }}
+                  >
+                    <Text style={styles.controlBtnText}>▲</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
               {AXIS_LABELS.map(({ axis, label }) => (
                 <View key={axis} style={styles.carouselItem}>
                   <Text style={styles.carouselItemLabel}>{label}</Text>

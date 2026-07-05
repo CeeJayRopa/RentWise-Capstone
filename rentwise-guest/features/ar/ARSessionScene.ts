@@ -117,16 +117,6 @@ export class ARSessionScene {
   // repositioned every frame.
   private selectionOutline: THREE.LineSegments;
 
-  // Two-finger pinch-to-resize state, tracked from the gesture's start so the applied scale
-  // is the total distance ratio since the pinch began — not compounded per touchmove event,
-  // which would resize far too fast.
-  private overlayRoot: HTMLElement | null = null;
-  private pinchStartDistance: number | null = null;
-  private pinchStartScale: AxisScale | null = null;
-  private onTouchStart = (e: TouchEvent) => this.handleTouchStart(e);
-  private onTouchMove = (e: TouchEvent) => this.handleTouchMove(e);
-  private onTouchEnd = (e: TouchEvent) => this.handleTouchEnd(e);
-
   private placed: PlacedObject[] = [];
   private selected: PlacedObject | null = null;
   private nextInstanceId = 1;
@@ -209,61 +199,7 @@ export class ARSessionScene {
     controller.addEventListener("select", () => this.onSelect(controller));
     this.scene.add(controller);
 
-    this.overlayRoot = overlayRoot;
-    overlayRoot.addEventListener("touchstart", this.onTouchStart, { passive: true });
-    overlayRoot.addEventListener("touchmove", this.onTouchMove, { passive: false });
-    overlayRoot.addEventListener("touchend", this.onTouchEnd, { passive: true });
-    overlayRoot.addEventListener("touchcancel", this.onTouchEnd, { passive: true });
-
     await this.renderer.xr.setSession(session);
-  }
-
-  private removeTouchListeners() {
-    if (!this.overlayRoot) return;
-    this.overlayRoot.removeEventListener("touchstart", this.onTouchStart);
-    this.overlayRoot.removeEventListener("touchmove", this.onTouchMove);
-    this.overlayRoot.removeEventListener("touchend", this.onTouchEnd);
-    this.overlayRoot.removeEventListener("touchcancel", this.onTouchEnd);
-    this.overlayRoot = null;
-  }
-
-  private touchDistance(touches: TouchList): number {
-    const dx = touches[0].clientX - touches[1].clientX;
-    const dy = touches[0].clientY - touches[1].clientY;
-    return Math.sqrt(dx * dx + dy * dy);
-  }
-
-  private handleTouchStart(e: TouchEvent) {
-    if (e.touches.length === 2 && this.selected) {
-      // A 2-finger pinch is never a placement tap, but the same leaking-select-event issue
-      // buttons had applies here too — suppress it for the gesture's duration.
-      this.beginUIInteraction();
-      this.pinchStartDistance = this.touchDistance(e.touches);
-      this.pinchStartScale = { ...this.selected.scale };
-    }
-  }
-
-  private handleTouchMove(e: TouchEvent) {
-    if (e.touches.length !== 2 || !this.selected || this.pinchStartDistance == null || !this.pinchStartScale) {
-      return;
-    }
-    // Two-finger touchmove is always our pinch gesture, never a page scroll/zoom we'd want
-    // to allow, so it's safe to always prevent the browser's own default handling here.
-    e.preventDefault();
-
-    const factor = this.touchDistance(e.touches) / this.pinchStartDistance;
-    const base = this.pinchStartScale;
-    (["x", "y", "z"] as ScaleAxis[]).forEach((axis) => {
-      this.setAxisScale(axis, base[axis] * factor);
-    });
-  }
-
-  private handleTouchEnd(e: TouchEvent) {
-    if (e.touches.length < 2) {
-      if (this.pinchStartDistance != null) this.endUIInteraction();
-      this.pinchStartDistance = null;
-      this.pinchStartScale = null;
-    }
   }
 
   async endSession() {
@@ -279,9 +215,6 @@ export class ARSessionScene {
     this.reticleHasTarget = false;
     this.currentSurfaceType = null;
     this.reticle.visible = false;
-    this.removeTouchListeners();
-    this.pinchStartDistance = null;
-    this.pinchStartScale = null;
 
     this.placedGroup.clear();
     this.placed = [];
@@ -492,8 +425,8 @@ export class ARSessionScene {
     this.setAxisScale(axis, this.selected.scale[axis] * factor);
   }
 
-  // Shared by scaleSelectedAxis (button-driven, relative factor) and the pinch-to-resize
-  // handler (which computes an absolute target scale from the gesture's start).
+  // Applies the base per-axis scale/anchor logic; scaleSelectedAxis is the public entry
+  // point, kept separate so other callers could set an absolute value if ever needed.
   private setAxisScale(axis: ScaleAxis, targetValue: number) {
     if (!this.selected) return;
     const prev = this.selected.scale[axis];
@@ -662,7 +595,6 @@ export class ARSessionScene {
   dispose() {
     window.removeEventListener("resize", this.resizeHandler);
     if (this.uiInteractionClearTimer) clearTimeout(this.uiInteractionClearTimer);
-    this.removeTouchListeners();
     if (this.session) {
       this.session.end().catch(() => {});
     }
