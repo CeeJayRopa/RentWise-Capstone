@@ -15,11 +15,10 @@ import { getARObjects, getModelDownloadUrl } from "../services/modelService";
 import type { ARObject } from "../shared/types/arObject";
 import { ARSessionScene, PlacedState, ScaleAxis, SurfaceType } from "../features/ar/ARSessionScene";
 
-// ↔ width, ↕ height, ⤢ depth — icon-only, no word labels for any control.
-const AXIS_ICONS: { axis: ScaleAxis; icon: string }[] = [
-  { axis: "x", icon: "↔" },
-  { axis: "y", icon: "↕" },
-  { axis: "z", icon: "⤢" },
+const AXIS_LABELS: { axis: ScaleAxis; label: string }[] = [
+  { axis: "x", label: "Width" },
+  { axis: "y", label: "Height" },
+  { axis: "z", label: "Depth" },
 ];
 
 export default function ARScene() {
@@ -33,7 +32,6 @@ export default function ARScene() {
   const [surfaceType, setSurfaceType] = useState<SurfaceType | null>(null);
   const [placedState, setPlacedState] = useState<PlacedState>({ placed: [], selectedId: null });
   const [error, setError] = useState<string | null>(null);
-  const [controlsOpen, setControlsOpen] = useState(false);
 
   const canvasContainerRef = useRef<View>(null);
   const overlayRef = useRef<View>(null);
@@ -157,10 +155,6 @@ export default function ARScene() {
     : null;
   const selectedCatalogObject = objects.find((o) => o.id === selectedPlacedObjectId) ?? null;
 
-  useEffect(() => {
-    if (!placedState.selectedId) setControlsOpen(false);
-  }, [placedState.selectedId]);
-
   if (Platform.OS !== "web") {
     return (
       <View style={styles.webScreen}>
@@ -193,17 +187,7 @@ export default function ARScene() {
             <Text style={styles.doneBtnText}>{sessionActive ? "Done" : "◀"}</Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Arrange in AR</Text>
-          <TouchableOpacity
-            style={styles.toggleBtn}
-            disabled={!placedState.selectedId}
-            onPressIn={suppressPressIn}
-            onPressOut={suppressPressOut}
-            onPress={() => setControlsOpen((v) => !v)}
-          >
-            {placedState.selectedId && (
-              <Text style={styles.toggleBtnText}>{controlsOpen ? "Hide buttons" : "Show buttons"}</Text>
-            )}
-          </TouchableOpacity>
+          <View style={styles.doneBtn} />
         </View>
 
         {!sessionActive && (
@@ -246,7 +230,7 @@ export default function ARScene() {
           </View>
         )}
 
-        {controlsOpen && placedState.selectedId && (
+        {placedState.selectedId && (
           <View style={styles.controlPanel} pointerEvents="box-none">
             <Text style={styles.controlLabel} numberOfLines={1}>
               {selectedCatalogObject?.name ?? "Selected item"}
@@ -256,62 +240,79 @@ export default function ARScene() {
               horizontal
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.controlRow}
+              onTouchStart={suppressPressIn}
+              onTouchEnd={suppressPressOut}
+              onTouchCancel={suppressPressOut}
             >
-              <TouchableOpacity
-                style={styles.controlBtn}
-                onPressIn={suppressPressIn}
-                onPressOut={suppressPressOut}
-                onPress={() => sceneRef.current?.rotateSelected(15)}
-              >
-                <Text style={styles.controlBtnText}>↻</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.controlBtn}
-                onPressIn={suppressPressIn}
-                onPressOut={suppressPressOut}
-                onPress={() => sceneRef.current?.rotateSelected(-15)}
-              >
-                <Text style={styles.controlBtnText}>↺</Text>
-              </TouchableOpacity>
+              <View style={styles.carouselItem}>
+                <Text style={styles.carouselItemLabel}>Rotate</Text>
+                <View style={styles.controlBtnPair}>
+                  <TouchableOpacity
+                    style={styles.controlBtn}
+                    onPressIn={suppressPressIn}
+                    onPressOut={suppressPressOut}
+                    onPress={() => sceneRef.current?.rotateSelected(15)}
+                  >
+                    <Text style={styles.controlBtnText}>↻</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.controlBtn}
+                    onPressIn={suppressPressIn}
+                    onPressOut={suppressPressOut}
+                    onPress={() => sceneRef.current?.rotateSelected(-15)}
+                  >
+                    <Text style={styles.controlBtnText}>↺</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
 
-              {AXIS_ICONS.map(({ axis, icon }) => (
-                <View key={axis} style={styles.controlBtnPair}>
-                  <TouchableOpacity
-                    style={styles.controlBtn}
-                    onPressIn={suppressPressIn}
-                    onPressOut={suppressPressOut}
-                    onPress={() => sceneRef.current?.scaleSelectedAxis(axis, 0.9)}
-                  >
-                    <Text style={styles.controlBtnText}>{icon}−</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.controlBtn}
-                    onPressIn={suppressPressIn}
-                    onPressOut={suppressPressOut}
-                    onPress={() => sceneRef.current?.scaleSelectedAxis(axis, 1.1)}
-                  >
-                    <Text style={styles.controlBtnText}>{icon}+</Text>
-                  </TouchableOpacity>
+              {AXIS_LABELS.map(({ axis, label }) => (
+                <View key={axis} style={styles.carouselItem}>
+                  <Text style={styles.carouselItemLabel}>{label}</Text>
+                  <View style={styles.controlBtnPair}>
+                    <TouchableOpacity
+                      style={styles.controlBtn}
+                      onPressIn={suppressPressIn}
+                      onPressOut={suppressPressOut}
+                      onPress={() => sceneRef.current?.scaleSelectedAxis(axis, 0.9)}
+                    >
+                      <Text style={styles.controlBtnText}>−</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.controlBtn}
+                      onPressIn={suppressPressIn}
+                      onPressOut={suppressPressOut}
+                      onPress={() => sceneRef.current?.scaleSelectedAxis(axis, 1.1)}
+                    >
+                      <Text style={styles.controlBtnText}>+</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               ))}
 
-              <TouchableOpacity
-                style={[styles.controlBtn, !reticleVisible && styles.controlBtnDisabled]}
-                disabled={!reticleVisible}
-                onPressIn={suppressPressIn}
-                onPressOut={suppressPressOut}
-                onPress={() => sceneRef.current?.moveSelectedToReticle()}
-              >
-                <Text style={styles.controlBtnText}>📍</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.controlBtn, styles.deleteBtn]}
-                onPressIn={suppressPressIn}
-                onPressOut={suppressPressOut}
-                onPress={() => sceneRef.current?.deleteSelected()}
-              >
-                <Text style={styles.controlBtnText}>🗑</Text>
-              </TouchableOpacity>
+              <View style={styles.carouselItem}>
+                <Text style={styles.carouselItemLabel}>Move</Text>
+                <TouchableOpacity
+                  style={[styles.controlBtn, !reticleVisible && styles.controlBtnDisabled]}
+                  disabled={!reticleVisible}
+                  onPressIn={suppressPressIn}
+                  onPressOut={suppressPressOut}
+                  onPress={() => sceneRef.current?.moveSelectedToReticle()}
+                >
+                  <Text style={styles.controlBtnText}>📍</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.carouselItem}>
+                <Text style={styles.carouselItemLabel}>Delete</Text>
+                <TouchableOpacity
+                  style={[styles.controlBtn, styles.deleteBtn]}
+                  onPressIn={suppressPressIn}
+                  onPressOut={suppressPressOut}
+                  onPress={() => sceneRef.current?.deleteSelected()}
+                >
+                  <Text style={styles.controlBtnText}>🗑</Text>
+                </TouchableOpacity>
+              </View>
             </ScrollView>
           </View>
         )}
@@ -362,8 +363,6 @@ const styles = StyleSheet.create({
   doneBtn: { width: 48, alignItems: "center" },
   doneBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
   headerTitle: { color: "#fff", fontSize: 16, fontWeight: "bold" },
-  toggleBtn: { minWidth: 48, alignItems: "flex-end" },
-  toggleBtnText: { color: "#fff", fontSize: 13, fontWeight: "700" },
 
   centerPrompt: {
     position: "absolute",
@@ -416,7 +415,9 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   controlLabel: { color: "#fff", fontSize: 12, fontWeight: "700", textAlign: "center" },
-  controlRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 4 },
+  controlRow: { flexDirection: "row", alignItems: "flex-end", gap: 10, paddingHorizontal: 4 },
+  carouselItem: { alignItems: "center", gap: 3 },
+  carouselItemLabel: { color: "#fff", fontSize: 10, fontWeight: "600" },
   controlBtnPair: { flexDirection: "row", gap: 6 },
   controlBtn: {
     backgroundColor: "#6b5b45",
