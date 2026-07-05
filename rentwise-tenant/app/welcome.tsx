@@ -22,7 +22,7 @@ export default function Welcome() {
     if (!uid) return;
     getTenantData(uid)
       .then((data) => {
-        if (data?.firstName) setDisplayName(`Tenant ${data.firstName}`);
+        if (data?.firstName) setDisplayName(data.firstName);
       })
       .catch(() => {});
   }, []);

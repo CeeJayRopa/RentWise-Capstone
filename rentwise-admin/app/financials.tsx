@@ -972,7 +972,14 @@ export default function Financials() {
                     doc(db, "payments", selectedTenant.paymentId),
                     {
                       status: "approved",
-                      date: serverTimestamp(),
+                      // Do NOT overwrite `date` here — it must stay the
+                      // moment the tenant actually paid (set when the
+                      // payment doc was first created), not when admin
+                      // got around to approving it. Overwriting it shifted
+                      // which day/period the payment counted toward,
+                      // letting a late approval wrongly cover today's
+                      // charge while leaving the day it was paid for
+                      // unpaid.
                       approvedAt: serverTimestamp(),
                       verifiedBy: "admin",
                       paidAt: serverTimestamp(),

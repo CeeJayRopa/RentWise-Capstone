@@ -278,7 +278,7 @@ export default function Account() {
                   />
                   {/* Username with @rentwise.app suffix */}
                   <View style={styles.field}>
-                    <Text style={styles.fieldLabel}>Username</Text>
+                    <Text style={styles.fieldLabel}>Email</Text>
                     <Text style={styles.fieldHint}>Used for tenant login</Text>
                     <View style={[styles.usernameRow, !!usernameError && styles.inputError]}>
                       <TextInput

@@ -40,7 +40,7 @@ export default function Welcome() {
       setPhotoURL(user.photoURL ?? null);
       try {
         const data = await getUserById(user.uid);
-        setDisplayName(data?.firstName ? `Admin ${data.firstName}` : "Admin");
+        setDisplayName(data?.firstName ?? "Admin");
       } catch {
         setDisplayName("Admin");
       }
