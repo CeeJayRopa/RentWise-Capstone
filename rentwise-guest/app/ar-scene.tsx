@@ -15,10 +15,11 @@ import { getARObjects, getModelDownloadUrl } from "../services/modelService";
 import type { ARObject } from "../shared/types/arObject";
 import { ARSessionScene, PlacedState, ScaleAxis, SurfaceType } from "../features/ar/ARSessionScene";
 
-const AXES: { axis: ScaleAxis; label: string }[] = [
-  { axis: "x", label: "Width" },
-  { axis: "y", label: "Height" },
-  { axis: "z", label: "Depth" },
+// ↔ width, ↕ height, ⤢ depth — icon-only, no word labels for any control.
+const AXIS_ICONS: { axis: ScaleAxis; icon: string }[] = [
+  { axis: "x", icon: "↔" },
+  { axis: "y", icon: "↕" },
+  { axis: "z", icon: "⤢" },
 ];
 
 export default function ARScene() {
@@ -247,99 +248,92 @@ export default function ARScene() {
 
         {controlsOpen && placedState.selectedId && (
           <View style={styles.controlPanel} pointerEvents="box-none">
-            <Text style={styles.controlLabel}>{selectedCatalogObject?.name ?? "Selected item"}</Text>
+            <Text style={styles.controlLabel} numberOfLines={1}>
+              {selectedCatalogObject?.name ?? "Selected item"}
+            </Text>
 
-            <View style={styles.dropdownRow}>
-              <Text style={styles.dropdownRowLabel}>Rotate</Text>
-              <View style={styles.dropdownRowBtns}>
-                <TouchableOpacity
-                  style={styles.controlBtnSmall}
-                  onPressIn={suppressPressIn}
-                  onPressOut={suppressPressOut}
-                  onPress={() => sceneRef.current?.rotateSelected(15)}
-                >
-                  <Text style={styles.controlBtnText}>↻</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.controlBtnSmall}
-                  onPressIn={suppressPressIn}
-                  onPressOut={suppressPressOut}
-                  onPress={() => sceneRef.current?.rotateSelected(-15)}
-                >
-                  <Text style={styles.controlBtnText}>↺</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
+            <View style={styles.controlRow}>
+              <TouchableOpacity
+                style={styles.controlBtn}
+                onPressIn={suppressPressIn}
+                onPressOut={suppressPressOut}
+                onPress={() => sceneRef.current?.rotateSelected(15)}
+              >
+                <Text style={styles.controlBtnText}>↻</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.controlBtn}
+                onPressIn={suppressPressIn}
+                onPressOut={suppressPressOut}
+                onPress={() => sceneRef.current?.rotateSelected(-15)}
+              >
+                <Text style={styles.controlBtnText}>↺</Text>
+              </TouchableOpacity>
 
-            <View style={styles.dropdownRow}>
-              <Text style={styles.dropdownRowLabel}>Width + Height</Text>
-              <View style={styles.dropdownRowBtns}>
-                <TouchableOpacity
-                  style={styles.controlBtnSmall}
-                  onPressIn={suppressPressIn}
-                  onPressOut={suppressPressOut}
-                  onPress={() => {
-                    sceneRef.current?.scaleSelectedAxis("x", 0.9);
-                    sceneRef.current?.scaleSelectedAxis("y", 0.9);
-                  }}
-                >
-                  <Text style={styles.controlBtnText}>−</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.controlBtnSmall}
-                  onPressIn={suppressPressIn}
-                  onPressOut={suppressPressOut}
-                  onPress={() => {
-                    sceneRef.current?.scaleSelectedAxis("x", 1.1);
-                    sceneRef.current?.scaleSelectedAxis("y", 1.1);
-                  }}
-                >
-                  <Text style={styles.controlBtnText}>+</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
+              <TouchableOpacity
+                style={styles.controlBtn}
+                onPressIn={suppressPressIn}
+                onPressOut={suppressPressOut}
+                onPress={() => {
+                  sceneRef.current?.scaleSelectedAxis("x", 0.9);
+                  sceneRef.current?.scaleSelectedAxis("y", 0.9);
+                  sceneRef.current?.scaleSelectedAxis("z", 0.9);
+                }}
+              >
+                <Text style={styles.controlBtnText}>▼</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.controlBtn}
+                onPressIn={suppressPressIn}
+                onPressOut={suppressPressOut}
+                onPress={() => {
+                  sceneRef.current?.scaleSelectedAxis("x", 1.1);
+                  sceneRef.current?.scaleSelectedAxis("y", 1.1);
+                  sceneRef.current?.scaleSelectedAxis("z", 1.1);
+                }}
+              >
+                <Text style={styles.controlBtnText}>▲</Text>
+              </TouchableOpacity>
 
-            {AXES.map(({ axis, label }) => (
-              <View key={axis} style={styles.dropdownRow}>
-                <Text style={styles.dropdownRowLabel}>{label}</Text>
-                <View style={styles.dropdownRowBtns}>
+              {AXIS_ICONS.map(({ axis, icon }) => (
+                <View key={axis} style={styles.controlBtnPair}>
                   <TouchableOpacity
-                    style={styles.controlBtnSmall}
+                    style={styles.controlBtn}
                     onPressIn={suppressPressIn}
                     onPressOut={suppressPressOut}
                     onPress={() => sceneRef.current?.scaleSelectedAxis(axis, 0.9)}
                   >
-                    <Text style={styles.controlBtnText}>−</Text>
+                    <Text style={styles.controlBtnText}>{icon}−</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={styles.controlBtnSmall}
+                    style={styles.controlBtn}
                     onPressIn={suppressPressIn}
                     onPressOut={suppressPressOut}
                     onPress={() => sceneRef.current?.scaleSelectedAxis(axis, 1.1)}
                   >
-                    <Text style={styles.controlBtnText}>+</Text>
+                    <Text style={styles.controlBtnText}>{icon}+</Text>
                   </TouchableOpacity>
                 </View>
-              </View>
-            ))}
+              ))}
 
-            <TouchableOpacity
-              style={[styles.controlBtn, !reticleVisible && styles.controlBtnDisabled]}
-              disabled={!reticleVisible}
-              onPressIn={suppressPressIn}
-              onPressOut={suppressPressOut}
-              onPress={() => sceneRef.current?.moveSelectedToReticle()}
-            >
-              <Text style={styles.controlBtnText}>Move here</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.controlBtn, styles.deleteBtn]}
-              onPressIn={suppressPressIn}
-              onPressOut={suppressPressOut}
-              onPress={() => sceneRef.current?.deleteSelected()}
-            >
-              <Text style={styles.controlBtnText}>Delete</Text>
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.controlBtn, !reticleVisible && styles.controlBtnDisabled]}
+                disabled={!reticleVisible}
+                onPressIn={suppressPressIn}
+                onPressOut={suppressPressOut}
+                onPress={() => sceneRef.current?.moveSelectedToReticle()}
+              >
+                <Text style={styles.controlBtnText}>📍</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.controlBtn, styles.deleteBtn]}
+                onPressIn={suppressPressIn}
+                onPressOut={suppressPressOut}
+                onPress={() => sceneRef.current?.deleteSelected()}
+              >
+                <Text style={styles.controlBtnText}>🗑</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
@@ -437,32 +431,25 @@ const styles = StyleSheet.create({
     bottom: 110,
     left: 16,
     right: 16,
-    backgroundColor: "rgba(26,26,26,0.92)",
+    backgroundColor: "rgba(26,26,26,0.9)",
     borderRadius: 14,
-    padding: 12,
-    gap: 10,
+    padding: 10,
+    gap: 6,
   },
-  controlLabel: { color: "#fff", fontSize: 13, fontWeight: "700", textAlign: "center" },
+  controlLabel: { color: "#fff", fontSize: 12, fontWeight: "700", textAlign: "center" },
+  controlRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, justifyContent: "center" },
+  controlBtnPair: { flexDirection: "row", gap: 6 },
   controlBtn: {
     backgroundColor: "#6b5b45",
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 14,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 12,
     alignItems: "center",
+    justifyContent: "center",
   },
   controlBtnDisabled: { opacity: 0.4 },
-  controlBtnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
+  controlBtnText: { color: "#fff", fontSize: 12, fontWeight: "600" },
   deleteBtn: { backgroundColor: "#8b3d3d" },
-
-  dropdownRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  dropdownRowLabel: { color: "#fff", fontSize: 13 },
-  dropdownRowBtns: { flexDirection: "row", gap: 6 },
-  controlBtnSmall: {
-    backgroundColor: "#6b5b45",
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-  },
 
   catalogScroll: {
     position: "absolute",
