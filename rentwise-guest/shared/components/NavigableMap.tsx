@@ -80,7 +80,9 @@ export default function NavigableMap({ height, isMobile = false }: Props) {
             center: MARKET_COORDS,
             zoom: 15,
             interactive: false,
+            attributionControl: false,
           });
+          map.addControl(new mapboxgl.AttributionControl({ compact: true }));
           mapRef.current = map;
 
           map.on("load", () => {
