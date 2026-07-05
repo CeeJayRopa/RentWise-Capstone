@@ -69,13 +69,7 @@ export default function MarketMap() {
 
         <TouchableOpacity
           style={styles.actionBtn}
-          onPress={() => {
-            if (Platform.OS === "web") {
-              alert("AR viewing is only available on mobile devices.");
-            } else {
-              router.push("/ar-view");
-            }
-          }}
+          onPress={() => router.push("/ar-view")}
         >
           <Text style={styles.actionBtnText}>AR Viewing</Text>
         </TouchableOpacity>

@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
+    "@google/model-viewer": "^4.3.1",
     "@rnmapbox/maps": "^10.3.1",
     "@types/mapbox-gl": "^3.4.1",
     "expo": "~56.0.12",
@@ -16,10 +17,12 @@
     "react-native": "0.85.3",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "4.25.2",
-    "react-native-web": "^0.21.2"
+    "react-native-web": "^0.21.2",
+    "three": "^0.183.0"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "@types/three": "^0.183.0",
     "typescript": "~6.0.3"
   },
   "scripts": {

@@ -1,28 +1,87 @@
 import {
   View,
   Text,
+  Image,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  ActivityIndicator,
   Platform,
 } from "react-native";
 import { router } from "expo-router";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-const CATEGORIES = ["All", "Category 1", "Category 2"];
-
-// Placeholder object thumbnails (4 items)
-const OBJECTS = [0, 1, 2, 3];
+import { getARObjects, getModelDownloadUrl } from "../services/modelService";
+import type { ARObject } from "../shared/types/arObject";
+import ModelViewer from "../features/ar/ModelViewer";
 
 export default function ARView() {
+  const [objects, setObjects] = useState<ARObject[]>([]);
+  const [thumbnailUrls, setThumbnailUrls] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState("All");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [modelUrl, setModelUrl] = useState<string | null>(null);
 
-  if (Platform.OS === "web") {
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+
+    getARObjects()
+      .then(async (data) => {
+        setObjects(data);
+        if (data.length > 0) setSelectedId(data[0].id);
+
+        const entries = await Promise.all(
+          data.map(async (o) => [o.id, await getModelDownloadUrl(o.thumbnailStoragePath)] as const)
+        );
+        setThumbnailUrls(Object.fromEntries(entries));
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const selectedObject = objects.find((o) => o.id === selectedId) ?? null;
+
+  useEffect(() => {
+    if (!selectedObject) return;
+    let cancelled = false;
+    setModelUrl(null);
+
+    getModelDownloadUrl(selectedObject.modelStoragePath).then((url) => {
+      if (!cancelled) setModelUrl(url);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedObject?.id]);
+
+  const categories = useMemo(
+    () => ["All", ...Array.from(new Set(objects.map((o) => o.category)))],
+    [objects]
+  );
+
+  const filteredObjects = useMemo(
+    () =>
+      selectedCategory === "All"
+        ? objects
+        : objects.filter((o) => o.category === selectedCategory),
+    [objects, selectedCategory]
+  );
+
+  if (Platform.OS === "web" && loading) {
+    return (
+      <View style={styles.webLoading}>
+        <ActivityIndicator size="large" color="#fff" />
+      </View>
+    );
+  }
+
+  if (Platform.OS !== "web") {
     return (
       <View style={styles.webScreen}>
-        <Text style={styles.webTitle}>AR Unavailable</Text>
+        <Text style={styles.webTitle}>Open on Your Phone's Browser</Text>
         <Text style={styles.webMsg}>
-          AR viewing requires a mobile device for the best experience.
+          AR viewing works right in your mobile browser — no app install needed.
         </Text>
         <TouchableOpacity style={styles.webCloseBtn} onPress={() => router.back()}>
           <Text style={styles.webCloseBtnText}>Close</Text>
@@ -35,29 +94,41 @@ export default function ARView() {
     <View style={styles.screen}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.hamburger}>
-          <Text style={styles.hamburgerIcon}>≡</Text>
+        <TouchableOpacity style={styles.hamburger} onPress={() => router.back()}>
+          <Text style={styles.hamburgerIcon}>◀</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>AR Viewing</Text>
         <View style={styles.hamburger} />
       </View>
 
-      {/* Camera preview area */}
+      {/* 3D preview area */}
       <View style={styles.cameraArea}>
-        <View style={styles.xLine1} />
-        <View style={styles.xLine2} />
+        {objects.length === 0 ? (
+          <Text style={styles.emptyText}>No items available to view yet.</Text>
+        ) : modelUrl ? (
+          <ModelViewer
+            src={modelUrl}
+            poster={selectedObject ? thumbnailUrls[selectedObject.id] : undefined}
+          />
+        ) : (
+          <ActivityIndicator size="small" color="#fff" style={styles.previewLoading} />
+        )}
       </View>
 
-      {/* Camera capture bar */}
+      {/* Arrange in AR bar */}
       <View style={styles.captureBar}>
-        <TouchableOpacity style={styles.captureBtn}>
-          <Text style={styles.cameraIcon}>📷</Text>
+        <TouchableOpacity
+          style={[styles.arBtn, objects.length === 0 && styles.arBtnDisabled]}
+          disabled={objects.length === 0}
+          onPress={() => router.push("/ar-scene")}
+        >
+          <Text style={styles.arBtnText}>Arrange in AR →</Text>
         </TouchableOpacity>
       </View>
 
       {/* Category pills */}
       <View style={styles.categoryRow}>
-        {CATEGORIES.map((cat) => (
+        {categories.map((cat) => (
           <TouchableOpacity
             key={cat}
             style={[
@@ -85,8 +156,16 @@ export default function ARView() {
         contentContainerStyle={styles.objectRow}
         style={styles.objectScroll}
       >
-        {OBJECTS.map((i) => (
-          <TouchableOpacity key={i} style={styles.objectThumb} />
+        {filteredObjects.map((o) => (
+          <TouchableOpacity
+            key={o.id}
+            style={[styles.objectThumb, selectedId === o.id && styles.objectThumbActive]}
+            onPress={() => setSelectedId(o.id)}
+          >
+            {thumbnailUrls[o.id] && (
+              <Image source={{ uri: thumbnailUrls[o.id] }} style={styles.objectThumbImage} />
+            )}
+          </TouchableOpacity>
         ))}
       </ScrollView>
     </View>
@@ -107,56 +186,54 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
   hamburger: { width: 36, alignItems: "center" },
-  hamburgerIcon: { color: "#fff", fontSize: 26 },
+  hamburgerIcon: { color: "#fff", fontSize: 22 },
   headerTitle: { color: "#fff", fontSize: 18, fontWeight: "bold" },
 
-  /* Camera area */
+  /* Preview area */
   cameraArea: {
     flex: 1,
     backgroundColor: "#d4d4d4",
     overflow: "hidden",
   },
-  xLine1: {
+  previewLoading: {
     position: "absolute",
     top: "50%",
-    left: 0,
-    right: 0,
-    height: 1,
-    backgroundColor: "#aaa",
-    transform: [{ rotate: "34deg" }, { scaleX: 3 }],
+    left: "50%",
+    marginTop: -10,
+    marginLeft: -10,
   },
-  xLine2: {
+  emptyText: {
     position: "absolute",
     top: "50%",
     left: 0,
     right: 0,
-    height: 1,
-    backgroundColor: "#aaa",
-    transform: [{ rotate: "-34deg" }, { scaleX: 3 }],
+    textAlign: "center",
+    color: "#555",
+    fontSize: 14,
   },
 
-  /* Capture bar */
+  /* View in AR bar */
   captureBar: {
-    height: 72,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
     backgroundColor: "#2e2e2e",
-    justifyContent: "center",
     alignItems: "center",
   },
-  captureBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: "#1a1a1a",
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 2,
-    borderColor: "#555",
+  arBtn: {
+    backgroundColor: "#8b7355",
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    borderRadius: 24,
   },
-  cameraIcon: { fontSize: 22 },
+  arBtnDisabled: {
+    opacity: 0.5,
+  },
+  arBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
 
   /* Category pills */
   categoryRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 10,
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -186,9 +263,24 @@ const styles = StyleSheet.create({
     height: 60,
     borderRadius: 6,
     backgroundColor: "#fff",
+    overflow: "hidden",
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  objectThumbActive: {
+    borderColor: "#8b7355",
+  },
+  objectThumbImage: { width: "100%", height: "100%" },
+
+  /* Web loading */
+  webLoading: {
+    flex: 1,
+    backgroundColor: "#1a1a1a",
+    justifyContent: "center",
+    alignItems: "center",
   },
 
-  /* Web fallback */
+  /* Native fallback */
   webScreen: {
     flex: 1,
     justifyContent: "center",
@@ -196,7 +288,7 @@ const styles = StyleSheet.create({
     padding: 32,
     backgroundColor: "#fff",
   },
-  webTitle: { fontSize: 24, fontWeight: "bold", marginBottom: 12 },
+  webTitle: { fontSize: 24, fontWeight: "bold", marginBottom: 12, textAlign: "center" },
   webMsg: { fontSize: 15, color: "#555", textAlign: "center", marginBottom: 24 },
   webCloseBtn: {
     paddingVertical: 12,
