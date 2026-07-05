@@ -95,6 +95,7 @@ export default function ARScene() {
 
   const arm = async (o: ARObject) => {
     if (!sceneRef.current) return;
+    sceneRef.current.suppressNextSelect();
     setArming(true);
     setError(null);
     try {
@@ -218,38 +219,56 @@ export default function ARScene() {
             <View style={styles.controlRow}>
               <TouchableOpacity
                 style={styles.controlBtn}
-                onPress={() => sceneRef.current?.rotateSelected(-15)}
+                onPress={() => {
+                  sceneRef.current?.suppressNextSelect();
+                  sceneRef.current?.rotateSelected(-15);
+                }}
               >
                 <Text style={styles.controlBtnText}>↺</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.controlBtn}
-                onPress={() => sceneRef.current?.rotateSelected(15)}
+                onPress={() => {
+                  sceneRef.current?.suppressNextSelect();
+                  sceneRef.current?.rotateSelected(15);
+                }}
               >
                 <Text style={styles.controlBtnText}>↻</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.controlBtn}
-                onPress={() => sceneRef.current?.scaleSelected(0.9)}
+                onPress={() => {
+                  sceneRef.current?.suppressNextSelect();
+                  sceneRef.current?.scaleSelected(0.9);
+                }}
               >
                 <Text style={styles.controlBtnText}>−</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.controlBtn}
-                onPress={() => sceneRef.current?.scaleSelected(1.1)}
+                onPress={() => {
+                  sceneRef.current?.suppressNextSelect();
+                  sceneRef.current?.scaleSelected(1.1);
+                }}
               >
                 <Text style={styles.controlBtnText}>+</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.controlBtn, !reticleVisible && styles.controlBtnDisabled]}
                 disabled={!reticleVisible}
-                onPress={() => sceneRef.current?.moveSelectedToReticle()}
+                onPress={() => {
+                  sceneRef.current?.suppressNextSelect();
+                  sceneRef.current?.moveSelectedToReticle();
+                }}
               >
                 <Text style={styles.controlBtnText}>Move here</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.controlBtn, styles.deleteBtn]}
-                onPress={() => sceneRef.current?.deleteSelected()}
+                onPress={() => {
+                  sceneRef.current?.suppressNextSelect();
+                  sceneRef.current?.deleteSelected();
+                }}
               >
                 <Text style={styles.controlBtnText}>Delete</Text>
               </TouchableOpacity>

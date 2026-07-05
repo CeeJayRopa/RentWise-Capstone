@@ -17,6 +17,8 @@ export interface PlacedState {
 interface PlacedObject extends PlacedObjectInfo {
   group: THREE.Group;
   scaleMultiplier: number;
+  groundOffset: number;
+  spawnStartTime: number;
 }
 
 const MIN_SCALE = 0.3;
@@ -26,9 +28,22 @@ const MAX_SCALE = 3;
 // higher = snappier but jitterier. Damps out ARCore's frame-to-frame tracking noise.
 const RETICLE_SMOOTHING = 0.35;
 
+// Ignore hit-test movement smaller than this (meters) when updating the reticle's target —
+// freezes residual sensor noise at the source instead of letting the smoothing filter chase
+// tiny, meaningless fluctuations forever.
+const RETICLE_POSITION_DEADZONE = 0.004;
+const RETICLE_ROTATION_DEADZONE_DEG = 1.5;
+
 // Reject hit-test surfaces tilted more than this from horizontal (walls, slanted objects),
 // since the catalog is furniture meant to sit on floors/tables/desks.
 const MAX_SURFACE_TILT_DEG = 25;
+
+// Placement pop-in animation duration, in ms.
+const SPAWN_ANIM_DURATION_MS = 220;
+
+function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
+}
 
 function cloneWithOwnMaterials(source: THREE.Object3D): THREE.Group {
   const clone = source.clone(true) as THREE.Group;
@@ -63,13 +78,20 @@ export class ARSessionScene {
   private reticleTargetPosition = new THREE.Vector3();
   private reticleTargetQuaternion = new THREE.Quaternion();
   private reticleHasTarget = false;
+  private candidatePosition = new THREE.Vector3();
+  private candidateQuaternion = new THREE.Quaternion();
   private hitCheckMatrix = new THREE.Matrix4();
   private hitCheckNormal = new THREE.Vector3();
+  private hitCheckPosition = new THREE.Vector3();
   private static readonly WORLD_UP = new THREE.Vector3(0, 1, 0);
+  private static readonly UNIT_SCALE = new THREE.Vector3(1, 1, 1);
 
-  private modelCache = new Map<string, THREE.Group>();
+  private modelCache = new Map<string, { template: THREE.Group; groundOffset: number }>();
   private armedObjectId: string | null = null;
   private armedModel: THREE.Group | null = null;
+  private armedGroundOffset = 0;
+  private scratchCamDir = new THREE.Vector3();
+  private scratchLookMatrix = new THREE.Matrix4();
 
   private placed: PlacedObject[] = [];
   private selected: PlacedObject | null = null;
@@ -162,7 +184,20 @@ export class ARSessionScene {
     this.onReticleVisible(false);
   }
 
+  // Set right before any DOM overlay button's onPress runs (rotate/scale/delete/arm/etc.)
+  // so a tap that leaks through to the XR session as a "select" doesn't also place or
+  // pick an object — some browsers don't fully suppress the XR select event for taps
+  // that land on DOM overlay buttons, causing every button press to spuriously act on
+  // the AR scene underneath it too.
+  private suppressSelectUntil = 0;
+
+  suppressNextSelect() {
+    this.suppressSelectUntil = performance.now() + 400;
+  }
+
   private onSelect(controller: THREE.Object3D) {
+    if (performance.now() < this.suppressSelectUntil) return;
+
     this.tempMatrix.identity().extractRotation(controller.matrixWorld);
     this.raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
     this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this.tempMatrix);
@@ -199,13 +234,17 @@ export class ARSessionScene {
     const group = cloneWithOwnMaterials(this.armedModel);
     group.matrixAutoUpdate = true;
     group.position.setFromMatrixPosition(this.reticle.matrix);
-    group.quaternion.setFromRotationMatrix(this.reticle.matrix);
+    this.orientTowardCamera(group);
+    group.translateY(this.armedGroundOffset);
+    group.scale.setScalar(0.001); // spawn-animated up to full size in onFrame
 
     const placedObject: PlacedObject = {
       id: `placed-${this.nextInstanceId++}`,
       objectId: this.armedObjectId,
       group,
       scaleMultiplier: 1,
+      groundOffset: this.armedGroundOffset,
+      spawnStartTime: performance.now(),
     };
 
     this.placedGroup.add(group);
@@ -215,13 +254,20 @@ export class ARSessionScene {
   }
 
   async armObject(objectId: string, modelUrl: string): Promise<void> {
-    let template = this.modelCache.get(objectId);
-    if (!template) {
-      template = await this.loadModel(modelUrl);
-      this.modelCache.set(objectId, template);
+    let cached = this.modelCache.get(objectId);
+    if (!cached) {
+      const template = await this.loadModel(modelUrl);
+      // Ground offset: shifts the model up/down so its lowest point sits exactly at the
+      // reticle instead of floating above or sinking into the surface — depends on where
+      // each model's own origin happens to be, so it's computed once per model, not assumed.
+      const box = new THREE.Box3().setFromObject(template);
+      const groundOffset = Number.isFinite(box.min.y) ? -box.min.y : 0;
+      cached = { template, groundOffset };
+      this.modelCache.set(objectId, cached);
     }
     this.armedObjectId = objectId;
-    this.armedModel = template;
+    this.armedModel = cached.template;
+    this.armedGroundOffset = cached.groundOffset;
   }
 
   private loadModel(url: string): Promise<THREE.Group> {
@@ -233,6 +279,19 @@ export class ARSessionScene {
         (error) => reject(error)
       );
     });
+  }
+
+  // Orients `group` to face the same horizontal direction the camera was looking when
+  // placed (instead of inheriting the hit-test pose's raw, essentially arbitrary yaw),
+  // so every placed object comes in consistently upright and non-twisted.
+  private orientTowardCamera(group: THREE.Group) {
+    this.camera.getWorldDirection(this.scratchCamDir);
+    this.scratchCamDir.y = 0;
+    if (this.scratchCamDir.lengthSq() < 1e-6) this.scratchCamDir.set(0, 0, -1);
+    this.scratchCamDir.normalize();
+
+    this.scratchLookMatrix.lookAt(new THREE.Vector3(), this.scratchCamDir, ARSessionScene.WORLD_UP);
+    group.quaternion.setFromRotationMatrix(this.scratchLookMatrix);
   }
 
   rotateSelected(deltaDeg: number) {
@@ -250,7 +309,11 @@ export class ARSessionScene {
   moveSelectedToReticle() {
     if (!this.selected || !this.reticle.visible) return;
     this.selected.group.position.setFromMatrixPosition(this.reticle.matrix);
-    this.selected.group.quaternion.setFromRotationMatrix(this.reticle.matrix);
+    this.orientTowardCamera(this.selected.group);
+    // translateY moves along the local axis irrespective of the group's own scale, so the
+    // raw ground offset (measured against the unscaled model) must be scaled up/down to
+    // match however big this particular instance currently is.
+    this.selected.group.translateY(this.selected.groundOffset * this.selected.scaleMultiplier);
   }
 
   deleteSelected() {
@@ -259,6 +322,17 @@ export class ARSessionScene {
     this.placed = this.placed.filter((p) => p.id !== this.selected!.id);
     this.selected = null;
     this.notifyPlacedChange();
+  }
+
+  // Eases each recently-placed object's scale from ~0 up to its real size, giving a quick
+  // pop-in instead of the object just instantly appearing at full size.
+  private updateSpawnAnimations() {
+    const now = performance.now();
+    for (const p of this.placed) {
+      if (now - p.spawnStartTime >= SPAWN_ANIM_DURATION_MS) continue;
+      const t = easeOutCubic(Math.min(1, (now - p.spawnStartTime) / SPAWN_ANIM_DURATION_MS));
+      p.group.scale.setScalar(Math.max(0.001, p.scaleMultiplier * t));
+    }
   }
 
   private onFrame(frame: any) {
@@ -284,20 +358,30 @@ export class ARSessionScene {
       const hitMatrix = this.findHorizontalHit(hitTestResults, referenceSpace);
 
       if (hitMatrix) {
-        this.reticleTargetPosition.setFromMatrixPosition(hitMatrix);
-        this.reticleTargetQuaternion.setFromRotationMatrix(hitMatrix);
+        this.candidatePosition.setFromMatrixPosition(hitMatrix);
+        this.candidateQuaternion.setFromRotationMatrix(hitMatrix);
 
         if (!this.reticleHasTarget) {
           // First acquisition this session: snap instead of lerping from the origin.
-          this.reticlePosition.copy(this.reticleTargetPosition);
-          this.reticleQuaternion.copy(this.reticleTargetQuaternion);
+          this.reticleTargetPosition.copy(this.candidatePosition);
+          this.reticleTargetQuaternion.copy(this.candidateQuaternion);
+          this.reticlePosition.copy(this.candidatePosition);
+          this.reticleQuaternion.copy(this.candidateQuaternion);
           this.reticleHasTarget = true;
         } else {
+          // Deadzone: ignore movement below the noise floor so the smoothing filter isn't
+          // perpetually chasing tiny fluctuations even while the phone is essentially still.
+          const movedDist = this.candidatePosition.distanceTo(this.reticleTargetPosition);
+          const movedDeg = THREE.MathUtils.radToDeg(this.candidateQuaternion.angleTo(this.reticleTargetQuaternion));
+          if (movedDist > RETICLE_POSITION_DEADZONE || movedDeg > RETICLE_ROTATION_DEADZONE_DEG) {
+            this.reticleTargetPosition.copy(this.candidatePosition);
+            this.reticleTargetQuaternion.copy(this.candidateQuaternion);
+          }
           this.reticlePosition.lerp(this.reticleTargetPosition, RETICLE_SMOOTHING);
           this.reticleQuaternion.slerp(this.reticleTargetQuaternion, RETICLE_SMOOTHING);
         }
 
-        this.reticle.matrix.compose(this.reticlePosition, this.reticleQuaternion, new THREE.Vector3(1, 1, 1));
+        this.reticle.matrix.compose(this.reticlePosition, this.reticleQuaternion, ARSessionScene.UNIT_SCALE);
         if (!this.reticle.visible) this.onReticleVisible(true);
         this.reticle.visible = true;
       } else {
@@ -307,13 +391,19 @@ export class ARSessionScene {
       }
     }
 
+    this.updateSpawnAnimations();
     this.renderer.render(this.scene, this.camera);
   }
 
-  // Returns the transform of the first hit-test result whose surface normal is close
-  // enough to world-up to count as "horizontal" (floor/tabletop/desk), or null if every
-  // result is too steep (walls) or there are no results at all.
+  // Returns the transform of whichever horizontal hit-test result (surface normal close to
+  // world-up — floor/tabletop/desk, not a wall) is closest to what's currently being
+  // tracked, or null if every result is too steep or there are no results at all. Preferring
+  // the closest-to-current-target result (instead of always the first) avoids flicker when
+  // two valid surfaces are both in view (e.g. a tabletop and the floor beneath it).
   private findHorizontalHit(hitTestResults: any[], referenceSpace: any): THREE.Matrix4 | null {
+    let best: THREE.Matrix4 | null = null;
+    let bestDist = Infinity;
+
     for (const result of hitTestResults) {
       const pose = result.getPose(referenceSpace);
       if (!pose) continue;
@@ -321,12 +411,19 @@ export class ARSessionScene {
       this.hitCheckMatrix.fromArray(pose.transform.matrix);
       this.hitCheckNormal.setFromMatrixColumn(this.hitCheckMatrix, 1).normalize();
       const tiltDeg = THREE.MathUtils.radToDeg(this.hitCheckNormal.angleTo(ARSessionScene.WORLD_UP));
+      if (tiltDeg > MAX_SURFACE_TILT_DEG) continue;
 
-      if (tiltDeg <= MAX_SURFACE_TILT_DEG) {
-        return this.hitCheckMatrix;
+      if (!this.reticleHasTarget) return this.hitCheckMatrix.clone();
+
+      const dist = this.hitCheckPosition
+        .setFromMatrixPosition(this.hitCheckMatrix)
+        .distanceTo(this.reticleTargetPosition);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = this.hitCheckMatrix.clone();
       }
     }
-    return null;
+    return best;
   }
 
   dispose() {
