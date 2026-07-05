@@ -96,10 +96,13 @@ export default function ARScene() {
   const arm = async (o: ARObject) => {
     if (!sceneRef.current) return;
     setArming(true);
+    setError(null);
     try {
       const modelUrl = await getModelDownloadUrl(o.modelStoragePath);
       await sceneRef.current.armObject(o.id, modelUrl);
       setArmedId(o.id);
+    } catch (e: any) {
+      setError(`Couldn't load "${o.name}": ${e?.message ?? "unknown error"}`);
     } finally {
       setArming(false);
     }
@@ -189,6 +192,9 @@ export default function ARScene() {
                 ? `Tap the surface to place: ${armedObject.name}`
                 : "Tap an item below to place it"}
             </Text>
+            {error && (
+              <Text style={[styles.hintText, styles.hintErrorText]}>{error}</Text>
+            )}
           </View>
         )}
 
@@ -315,6 +321,11 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 16,
     overflow: "hidden",
+  },
+  hintErrorText: {
+    marginTop: 8,
+    backgroundColor: "rgba(139,61,61,0.85)",
+    color: "#fff",
   },
 
   controlPanel: {
