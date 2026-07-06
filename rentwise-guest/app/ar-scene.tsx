@@ -136,6 +136,20 @@ export default function ARScene() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionActive, objects]);
 
+  // The engine consumes the armed item once it's placed (so a tap on/near an existing
+  // object places the new one instead of ambiguously selecting the old one — see
+  // ARSessionScene.placeArmedAtReticle). Mirror that here: once a new object shows up in
+  // placedState, clear the armed thumbnail highlight too, so the UI doesn't keep showing
+  // something as "armed" that the engine already treats as spent. The auto-arm effect
+  // above then re-arms the first item by default, or the user can tap a different one.
+  const prevPlacedCountRef = useRef(0);
+  useEffect(() => {
+    if (placedState.placed.length > prevPlacedCountRef.current) {
+      setArmedId(null);
+    }
+    prevPlacedCountRef.current = placedState.placed.length;
+  }, [placedState.placed.length]);
+
   const armedObject = objects.find((o) => o.id === armedId) ?? null;
 
   // If no surface has been found for a while, add a more actionable tip on top of the

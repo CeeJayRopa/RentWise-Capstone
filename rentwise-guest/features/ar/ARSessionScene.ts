@@ -250,6 +250,17 @@ export class ARSessionScene {
   private onSelect(controller: THREE.Object3D) {
     if (this.uiInteractionActive) return;
 
+    // If something is armed, a tap always places it at the reticle — even when the tap also
+    // geometrically lines up with an already-placed object. This matters because placing a
+    // second item ON or right next to the first (the whole point of arranging multiple
+    // objects together) means the reticle and an existing object's mesh are often in the
+    // same direction, and placement should win that ambiguity, not object-selection.
+    if (this.reticle.visible && this.armedModel) {
+      this.placeArmedAtReticle();
+      return;
+    }
+
+    // Nothing armed: fall back to tap-to-select an already-placed object.
     this.tempMatrix.identity().extractRotation(controller.matrixWorld);
     this.raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
     this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this.tempMatrix);
@@ -259,12 +270,7 @@ export class ARSessionScene {
       const placedObject = this.placed.find((p) => p.group === hit.object || p.group.getObjectById(hit.object.id));
       if (placedObject) {
         this.selectPlaced(placedObject);
-        return;
       }
-    }
-
-    if (this.reticle.visible && this.armedModel) {
-      this.placeArmedAtReticle();
     }
   }
 
@@ -346,6 +352,14 @@ export class ARSessionScene {
     this.placed.push(placedObject);
     this.selected = placedObject;
     this.updateSelectionOutline();
+
+    // Consume the armed item: without this, it stays armed forever, meaning every future
+    // tap keeps placing new copies instead of ever falling through to tap-to-select an
+    // existing object. Placing the next item requires an explicit re-tap on a catalog
+    // thumbnail, which is what re-arms it (see armObject).
+    this.armedObjectId = null;
+    this.armedModel = null;
+
     this.notifyPlacedChange();
   }
 
