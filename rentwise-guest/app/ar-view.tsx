@@ -1,27 +1,51 @@
 import {
   View,
   Text,
-  Image,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  Image,
   ActivityIndicator,
   Platform,
+  Modal,
 } from "react-native";
 import { router } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { getARObjects, getModelDownloadUrl } from "../services/modelService";
 import type { ARObject } from "../shared/types/arObject";
-import ModelViewer from "../features/ar/ModelViewer";
+import { ARSessionScene, PlacedState, ScaleAxis, SurfaceType } from "../features/ar/ARSessionScene";
 
+const AXIS_LABELS: { axis: ScaleAxis; label: string }[] = [
+  { axis: "x", label: "Width" },
+  { axis: "y", label: "Height" },
+  { axis: "z", label: "Depth" },
+];
+
+// Reached directly from market-map.tsx's "AR Viewing" button — this IS the AR session
+// itself now, not a catalog-browsing/preview step that then links to a separate scene.
 export default function ARView() {
   const [objects, setObjects] = useState<ARObject[]>([]);
   const [thumbnailUrls, setThumbnailUrls] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
-  const [selectedCategory, setSelectedCategory] = useState("All");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [modelUrl, setModelUrl] = useState<string | null>(null);
+  const [armedId, setArmedId] = useState<string | null>(null);
+  const [arming, setArming] = useState(false);
+  const [sessionActive, setSessionActive] = useState(false);
+  const [reticleVisible, setReticleVisible] = useState(false);
+  const [surfaceType, setSurfaceType] = useState<SurfaceType | null>(null);
+  const [placedState, setPlacedState] = useState<PlacedState>({ placed: [], selectedId: null });
+  const [error, setError] = useState<string | null>(null);
+
+  // null = still checking, so we never flash the "Start AR" button on a device that's
+  // about to turn out unsupported. Checked proactively via isSessionSupported so we never
+  // even attempt navigator.xr.requestSession (i.e. never prompt for camera access) on a
+  // device without ARCore, or on iPhone where navigator.xr doesn't exist at all.
+  const [arSupported, setArSupported] = useState<boolean | null>(null);
+  const [showUnsupportedModal, setShowUnsupportedModal] = useState(false);
+
+  const canvasContainerRef = useRef<View>(null);
+  const overlayRef = useRef<View>(null);
+  const sceneRef = useRef<ARSessionScene | null>(null);
 
   useEffect(() => {
     if (Platform.OS !== "web") return;
@@ -29,7 +53,6 @@ export default function ARView() {
     getARObjects()
       .then(async (data) => {
         setObjects(data);
-        if (data.length > 0) setSelectedId(data[0].id);
 
         const entries = await Promise.all(
           data.map(async (o) => [o.id, await getModelDownloadUrl(o.thumbnailStoragePath)] as const)
@@ -39,49 +62,151 @@ export default function ARView() {
       .finally(() => setLoading(false));
   }, []);
 
-  const selectedObject = objects.find((o) => o.id === selectedId) ?? null;
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+
+    const nav = navigator as any;
+    if (!nav.xr?.isSessionSupported) {
+      // Covers iPhone/Safari and any other browser with no WebXR at all.
+      setArSupported(false);
+      setShowUnsupportedModal(true);
+      return;
+    }
+    nav.xr
+      .isSessionSupported("immersive-ar")
+      .then((supported: boolean) => {
+        setArSupported(supported);
+        if (!supported) setShowUnsupportedModal(true);
+      })
+      .catch(() => {
+        setArSupported(false);
+        setShowUnsupportedModal(true);
+      });
+  }, []);
 
   useEffect(() => {
-    if (!selectedObject) return;
-    let cancelled = false;
-    setModelUrl(null);
+    if (Platform.OS !== "web") return;
 
-    getModelDownloadUrl(selectedObject.modelStoragePath).then((url) => {
-      if (!cancelled) setModelUrl(url);
+    const container = canvasContainerRef.current as unknown as HTMLElement | null;
+    if (!container) return;
+
+    const canvas = document.createElement("canvas");
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
+    canvas.style.display = "block";
+    container.appendChild(canvas);
+
+    const scene = new ARSessionScene();
+    scene.setCallbacks(setPlacedState, (visible, type) => {
+      setReticleVisible(visible);
+      setSurfaceType(type);
     });
+    scene.mount(canvas);
+    sceneRef.current = scene;
 
     return () => {
-      cancelled = true;
+      scene.dispose();
+      sceneRef.current = null;
+      if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
     };
-  }, [selectedObject?.id]);
+  }, []);
 
-  const categories = useMemo(
-    () => ["All", ...Array.from(new Set(objects.map((o) => o.category)))],
-    [objects]
-  );
+  const startAR = async () => {
+    const overlay = overlayRef.current as unknown as HTMLElement | null;
+    if (!sceneRef.current || !overlay) return;
 
-  const filteredObjects = useMemo(
-    () =>
-      selectedCategory === "All"
-        ? objects
-        : objects.filter((o) => o.category === selectedCategory),
-    [objects, selectedCategory]
-  );
+    try {
+      setError(null);
+      await sceneRef.current.startSession(overlay);
+      setSessionActive(true);
+    } catch (e: any) {
+      setError(
+        e?.message ?? "Could not start AR. Make sure you're on Chrome for Android over HTTPS."
+      );
+    }
+  };
 
-  if (Platform.OS === "web" && loading) {
-    return (
-      <View style={styles.webLoading}>
-        <ActivityIndicator size="large" color="#fff" />
-      </View>
-    );
-  }
+  const endAR = async () => {
+    if (sessionActive) {
+      await sceneRef.current?.endSession();
+      setSessionActive(false);
+    } else {
+      router.back();
+    }
+  };
+
+  // Wired to onPressIn/onPressOut on every control-panel and catalog-rail button, so
+  // pressing rotate/scale/move/delete/arm doesn't also place or select something in the
+  // scene underneath the button (see ARSessionScene.beginUIInteraction — must start on
+  // touch-down, not inside onPress, since the leaking AR "select" event isn't guaranteed
+  // to fire after React's onPress handler).
+  const suppressPressIn = () => sceneRef.current?.beginUIInteraction();
+  const suppressPressOut = () => sceneRef.current?.endUIInteraction();
+
+  const arm = async (o: ARObject) => {
+    if (!sceneRef.current) return;
+    setArming(true);
+    setError(null);
+    try {
+      const modelUrl = await getModelDownloadUrl(o.modelStoragePath);
+      await sceneRef.current.armObject(o.id, modelUrl);
+      setArmedId(o.id);
+    } catch (e: any) {
+      setError(`Couldn't load "${o.name}": ${e?.message ?? "unknown error"}`);
+    } finally {
+      setArming(false);
+    }
+  };
+
+  // Arm the first catalog item automatically once AR starts, so tapping the surface
+  // places something immediately instead of silently doing nothing until a thumbnail
+  // is tapped first — this was the exact flow gap that made placement look broken.
+  useEffect(() => {
+    if (sessionActive && !armedId && !arming && objects.length > 0) {
+      arm(objects[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionActive, objects]);
+
+  // The engine consumes the armed item once it's placed (so a tap on/near an existing
+  // object places the new one instead of ambiguously selecting the old one — see
+  // ARSessionScene.placeArmedAtReticle). Mirror that here: once a new object shows up in
+  // placedState, clear the armed thumbnail highlight too, so the UI doesn't keep showing
+  // something as "armed" that the engine already treats as spent. The auto-arm effect
+  // above then re-arms the first item by default, or the user can tap a different one.
+  const prevPlacedCountRef = useRef(0);
+  useEffect(() => {
+    if (placedState.placed.length > prevPlacedCountRef.current) {
+      setArmedId(null);
+    }
+    prevPlacedCountRef.current = placedState.placed.length;
+  }, [placedState.placed.length]);
+
+  const armedObject = objects.find((o) => o.id === armedId) ?? null;
+
+  // If no surface has been found for a while, add a more actionable tip on top of the
+  // basic "move your phone" hint — flat, textured, well-lit surfaces detect fastest.
+  const [showSurfaceTip, setShowSurfaceTip] = useState(false);
+  useEffect(() => {
+    if (!sessionActive || reticleVisible) {
+      setShowSurfaceTip(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowSurfaceTip(true), 6000);
+    return () => clearTimeout(timer);
+  }, [sessionActive, reticleVisible]);
+
+  const selectedPlacedObjectId = placedState.selectedId
+    ? placedState.placed.find((p) => p.id === placedState.selectedId)?.objectId
+    : null;
+  const selectedCatalogObject = objects.find((o) => o.id === selectedPlacedObjectId) ?? null;
 
   if (Platform.OS !== "web") {
     return (
       <View style={styles.webScreen}>
         <Text style={styles.webTitle}>Open on Your Phone's Browser</Text>
         <Text style={styles.webMsg}>
-          AR viewing works right in your mobile browser — no app install needed.
+          Arranging items in AR works right in your mobile browser — no app install needed.
         </Text>
         <TouchableOpacity style={styles.webCloseBtn} onPress={() => router.back()}>
           <Text style={styles.webCloseBtnText}>Close</Text>
@@ -92,173 +217,360 @@ export default function ARView() {
 
   return (
     <View style={styles.screen}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.hamburger} onPress={() => router.back()}>
-          <Text style={styles.hamburgerIcon}>◀</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>AR Viewing</Text>
-        <View style={styles.hamburger} />
-      </View>
+      {/* Canvas layer (the actual AR/WebGL surface) */}
+      <View ref={canvasContainerRef} style={StyleSheet.absoluteFill} />
 
-      {/* 3D preview area */}
-      <View style={styles.cameraArea}>
-        {objects.length === 0 ? (
-          <Text style={styles.emptyText}>No items available to view yet.</Text>
-        ) : modelUrl ? (
-          <ModelViewer
-            src={modelUrl}
-            poster={selectedObject ? thumbnailUrls[selectedObject.id] : undefined}
-          />
-        ) : (
-          <ActivityIndicator size="small" color="#fff" style={styles.previewLoading} />
+      {/*
+        DOM overlay layer, passed to WebXR as domOverlay.root. pointerEvents="box-none" so
+        taps on empty space fall through to the canvas below and register as WebXR "select"
+        taps (tap-to-place); taps that land on a real button below still work as normal
+        presses, since Chrome's dom-overlay only intercepts taps that hit an actual element.
+      */}
+      <View ref={overlayRef} style={StyleSheet.absoluteFill} pointerEvents="box-none">
+        {/* Header */}
+        <View style={styles.header} pointerEvents="box-none">
+          <TouchableOpacity onPress={endAR} style={styles.doneBtn}>
+            <Text style={styles.doneBtnText}>{sessionActive ? "Done" : "◀"}</Text>
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Arrange in AR</Text>
+          <View style={styles.doneBtn} />
+        </View>
+
+        {!sessionActive && (
+          <View style={styles.centerPrompt} pointerEvents="box-none">
+            {loading || arSupported === null ? (
+              <ActivityIndicator size="large" color="#fff" />
+            ) : arSupported === false ? (
+              <Text style={styles.promptText}>
+                AR isn't supported on this device. You can still browse the items in the tray
+                below.
+              </Text>
+            ) : objects.length === 0 ? (
+              <Text style={styles.promptText}>No items available to arrange yet.</Text>
+            ) : (
+              <>
+                <Text style={styles.promptText}>
+                  Tap "Start AR", then point your camera at a flat surface. Pick items from the
+                  tray below to place them — you can place as many as you like together.
+                </Text>
+                <TouchableOpacity style={styles.startBtn} onPress={startAR}>
+                  <Text style={styles.startBtnText}>Start AR</Text>
+                </TouchableOpacity>
+                {error && <Text style={styles.errorText}>{error}</Text>}
+              </>
+            )}
+          </View>
+        )}
+
+        {showUnsupportedModal && (
+          <Modal transparent animationType="fade" onRequestClose={() => setShowUnsupportedModal(false)}>
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalCard}>
+                <Text style={styles.modalTitle}>Device Not Supported</Text>
+                <Text style={styles.modalMessage}>
+                  {Platform.OS === "web" &&
+                  typeof navigator !== "undefined" &&
+                  /iPhone|iPad|iPod/i.test(navigator.userAgent)
+                    ? "AR arrangement isn't available on iPhone yet. You can still browse the items below."
+                    : "Your device or browser doesn't support AR. You can still browse the items below."}
+                </Text>
+                <TouchableOpacity
+                  style={styles.modalBtn}
+                  onPress={() => setShowUnsupportedModal(false)}
+                >
+                  <Text style={styles.modalBtnText}>OK</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
+        )}
+
+        {sessionActive && (
+          <View style={styles.hintBanner} pointerEvents="none">
+            <Text style={styles.hintText}>
+              {arming
+                ? `Loading ${armedObject?.name ?? "item"}…`
+                : !reticleVisible
+                ? showSurfaceTip
+                  ? "Still looking… try a flat, well-lit, textured floor, tabletop, or wall (avoid glossy or plain white surfaces)"
+                  : "Move your phone slowly to find a surface…"
+                : armedObject
+                ? `Tap the ${surfaceType === "wall" ? "wall" : "surface"} to place: ${armedObject.name}`
+                : "Tap an item below to place it"}
+            </Text>
+            {error && (
+              <Text style={[styles.hintText, styles.hintErrorText]}>{error}</Text>
+            )}
+          </View>
+        )}
+
+        {placedState.selectedId && (
+          <View style={styles.controlPanel} pointerEvents="box-none">
+            <Text style={styles.controlLabel} numberOfLines={1}>
+              {selectedCatalogObject?.name ?? "Selected item"}
+            </Text>
+
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.controlRow}
+              onTouchStart={suppressPressIn}
+              onTouchEnd={suppressPressOut}
+              onTouchCancel={suppressPressOut}
+            >
+              <View style={styles.carouselItem}>
+                <Text style={styles.carouselItemLabel}>Rotate</Text>
+                <View style={styles.controlBtnPair}>
+                  <TouchableOpacity
+                    style={styles.controlBtn}
+                    onPressIn={suppressPressIn}
+                    onPressOut={suppressPressOut}
+                    onPress={() => sceneRef.current?.rotateSelected(15)}
+                  >
+                    <Text style={styles.controlBtnText}>↻</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.controlBtn}
+                    onPressIn={suppressPressIn}
+                    onPressOut={suppressPressOut}
+                    onPress={() => sceneRef.current?.rotateSelected(-15)}
+                  >
+                    <Text style={styles.controlBtnText}>↺</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.carouselItem}>
+                <Text style={styles.carouselItemLabel}>Size</Text>
+                <View style={styles.controlBtnPair}>
+                  <TouchableOpacity
+                    style={styles.controlBtn}
+                    onPressIn={suppressPressIn}
+                    onPressOut={suppressPressOut}
+                    onPress={() => {
+                      sceneRef.current?.scaleSelectedAxis("x", 0.9);
+                      sceneRef.current?.scaleSelectedAxis("y", 0.9);
+                      sceneRef.current?.scaleSelectedAxis("z", 0.9);
+                    }}
+                  >
+                    <Text style={styles.controlBtnText}>▼</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.controlBtn}
+                    onPressIn={suppressPressIn}
+                    onPressOut={suppressPressOut}
+                    onPress={() => {
+                      sceneRef.current?.scaleSelectedAxis("x", 1.1);
+                      sceneRef.current?.scaleSelectedAxis("y", 1.1);
+                      sceneRef.current?.scaleSelectedAxis("z", 1.1);
+                    }}
+                  >
+                    <Text style={styles.controlBtnText}>▲</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {AXIS_LABELS.map(({ axis, label }) => (
+                <View key={axis} style={styles.carouselItem}>
+                  <Text style={styles.carouselItemLabel}>{label}</Text>
+                  <View style={styles.controlBtnPair}>
+                    <TouchableOpacity
+                      style={styles.controlBtn}
+                      onPressIn={suppressPressIn}
+                      onPressOut={suppressPressOut}
+                      onPress={() => sceneRef.current?.scaleSelectedAxis(axis, 0.9)}
+                    >
+                      <Text style={styles.controlBtnText}>−</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.controlBtn}
+                      onPressIn={suppressPressIn}
+                      onPressOut={suppressPressOut}
+                      onPress={() => sceneRef.current?.scaleSelectedAxis(axis, 1.1)}
+                    >
+                      <Text style={styles.controlBtnText}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+
+              <View style={styles.carouselItem}>
+                <Text style={styles.carouselItemLabel}>Move</Text>
+                <TouchableOpacity
+                  style={[styles.controlBtn, !reticleVisible && styles.controlBtnDisabled]}
+                  disabled={!reticleVisible}
+                  onPressIn={suppressPressIn}
+                  onPressOut={suppressPressOut}
+                  onPress={() => sceneRef.current?.moveSelectedToReticle()}
+                >
+                  <Text style={styles.controlBtnText}>📍</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.carouselItem}>
+                <Text style={styles.carouselItemLabel}>Delete</Text>
+                <TouchableOpacity
+                  style={[styles.controlBtn, styles.deleteBtn]}
+                  onPressIn={suppressPressIn}
+                  onPressOut={suppressPressOut}
+                  onPress={() => sceneRef.current?.deleteSelected()}
+                >
+                  <Text style={styles.controlBtnText}>🗑</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        )}
+
+        {/* Catalog rail — arms which item gets placed on the next tap */}
+        {objects.length > 0 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.catalogRow}
+            style={styles.catalogScroll}
+          >
+            {objects.map((o) => (
+              <TouchableOpacity
+                key={o.id}
+                style={[styles.catalogThumb, armedId === o.id && styles.catalogThumbActive]}
+                onPressIn={suppressPressIn}
+                onPressOut={suppressPressOut}
+                onPress={() => arm(o)}
+              >
+                {thumbnailUrls[o.id] && (
+                  <Image source={{ uri: thumbnailUrls[o.id] }} style={styles.catalogThumbImage} />
+                )}
+                {arming && armedId === o.id && (
+                  <ActivityIndicator size="small" color="#fff" style={StyleSheet.absoluteFill} />
+                )}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         )}
       </View>
-
-      {/* Arrange in AR bar */}
-      <View style={styles.captureBar}>
-        <TouchableOpacity
-          style={[styles.arBtn, objects.length === 0 && styles.arBtnDisabled]}
-          disabled={objects.length === 0}
-          onPress={() => router.push("/ar-scene")}
-        >
-          <Text style={styles.arBtnText}>Arrange in AR →</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Category pills */}
-      <View style={styles.categoryRow}>
-        {categories.map((cat) => (
-          <TouchableOpacity
-            key={cat}
-            style={[
-              styles.categoryPill,
-              selectedCategory === cat && styles.categoryPillActive,
-            ]}
-            onPress={() => setSelectedCategory(cat)}
-          >
-            <Text
-              style={[
-                styles.categoryText,
-                selectedCategory === cat && styles.categoryTextActive,
-              ]}
-            >
-              {cat}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* Object selection row */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.objectRow}
-        style={styles.objectScroll}
-      >
-        {filteredObjects.map((o) => (
-          <TouchableOpacity
-            key={o.id}
-            style={[styles.objectThumb, selectedId === o.id && styles.objectThumbActive]}
-            onPress={() => setSelectedId(o.id)}
-          >
-            {thumbnailUrls[o.id] && (
-              <Image source={{ uri: thumbnailUrls[o.id] }} style={styles.objectThumbImage} />
-            )}
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#1a1a1a" },
+  screen: { flex: 1, backgroundColor: "#000" },
 
-  /* Header */
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "#1a1a1a",
+    backgroundColor: "rgba(26,26,26,0.7)",
     paddingHorizontal: 16,
     paddingTop: 48,
     paddingBottom: 12,
   },
-  hamburger: { width: 36, alignItems: "center" },
-  hamburgerIcon: { color: "#fff", fontSize: 22 },
-  headerTitle: { color: "#fff", fontSize: 18, fontWeight: "bold" },
+  doneBtn: { width: 48, alignItems: "center" },
+  doneBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  headerTitle: { color: "#fff", fontSize: 16, fontWeight: "bold" },
 
-  /* Preview area */
-  cameraArea: {
-    flex: 1,
-    backgroundColor: "#d4d4d4",
-    overflow: "hidden",
-  },
-  previewLoading: {
+  centerPrompt: {
     position: "absolute",
-    top: "50%",
-    left: "50%",
-    marginTop: -10,
-    marginLeft: -10,
-  },
-  emptyText: {
-    position: "absolute",
-    top: "50%",
-    left: 0,
-    right: 0,
-    textAlign: "center",
-    color: "#555",
-    fontSize: 14,
-  },
-
-  /* View in AR bar */
-  captureBar: {
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    backgroundColor: "#2e2e2e",
+    top: "35%",
+    left: 24,
+    right: 24,
     alignItems: "center",
+    gap: 16,
   },
-  arBtn: {
+  promptText: { color: "#fff", fontSize: 15, textAlign: "center", lineHeight: 22 },
+  startBtn: {
     backgroundColor: "#8b7355",
     paddingVertical: 14,
-    paddingHorizontal: 32,
+    paddingHorizontal: 36,
     borderRadius: 24,
   },
-  arBtnDisabled: {
-    opacity: 0.5,
-  },
-  arBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  startBtnText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  errorText: { color: "#ff8080", fontSize: 13, textAlign: "center" },
 
-  /* Category pills */
-  categoryRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: "#1a1a1a",
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
   },
-  categoryPill: {
-    paddingVertical: 7,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-    backgroundColor: "#6b5b45",
+  modalCard: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 24,
+    width: "100%",
+    maxWidth: 340,
+    alignItems: "center",
+    gap: 12,
   },
-  categoryPillActive: {
+  modalTitle: { fontSize: 17, fontWeight: "700", color: "#1a1a1a" },
+  modalMessage: { fontSize: 14, color: "#444", textAlign: "center", lineHeight: 20 },
+  modalBtn: {
     backgroundColor: "#8b7355",
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 20,
+    marginTop: 4,
   },
-  categoryText: { color: "#fff", fontSize: 13 },
-  categoryTextActive: { fontWeight: "bold" },
+  modalBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
 
-  /* Object thumbnails */
-  objectScroll: { backgroundColor: "#1a1a1a" },
-  objectRow: {
-    paddingHorizontal: 16,
-    paddingBottom: 24,
-    gap: 10,
+  hintBanner: {
+    position: "absolute",
+    top: 100,
+    left: 24,
+    right: 24,
+    alignItems: "center",
   },
-  objectThumb: {
+  hintText: {
+    color: "#fff",
+    fontSize: 13,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 16,
+    overflow: "hidden",
+  },
+  hintErrorText: {
+    marginTop: 8,
+    backgroundColor: "rgba(139,61,61,0.85)",
+    color: "#fff",
+  },
+
+  controlPanel: {
+    position: "absolute",
+    bottom: 110,
+    left: 16,
+    right: 16,
+    backgroundColor: "rgba(26,26,26,0.9)",
+    borderRadius: 14,
+    padding: 10,
+    gap: 6,
+  },
+  controlLabel: { color: "#fff", fontSize: 12, fontWeight: "700", textAlign: "center" },
+  controlRow: { flexDirection: "row", alignItems: "flex-end", gap: 10, paddingHorizontal: 4 },
+  carouselItem: { alignItems: "center", gap: 3 },
+  carouselItemLabel: { color: "#fff", fontSize: 10, fontWeight: "600" },
+  controlBtnPair: { flexDirection: "row", gap: 6 },
+  controlBtn: {
+    backgroundColor: "#6b5b45",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  controlBtnDisabled: { opacity: 0.4 },
+  controlBtnText: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  deleteBtn: { backgroundColor: "#8b3d3d" },
+
+  catalogScroll: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "rgba(26,26,26,0.7)",
+  },
+  catalogRow: { paddingHorizontal: 16, paddingVertical: 14, gap: 10 },
+  catalogThumb: {
     width: 60,
     height: 60,
     borderRadius: 6,
@@ -267,20 +579,9 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: "transparent",
   },
-  objectThumbActive: {
-    borderColor: "#8b7355",
-  },
-  objectThumbImage: { width: "100%", height: "100%" },
+  catalogThumbActive: { borderColor: "#8b7355" },
+  catalogThumbImage: { width: "100%", height: "100%" },
 
-  /* Web loading */
-  webLoading: {
-    flex: 1,
-    backgroundColor: "#1a1a1a",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  /* Native fallback */
   webScreen: {
     flex: 1,
     justifyContent: "center",
