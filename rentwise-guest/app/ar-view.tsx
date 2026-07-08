@@ -54,11 +54,24 @@ export default function ARView() {
       .then(async (data) => {
         setObjects(data);
 
+        // Resolved independently per item — one bad/missing thumbnailStoragePath
+        // must not blank out every other item's thumbnail too (Promise.all would
+        // reject as a whole on a single failure).
         const entries = await Promise.all(
-          data.map(async (o) => [o.id, await getModelDownloadUrl(o.thumbnailStoragePath)] as const)
+          data.map(async (o) => {
+            try {
+              return [o.id, await getModelDownloadUrl(o.thumbnailStoragePath)] as const;
+            } catch (err) {
+              console.error(`[AR] thumbnail failed for "${o.name}" (${o.id}):`, err);
+              return [o.id, null] as const;
+            }
+          })
         );
-        setThumbnailUrls(Object.fromEntries(entries));
+        setThumbnailUrls(
+          Object.fromEntries(entries.filter((e): e is [string, string] => e[1] !== null))
+        );
       })
+      .catch((err) => console.error("[AR] failed to load AR objects:", err))
       .finally(() => setLoading(false));
   }, []);
 
@@ -251,7 +264,7 @@ export default function ARView() {
               <>
                 <Text style={styles.promptText}>
                   Tap "Start AR", then point your camera at a flat surface. Pick items from the
-                  tray below to place them — you can place as many as you like together.
+                  tray below to place them you can place as many as you like together.
                 </Text>
                 <TouchableOpacity style={styles.startBtn} onPress={startAR}>
                   <Text style={styles.startBtnText}>Start AR</Text>
