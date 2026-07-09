@@ -87,7 +87,8 @@ export default function NavigableMap({ height, isMobile = false }: Props) {
             ].join(";");
 
             const popup = new mapboxgl.Popup({ offset: 16, closeButton: false, closeOnClick: false }).setHTML(
-              `<span style="font-size:13px;font-weight:700;color:#1a1a1a">${MARKET_NAME}</span>`
+              `<div style="font-size:13px;font-weight:700;color:#1a1a1a">${MARKET_NAME}</div>` +
+              `<div style="font-size:11px;font-weight:400;color:#666;margin-top:2px">Main entrance, near Café Enrique</div>`
             );
 
             new mapboxgl.Marker({ element: el })
@@ -142,6 +143,7 @@ export default function NavigableMap({ height, isMobile = false }: Props) {
       >
         <Text style={s.navBtnText}>Navigate to Market →</Text>
       </TouchableOpacity>
+      <Text style={s.navCaption}>Opens Google Maps to the main entrance, near Café Enrique</Text>
     </View>
   );
 }
@@ -151,7 +153,7 @@ const WHITE = "#fff";
 const MUTED = "#666";
 
 const s = StyleSheet.create({
-  root: { width: "50%", alignSelf: "center", alignItems: "center" },
+  root: { width: "100%", alignSelf: "center", alignItems: "center" },
   card: {
     width: "100%",
     borderRadius: 16,
@@ -182,4 +184,5 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   navBtnText: { color: WHITE, fontSize: 16, fontWeight: "700" },
+  navCaption: { color: MUTED, fontSize: 12, marginTop: 2 },
 });

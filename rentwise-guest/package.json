@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
+    "@expo/vector-icons": "^14.1.0",
     "@google/model-viewer": "^4.3.1",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@rnmapbox/maps": "^10.3.1",
