@@ -21,6 +21,7 @@
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "4.25.2",
     "react-native-web": "^0.21.2",
+    "react-zoom-pan-pinch": "^4.0.3",
     "three": "^0.183.0"
   },
   "devDependencies": {

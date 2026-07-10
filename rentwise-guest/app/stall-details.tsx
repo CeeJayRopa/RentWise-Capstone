@@ -103,6 +103,7 @@ const styles = StyleSheet.create({
     borderColor: "#ddd",
     padding: 20,
     width: "80%",
+    maxWidth: 340,
     alignSelf: "center",
     shadowColor: "#000",
     shadowOpacity: 0.12,

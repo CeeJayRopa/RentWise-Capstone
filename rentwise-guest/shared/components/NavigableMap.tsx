@@ -171,7 +171,7 @@ const s = StyleSheet.create({
   placeholderText: { fontSize: 16, color: MUTED },
 
   navBtn: {
-    alignSelf: "flex-start",
+    alignSelf: "center",
     backgroundColor: G_MID,
     paddingHorizontal: 32,
     paddingVertical: 16,

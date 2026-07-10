@@ -21,22 +21,11 @@ interface Props {
 
 // Tuning constants for the hand-rolled circle physics below.
 const GRAVITY = 0.32;
-const DRAIN_GRAVITY = 0.45;
 const RESTITUTION = 0.45;
 const FRICTION = 0.985;
-const SETTLE_SPEED = 0.06;
 const SHIELD_PAD = 34;
-const FILL_PAUSE_MS = 500;
-const EMPTY_PAUSE_MS = 900;
 const SPAWN_STAGGER_MS = 45;
-const DRAIN_STAGGER_MS = 14;
-// Once every item has spawned, wait for (nearly) all of them to actually
-// come to rest before draining — otherwise the drain can kick in while a
-// visible chunk of the pile is still mid-bounce. MAX_SETTLE_WAIT_MS is a
-// safety cap so the cycle can't stall forever if a couple of particles never
-// quite settle (e.g. stuck oscillating against the shield).
-const SETTLE_FRACTION = 0.94;
-const MAX_SETTLE_WAIT_MS = 7000;
+const RESPAWN_STAGGER_MS = 45;
 
 type Particle = {
   emoji: string;
@@ -48,13 +37,22 @@ type Particle = {
   rot: number;
   vr: number;
   spawned: boolean;
-  settled: boolean;
   spawnAt: number;
-  released: boolean;
-  releaseAt: number;
+  // Each item bounces off the floor exactly once, then keeps falling
+  // through and loops back to the top — no pile ever forms.
+  bounced: boolean;
 };
 
-type Phase = "filling" | "waiting" | "draining" | "empty";
+function resetAbove(p: Particle, width: number, respawnAt: number) {
+  p.x = p.radius + Math.random() * Math.max(1, width - p.radius * 2);
+  p.y = -p.radius * 2;
+  p.vx = (Math.random() - 0.5) * 1.5;
+  p.vy = 0;
+  p.rot = Math.random() * 360;
+  p.bounced = false;
+  p.spawned = false;
+  p.spawnAt = respawnAt;
+}
 
 function makeParticles(items: readonly ProduceItem[], startDelay: number): Particle[] {
   return items.map((item, i) => ({
@@ -67,10 +65,8 @@ function makeParticles(items: readonly ProduceItem[], startDelay: number): Parti
     rot: Math.random() * 360,
     vr: (Math.random() - 0.5) * 1.2,
     spawned: false,
-    settled: false,
     spawnAt: startDelay + i * SPAWN_STAGGER_MS,
-    released: false,
-    releaseAt: 0,
+    bounced: false,
   }));
 }
 
@@ -80,7 +76,8 @@ function simulateParticle(
   index: number,
   width: number,
   height: number,
-  shield: ShieldRect | null
+  shield: ShieldRect | null,
+  now: number
 ) {
   p.vy += GRAVITY;
   p.vx *= FRICTION;
@@ -89,7 +86,7 @@ function simulateParticle(
   p.y += p.vy;
   p.rot += p.vr;
 
-  // Container walls
+  // Side walls
   if (p.x - p.radius < 0) {
     p.x = p.radius;
     p.vx = -p.vx * RESTITUTION;
@@ -98,13 +95,24 @@ function simulateParticle(
     p.x = width - p.radius;
     p.vx = -p.vx * RESTITUTION;
   }
-  if (p.y + p.radius > height) {
-    p.y = height - p.radius;
-    p.vy = -p.vy * RESTITUTION;
-  }
   if (p.y - p.radius < 0) {
     p.y = p.radius;
     p.vy = Math.abs(p.vy) * RESTITUTION;
+  }
+
+  if (p.y + p.radius > height) {
+    if (!p.bounced) {
+      // First floor contact: bounce once.
+      p.y = height - p.radius;
+      p.vy = -p.vy * RESTITUTION;
+      p.bounced = true;
+    } else if (p.y - p.radius > height + p.radius * 3) {
+      // Already bounced once and has now fallen well clear of the floor —
+      // loop it back to the top instead of letting it pile up.
+      resetAbove(p, width, now + RESPAWN_STAGGER_MS);
+    }
+    // Between those two cases: already bounced, still falling through —
+    // let it keep going, no more clamping/bouncing off the floor.
   }
 
   // Invisible oval "shield" around the text — push the item back outside it.
@@ -130,7 +138,9 @@ function simulateParticle(
     }
   }
 
-  // Bounce off any other spawned item
+  // Nudge apart from any other currently-falling item, so items don't
+  // visibly overlap mid-air (nothing ever comes to rest, so this can't
+  // produce a pile — just keeps the fall looking natural).
   for (let j = 0; j < list.length; j++) {
     if (j === index) continue;
     const other = list[j];
@@ -157,17 +167,8 @@ function simulateParticle(
         p.vy += impulse * ny;
         other.vx -= impulse * nx;
         other.vy -= impulse * ny;
-        other.settled = false;
       }
     }
-  }
-
-  const speed = Math.abs(p.vx) + Math.abs(p.vy);
-  const onFloor = p.y + p.radius >= height - 0.5;
-  if (speed < SETTLE_SPEED && onFloor) {
-    p.vx = 0;
-    p.vy = 0;
-    p.settled = true;
   }
 }
 
@@ -182,9 +183,6 @@ export default function FallingProduce({ items, shield }: Props) {
   const particles = useRef<Particle[]>([]);
   const sizeRef = useRef({ width: 0, height: 0 });
   const shieldRef = useRef<ShieldRect | null>(shield);
-  const phaseRef = useRef<Phase>("filling");
-  const phaseUntil = useRef(0);
-  const filledAt = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -195,102 +193,23 @@ export default function FallingProduce({ items, shield }: Props) {
     if (Platform.OS !== "web") return;
 
     particles.current = makeParticles(items, performance.now() + 300);
-    phaseRef.current = "filling";
 
     const step = (now: number) => {
       const { width, height } = sizeRef.current;
       const list = particles.current;
 
       if (width > 0 && height > 0) {
-        const phase = phaseRef.current;
-
-        if (phase === "filling") {
-          let allSpawned = true;
-          let settledCount = 0;
-          list.forEach((p, i) => {
-            if (!p.spawned) {
-              if (now >= p.spawnAt) {
-                p.spawned = true;
-                p.x = p.radius + Math.random() * Math.max(1, width - p.radius * 2);
-                p.y = -p.radius * 2;
-                p.vx = (Math.random() - 0.5) * 1.5;
-                p.vy = 0;
-              } else {
-                allSpawned = false;
-              }
+        list.forEach((p, i) => {
+          if (!p.spawned) {
+            if (now >= p.spawnAt) {
+              p.spawned = true;
+            } else {
+              return;
             }
-            if (p.spawned && !p.settled) {
-              simulateParticle(p, list, i, width, height, shieldRef.current);
-            }
-            if (p.settled) settledCount++;
-            writeTransform(nodeRefs.current[i], p);
-          });
-
-          // Once every item is on the board, wait for (nearly) all of them
-          // to actually be at rest — not just a fixed timer — before moving
-          // on, so the drain never starts while the pile is still visibly
-          // falling. MAX_SETTLE_WAIT_MS is a fallback in case a few particles
-          // never fully settle.
-          if (allSpawned) {
-            if (filledAt.current === null) filledAt.current = now;
-            const elapsed = now - filledAt.current;
-            const settledFraction = settledCount / list.length;
-            if (settledFraction >= SETTLE_FRACTION || elapsed >= MAX_SETTLE_WAIT_MS) {
-              filledAt.current = null;
-              phaseRef.current = "waiting";
-              phaseUntil.current = now + FILL_PAUSE_MS;
-            }
-          } else {
-            filledAt.current = null;
           }
-        } else if (phase === "waiting") {
-          if (now >= phaseUntil.current) {
-            phaseRef.current = "draining";
-            // Shuffle the release order so the wave doesn't always sweep
-            // left-to-right in the same sequence as spawn order.
-            const order = list.map((_, i) => i);
-            for (let i = order.length - 1; i > 0; i--) {
-              const j = Math.floor(Math.random() * (i + 1));
-              [order[i], order[j]] = [order[j], order[i]];
-            }
-            order.forEach((particleIndex, orderIndex) => {
-              const p = list[particleIndex];
-              p.settled = false;
-              p.released = false;
-              p.releaseAt = now + orderIndex * DRAIN_STAGGER_MS;
-            });
-          }
-        } else if (phase === "draining") {
-          let allGone = true;
-          list.forEach((p, i) => {
-            if (!p.released) {
-              if (now >= p.releaseAt) {
-                p.released = true;
-                p.vx += (Math.random() - 0.5) * 2;
-                p.vy -= Math.random() * 1.5;
-              } else {
-                allGone = false;
-                writeTransform(nodeRefs.current[i], p);
-                return;
-              }
-            }
-            p.vy += DRAIN_GRAVITY;
-            p.x += p.vx;
-            p.y += p.vy;
-            p.rot += p.vr * 2;
-            if (p.y < height + p.radius * 4) allGone = false;
-            writeTransform(nodeRefs.current[i], p);
-          });
-          if (allGone) {
-            phaseRef.current = "empty";
-            phaseUntil.current = now + EMPTY_PAUSE_MS;
-          }
-        } else if (phase === "empty") {
-          if (now >= phaseUntil.current) {
-            particles.current = makeParticles(items, now);
-            phaseRef.current = "filling";
-          }
-        }
+          simulateParticle(p, list, i, width, height, shieldRef.current, now);
+          writeTransform(nodeRefs.current[i], p);
+        });
       }
 
       rafRef.current = requestAnimationFrame(step);

@@ -7,11 +7,12 @@ import {
   StyleSheet,
   Platform,
   useWindowDimensions,
+  TextInput,
+  Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import React, { useRef, useState } from "react";
 import NavigableMap from "../shared/components/NavigableMap";
-import FallingProduce, { ShieldRect } from "../shared/components/FallingProduce";
 import MarketMapEmbed from "../shared/components/MarketMapEmbed";
 import CategoryCarousel from "../shared/components/CategoryCarousel";
 
@@ -28,9 +29,10 @@ const TEXT_MUTED = "#5B6560";
 const HERO_DARK = "#0D1F1A";
 const HERO_MUTED = "#B9D9CC";
 const FOOTER_BG = "#12201C";
-const FOOTER_MUTED = "#8FA79C";
 const FOOTER_COPY = "#5C7268";
 const WHITE = "#FFFFFF";
+
+const FACEBOOK_URL = "https://www.facebook.com/kadomeng.talipapa";
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 // Each category's carousel reuses its own single photo across 7 placeholder
@@ -77,22 +79,6 @@ const CATEGORIES = [
   },
 ] as const;
 
-const PRODUCE_EMOJIS = [
-  "🍎", "🥦", "🍊", "🍅", "🍋", "🥕", "🍇", "🌽", "🍌", "🍆", "🥑", "🍓", "🍈", "🥔",
-] as const;
-
-// Deterministic pseudo-random size jitter (no Math.random at module scope so the
-// list is stable across fast-refresh / re-imports).
-function seededSize(i: number, min: number, max: number) {
-  const t = Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1;
-  return Math.round(min + t * (max - min));
-}
-
-const FALLING_ITEM_COUNT = 112; // 20% fewer than the original 140
-const FALLING_ITEMS = Array.from({ length: FALLING_ITEM_COUNT }, (_, i) => ({
-  emoji: PRODUCE_EMOJIS[i % PRODUCE_EMOJIS.length],
-  size: seededSize(i, 24, 46),
-}));
 
 const STATS = [
   { label: "Total Stalls", value: "40", icon: "storefront-outline" },
@@ -112,14 +98,19 @@ export default function GuestLanding() {
   const navPad = isMobile ? 16 : isTablet ? 32 : 64;
   const secPad = isMobile ? 40 : isTablet ? 56 : 72;
   const PIN_H = height;
+  // Scroll distance "owned" by each category, as a multiple of the viewport
+  // height — higher means more scrolling is required to advance to the next
+  // category (a single scroll/swipe shouldn't skip straight past one).
+  const CATEGORY_SCROLL_LENGTH = PIN_H * 1.5;
 
   const scrollRef = useRef<ScrollView>(null);
+  const marketMapSectionY = useRef(0);
+  const contactSectionY = useRef(0);
   const [scrollY, setScrollY] = useState(0);
   const [activeCatIndex, setActiveCatIndex] = useState(0);
   // Continuous 0-1 progress across the whole pinned category track (not just
   // the rounded-off active index) — used to drive the Wet Market carousel.
   const [catProgress, setCatProgress] = useState(0);
-  const [aboutShield, setAboutShield] = useState<ShieldRect | null>(null);
 
   // Category panel crossfade — eased by hand every frame (same reason as the
   // carousel: CSS transitions on toggled opacity weren't reliably animating
@@ -149,16 +140,6 @@ export default function GuestLanding() {
   // Pinned category track: start y + total scrollable height, measured via onLayout
   const catTrackStart = useRef(0);
   const catTrackHeight = useRef(0);
-
-  const goToCategory = (i: number) => {
-    const total = catTrackHeight.current - PIN_H;
-    if (total <= 0) return;
-    const targetProgress = (i + 0.5) / CATEGORIES.length;
-    scrollRef.current?.scrollTo({
-      y: catTrackStart.current + targetProgress * total,
-      animated: true,
-    });
-  };
 
   const handleScroll = (e: any) => {
     const y = e.nativeEvent.contentOffset.y;
@@ -247,10 +228,6 @@ export default function GuestLanding() {
       .rw-pin-panel.rw-pin-active img {
         transform: scale(1);
       }
-      .rw-pin-dot {
-        transition: width 0.3s ease, height 0.3s ease, background-color 0.3s ease;
-        cursor: pointer;
-      }
 
       /* Social chips */
       .rw-social-chip {
@@ -331,10 +308,24 @@ export default function GuestLanding() {
     };
   }, []);
 
-  const cardPct = isMobile ? "100%" : isTablet ? "45%" : "30%";
-  const heroFontSize = isMobile ? 26 : isTablet ? 38 : 56;
+  // Tablet used to get 45% (2-per-row, orphaning the 3rd stat card onto its
+  // own centered row) — reuse the same 30% desktop already proves fits 3
+  // per row cleanly, it's a percentage so it scales fine at tablet widths too.
+  const cardPct = isMobile ? "100%" : "30%";
+  const heroFontSize = isMobile ? 30 : isTablet ? 32 : 42;
   const heroImgWidth = Math.min(width * 0.8, 1180);
   const heroImgHeight = heroImgWidth / 1.7;
+  // ~75-80% of the previous 260px mobile cap, per the hero-section mobile spec.
+  const mobileCircleSize = Math.min(width * 0.7, isMobile ? 200 : 340);
+  // Hero-only override — increases side padding on mobile without touching
+  // `hPad`, which every other section on the page still relies on.
+  const heroPadH = isMobile ? 24 : hPad;
+  // Buttons stay side-by-side down to 390px; below that they stack full-width.
+  const isTinyMobile = isMobile && width < 390;
+  // Tablet gets its own side-by-side layout (text ~52%, image ~42% of the
+  // available hero content width) instead of inheriting the mobile stack.
+  const heroContentWidth = width - heroPadH * 2;
+  const tabletCircleSize = Math.min(heroContentWidth * 0.42, 320);
 
   return (
     <View style={styles.screen}>
@@ -354,7 +345,7 @@ export default function GuestLanding() {
           {/* Market photo background */}
           <Image
             source={require("../assets/Ka_Domeng_background.png")}
-            style={styles.heroBlueprintBg}
+            style={[styles.heroBlueprintBg, isTablet && { opacity: 0.25 }]}
             resizeMode="cover"
           />
           {/* Dark-green gradient overlay */}
@@ -407,32 +398,100 @@ export default function GuestLanding() {
             style={[
               styles.heroContent,
               {
-                paddingHorizontal: hPad,
-                paddingVertical: isDesktop ? 0 : 60,
+                paddingHorizontal: heroPadH,
+                paddingVertical: isDesktop ? 0 : isMobile ? 40 : 60,
                 justifyContent: "center",
+                flexDirection: isTablet ? "row" : "column",
+                alignItems: isTablet ? "center" : undefined,
+                gap: isTablet ? 40 : undefined,
               },
             ]}
           >
             <View
               style={{
-                maxWidth: isDesktop ? "36%" : "100%",
-                gap: 16,
-                width: "100%",
+                maxWidth: isDesktop ? "44%" : isTablet ? "52%" : "100%",
+                gap: isMobile ? 0 : 16,
+                width: isTablet ? "52%" : "100%",
                 marginLeft: isDesktop ? 48 : 0,
               }}
             >
-              <Text style={styles.heroEyebrow}>Ka Domeng Talipapa</Text>
-              <Text style={[styles.heroHeadline, { fontSize: heroFontSize, lineHeight: heroFontSize * 1.15 }]}>
+              <Text style={[styles.heroEyebrow, isMobile && { fontSize: 12, marginBottom: 8 }]}>
+                Ka Domeng Talipapa Market
+              </Text>
+              <Text
+                style={[
+                  styles.heroHeadline,
+                  {
+                    fontSize: heroFontSize,
+                    lineHeight: heroFontSize * (isMobile ? 1.1 : 1.15),
+                    maxWidth: isMobile ? 320 : undefined,
+                  },
+                  isMobile && { marginBottom: 16 },
+                ]}
+              >
                 Shop Fresh. Grow Your Business.{"\n"}All in One Market.
               </Text>
+              <Text
+                style={[
+                  styles.heroSubtext,
+                  { fontSize: isMobile ? 14 : 16 },
+                  isMobile && { marginBottom: 24, maxWidth: 340 },
+                ]}
+                numberOfLines={isMobile ? 2 : undefined}
+              >
+                From fresh produce to thriving stalls, Ka Domeng Talipapa is where the community
+                shops, sells, and grows together.
+              </Text>
+
+              <View
+                style={[
+                  styles.heroActions,
+                  isMobile && { alignSelf: "stretch" },
+                  isTinyMobile && { flexDirection: "column", gap: 12 },
+                ]}
+              >
+                <TouchableOpacity
+                  style={[
+                    styles.heroPrimaryBtn,
+                    isMobile && !isTinyMobile && { flex: 1, paddingHorizontal: 16 },
+                    isTinyMobile && { alignSelf: "stretch", paddingHorizontal: 16 },
+                  ]}
+                  onPress={() => scrollRef.current?.scrollTo({ y: marketMapSectionY.current, animated: true })}
+                  {...({ className: "rw-btn-primary" } as any)}
+                >
+                  <Text style={[styles.heroPrimaryBtnText, isMobile && { fontSize: 13 }]}>2D Layout View</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.heroSecondaryBtn,
+                    isMobile && !isTinyMobile && { flex: 1, paddingHorizontal: 16 },
+                    isTinyMobile && { alignSelf: "stretch", paddingHorizontal: 16 },
+                  ]}
+                  onPress={() => scrollRef.current?.scrollTo({ y: contactSectionY.current, animated: true })}
+                >
+                  <Text style={[styles.heroSecondaryBtnText, isMobile && { fontSize: 13 }]}>Contact Us</Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
             {!isDesktop && (
-              <Image
-                source={require("../assets/fruits and vegetable on a bag.png")}
-                style={{ width: "100%", maxWidth: 480, aspectRatio: 1.7, alignSelf: "center", marginTop: 24 }}
-                resizeMode="contain"
-              />
+              <View
+                style={{
+                  width: isTablet ? tabletCircleSize : mobileCircleSize,
+                  height: isTablet ? tabletCircleSize : mobileCircleSize,
+                  borderRadius: (isTablet ? tabletCircleSize : mobileCircleSize) / 2,
+                  backgroundColor: PRIMARY,
+                  overflow: "hidden",
+                  alignSelf: "center",
+                  marginTop: isTablet ? 0 : isMobile ? 32 : 24,
+                }}
+              >
+                <Image
+                  source={require("../assets/fruits and vegetable on a bag.png")}
+                  style={{ width: "100%", height: "100%" }}
+                  resizeMode="cover"
+                />
+              </View>
             )}
           </View>
         </View>
@@ -445,14 +504,8 @@ export default function GuestLanding() {
           ]}
           {...({ className: "rw-reveal" } as any)}
         >
-          <FallingProduce items={FALLING_ITEMS} shield={aboutShield} />
-
-          <View
-            style={{ alignItems: "center" }}
-            onLayout={(e) => setAboutShield(e.nativeEvent.layout)}
-          >
-            <Text style={styles.sectionLabel}>ABOUT THE MARKET</Text>
-            <Text style={[styles.sectionTitle, { fontSize: isMobile ? 24 : isTablet ? 32 : 40 }]}>
+          <View style={{ alignItems: "center" }}>
+            <Text style={[styles.sectionTitle, { fontSize: isMobile ? 24 : 40 }]}>
               Your One-Stop Public Market
             </Text>
             <Text
@@ -466,7 +519,7 @@ export default function GuestLanding() {
 
         {/* ── Category pinned crossfade (all breakpoints) ────────────────────── */}
         <View
-          style={{ height: PIN_H * CATEGORIES.length }}
+          style={{ height: CATEGORY_SCROLL_LENGTH * CATEGORIES.length }}
           onLayout={(e) => {
             catTrackStart.current = e.nativeEvent.layout.y;
             catTrackHeight.current = e.nativeEvent.layout.height;
@@ -522,17 +575,6 @@ export default function GuestLanding() {
                 />
               </View>
             ))}
-
-            <View style={[styles.catPinDots, { right: isMobile ? 14 : isTablet ? 22 : 32 }]}>
-              {CATEGORIES.map((cat, i) => (
-                <TouchableOpacity
-                  key={cat.slug}
-                  onPress={() => goToCategory(i)}
-                  style={[styles.catPinDot, activeCatIndex === i && styles.catPinDotActive]}
-                  {...({ className: "rw-pin-dot" } as any)}
-                />
-              ))}
-            </View>
           </View>
         </View>
 
@@ -551,11 +593,19 @@ export default function GuestLanding() {
             {STATS.map((stat, i) => (
               <View
                 key={stat.label}
-                style={[styles.statCard, { width: cardPct as any }]}
+                style={[
+                  styles.statCard,
+                  { width: cardPct as any },
+                  // Tablet: gap on the row already spaces the 3 cards evenly,
+                  // so drop the extra per-card margin (it was pushing the
+                  // trio just wide enough to wrap) and trim padding a touch
+                  // so icon/number/label don't feel cramped at this width.
+                  isTablet && { margin: 0, padding: 20 },
+                ]}
                 {...({ className: `rw-reveal rw-d${i + 1}` } as any)}
               >
                 <View style={styles.statIconCircle}>
-                  <Ionicons name={stat.icon as any} size={22} color={WHITE} />
+                  <Ionicons name={stat.icon as any} size={22} color={PRIMARY} />
                 </View>
                 <Text nativeID={`rw-stat-${i}`} style={styles.statValue}>{stat.value}</Text>
                 <Text style={styles.statLabel}>{stat.label}</Text>
@@ -567,9 +617,11 @@ export default function GuestLanding() {
         {/* ── 2D Market View (embedded, no separate page) ─────────────────────── */}
         <View
           style={[styles.section, { backgroundColor: BG, paddingVertical: secPad, paddingHorizontal: hPad }]}
+          onLayout={(e) => {
+            marketMapSectionY.current = e.nativeEvent.layout.y;
+          }}
           {...({ className: "rw-reveal" } as any)}
         >
-          <Text style={styles.sectionLabel}>MARKET MAP</Text>
           <Text style={[styles.sectionTitle, { fontSize: isMobile ? 24 : isTablet ? 32 : 40 }]}>
             2D Market View
           </Text>
@@ -577,44 +629,20 @@ export default function GuestLanding() {
             Tap any stall to see its status, or check what's vacant right now.
           </Text>
 
-          <MarketMapEmbed maxWidth={1100} />
+          <MarketMapEmbed maxWidth={980} />
         </View>
 
         {/* ── Find Us (Mapbox) ─────────────────────────────────────────────── */}
         <View
-          style={[styles.section, { backgroundColor: BG, paddingVertical: secPad, paddingHorizontal: hPad }]}
+          style={[styles.section, { backgroundColor: PRIMARY_TINT, paddingVertical: secPad, paddingHorizontal: hPad }]}
           {...({ className: "rw-reveal" } as any)}
         >
-          <Text style={styles.sectionLabel}>LOCATION</Text>
           <Text style={[styles.sectionTitle, { fontSize: isMobile ? 22 : isTablet ? 30 : 40 }]}>
             Find Us
           </Text>
-          <Text
-            style={[styles.sectionDesc, { maxWidth: isMobile ? "100%" : isTablet ? "100%" : 540 }]}
-          >
-            Use the interactive map below to find our exact location.
-          </Text>
 
-          <View
-            style={[
-              styles.findUsRow,
-              { flexDirection: isDesktop ? "row" : "column", gap: isMobile ? 16 : 24 },
-            ]}
-          >
-            <View style={[styles.findUsInfoCard, { width: isDesktop ? "36%" : "100%" }]}>
-              <View style={styles.findUsInfoRow}>
-                <Ionicons name="location-outline" size={20} color={PRIMARY} />
-                <Text style={styles.findUsInfoText}>
-                  Igay Rd. Sto. Cristo, San Jose del Monte, Bulacan
-                </Text>
-              </View>
-              <View style={styles.findUsInfoRow}>
-                <Ionicons name="mail-outline" size={20} color={PRIMARY} />
-                <Text style={styles.findUsInfoText}>info@rentwise.ph</Text>
-              </View>
-            </View>
-
-            <View style={[styles.mapWrap, { flex: isDesktop ? 1 : undefined }]}>
+          <View style={[styles.findUsRow, { gap: isMobile ? 16 : 24 }]}>
+            <View style={styles.mapWrap}>
               <NavigableMap
                 height={isMobile ? 260 : isTablet ? 360 : 440}
                 isMobile={isMobile}
@@ -623,84 +651,122 @@ export default function GuestLanding() {
           </View>
         </View>
 
+        {/* ── Contact Us ───────────────────────────────────────────────────── */}
+        <View
+          style={[styles.section, { backgroundColor: BG, paddingVertical: secPad, paddingHorizontal: hPad, alignItems: "stretch" }]}
+          onLayout={(e) => {
+            contactSectionY.current = e.nativeEvent.layout.y;
+          }}
+          {...({ className: "rw-reveal" } as any)}
+        >
+          <View
+            style={[
+              styles.contactRow,
+              {
+                flexDirection: isDesktop || isTablet ? "row" : "column",
+                alignItems: isTablet ? "flex-start" : undefined,
+                gap: isTablet ? 40 : isMobile ? 40 : 56,
+              },
+            ]}
+          >
+            {/* Left: info */}
+            <View
+              style={[
+                styles.contactInfoCol,
+                isDesktop && { flex: 1 },
+                // ~45/55 split via flex ratios (not raw percentages) so the
+                // fixed row gap is accounted for automatically — guarantees
+                // no overflow regardless of exact tablet width.
+                isTablet && { flex: 45, gap: 12 },
+              ]}
+            >
+              <Text style={[styles.contactHeading, { fontSize: isMobile ? 28 : isTablet ? 34 : 40 }]}>
+                Contact Us
+              </Text>
+              <Text style={styles.contactSubtext}>
+                Have a question about a stall, or need help finding your way around?
+                Reach out and we'll get back to you.
+              </Text>
+
+              <View style={[styles.contactDetails, isTablet && { gap: 12, marginTop: 0 }]}>
+                <View style={styles.findUsInfoRow}>
+                  <Ionicons name="call-outline" size={18} color={PRIMARY} />
+                  <Text style={styles.findUsInfoText}>+63 965 677 0526</Text>
+                </View>
+                <View style={styles.findUsInfoRow}>
+                  <Ionicons name="location-outline" size={18} color={PRIMARY} />
+                  <Text style={styles.findUsInfoText}>
+                    Igay Rd. Sto. Cristo, San Jose del Monte, Bulacan
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.findUsInfoRow}
+                  onPress={() => Linking.openURL(FACEBOOK_URL)}
+                  {...({ className: "rw-social-chip" } as any)}
+                >
+                  <Ionicons name="logo-facebook" size={18} color={PRIMARY} />
+                  <Text style={[styles.findUsInfoText, styles.contactLink]}>Message us on Facebook</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Right: form */}
+            <View
+              style={[
+                styles.contactFormCard,
+                isDesktop && { flex: 1 },
+                // Fill its ~55% flex column instead of capping at the base
+                // 460px card width, which was leaving lopsided whitespace
+                // inside the column at tablet widths.
+                isTablet && { flex: 55, maxWidth: "100%" },
+              ]}
+            >
+              <Text style={styles.contactFormHeading}>Get in Touch</Text>
+              <Text style={styles.contactFormSubtext}>You can reach us anytime</Text>
+
+              <View style={[styles.contactFormRow, isMobile && { flexDirection: "column" }]}>
+                <TextInput
+                  style={[styles.contactInput, { flex: 1 }]}
+                  placeholder="First name"
+                  placeholderTextColor={TEXT_MUTED}
+                />
+                <TextInput
+                  style={[styles.contactInput, { flex: 1 }]}
+                  placeholder="Last name"
+                  placeholderTextColor={TEXT_MUTED}
+                />
+              </View>
+              <TextInput
+                style={styles.contactInput}
+                placeholder="Your email"
+                placeholderTextColor={TEXT_MUTED}
+                keyboardType="email-address"
+              />
+              <TextInput
+                style={styles.contactInput}
+                placeholder="Phone number"
+                placeholderTextColor={TEXT_MUTED}
+                keyboardType="phone-pad"
+              />
+              <TextInput
+                style={[styles.contactInput, styles.contactTextarea]}
+                placeholder="How can we help?"
+                placeholderTextColor={TEXT_MUTED}
+                multiline
+                numberOfLines={4}
+              />
+
+              <TouchableOpacity style={styles.contactSubmitBtn} {...({ className: "rw-btn-primary" } as any)}>
+                <Text style={styles.contactSubmitBtnText}>Submit</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+
         {/* ── Footer ───────────────────────────────────────────────────────── */}
         <View
           style={[styles.footer, { paddingHorizontal: navPad }]}
         >
-          <View
-            style={[
-              styles.footerInner,
-              {
-                flexDirection: isMobile ? "column" : "row",
-                flexWrap: isTablet ? "wrap" : "nowrap",
-                gap: isMobile ? 32 : isTablet ? 40 : 60,
-                alignItems: isMobile ? "center" : "flex-start",
-              },
-            ]}
-          >
-            {/* Brand */}
-            <View
-              style={[
-                styles.footerCol,
-                {
-                  width: isMobile ? "100%" : isTablet ? ("47%" as any) : undefined,
-                  alignItems: isMobile ? "center" : "flex-start",
-                },
-              ]}
-            >
-              <Text style={styles.footerBrand}>RentWise</Text>
-              <Text style={[styles.footerMuted, isMobile && { textAlign: "center" }]}>
-                Connecting businesses with the right market space since day one.
-              </Text>
-            </View>
-
-            {/* Contact */}
-            <View
-              style={[
-                styles.footerCol,
-                {
-                  width: isMobile ? "100%" : isTablet ? ("47%" as any) : undefined,
-                  alignItems: isMobile ? "center" : "flex-start",
-                },
-              ]}
-            >
-              <Text style={styles.footerHeading}>Contact</Text>
-              <Text style={[styles.footerMuted, isMobile && { textAlign: "center" }]}>Ka Domeng Talipapa Market</Text>
-              <Text style={[styles.footerMuted, isMobile && { textAlign: "center" }]}>Igay Rd. Sto. Cristo, San Jose del Monte, Bulacan</Text>
-              <Text style={[styles.footerMuted, isMobile && { textAlign: "center" }]}>info@rentwise.ph</Text>
-            </View>
-
-            {/* Social */}
-            <View
-              style={[
-                styles.footerCol,
-                {
-                  width: isMobile ? "100%" : isTablet ? ("100%" as any) : undefined,
-                  alignItems: isMobile ? "center" : "flex-start",
-                },
-              ]}
-            >
-              <Text style={styles.footerHeading}>Follow Us</Text>
-              <View style={[styles.socialRow, isMobile && { justifyContent: "center" }]}>
-                {([
-                  { name: "logo-facebook", label: "Facebook" },
-                  { name: "logo-instagram", label: "Instagram" },
-                  { name: "logo-twitter", label: "Twitter" },
-                ] as const).map((s) => (
-                  <TouchableOpacity
-                    key={s.label}
-                    style={styles.socialChip}
-                    accessibilityLabel={s.label}
-                    {...({ className: "rw-social-chip" } as any)}
-                  >
-                    <Ionicons name={s.name} size={18} color={WHITE} />
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          </View>
-
-          <View style={styles.footerDivider} />
           <Text style={styles.footerCopy}>
             © {new Date().getFullYear()} RentWise. All rights reserved.
           </Text>
@@ -774,6 +840,34 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: -0.5,
   },
+  heroSubtext: {
+    color: HERO_MUTED,
+    lineHeight: 24,
+    maxWidth: 460,
+  },
+  heroActions: {
+    flexDirection: "row",
+    gap: 14,
+    marginTop: 8,
+  },
+  heroPrimaryBtn: {
+    backgroundColor: PRIMARY,
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 28,
+    alignItems: "center",
+  },
+  heroPrimaryBtnText: { color: WHITE, fontSize: 15, fontWeight: "700" },
+  heroSecondaryBtn: {
+    backgroundColor: "transparent",
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.4)",
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 28,
+    alignItems: "center",
+  },
+  heroSecondaryBtnText: { color: WHITE, fontSize: 15, fontWeight: "700" },
   // Sections
   section: {
     paddingVertical: 72,
@@ -844,59 +938,41 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
     zIndex: 2,
   },
-  catPinDots: {
-    position: "absolute",
-    right: 32,
-    top: "50%",
-    marginTop: -48,
-    gap: 12,
-    alignItems: "center",
-    zIndex: 3,
-  },
-  catPinDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: "rgba(255,255,255,0.35)",
-  },
-  catPinDotActive: {
-    width: 12,
-    height: 32,
-    borderRadius: 6,
-    backgroundColor: ACCENT,
-  },
-
   // Stat cards
   statIconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: PRIMARY,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: PRIMARY_TINT,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 14,
+    marginBottom: 16,
   },
   statCard: {
     backgroundColor: SURFACE,
-    borderRadius: 16,
-    padding: 32,
+    borderRadius: 20,
+    borderTopWidth: 4,
+    borderTopColor: PRIMARY,
+    padding: 28,
     alignItems: "center",
     borderWidth: 1,
     borderColor: BORDER,
     margin: 6,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.06,
+    shadowRadius: 16,
+    elevation: 3,
   },
   statValue: { color: ACCENT, fontSize: 44, fontWeight: "800", lineHeight: 52 },
   statLabel: {
     color: TEXT_MUTED,
-    fontSize: 14,
-    fontWeight: "600",
-    marginTop: 6,
+    fontSize: 12,
+    fontWeight: "700",
+    marginTop: 8,
     textAlign: "center",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
   },
 
   // Find Us
@@ -905,14 +981,8 @@ const styles = StyleSheet.create({
     maxWidth: 1100,
     alignItems: "stretch",
   },
-  findUsInfoCard: {
-    backgroundColor: SURFACE,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: BORDER,
-    padding: 24,
-    gap: 16,
-    justifyContent: "center",
+  mapWrap: {
+    width: "100%",
   },
   findUsInfoRow: {
     flexDirection: "row",
@@ -925,59 +995,82 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     flexShrink: 1,
   },
-  mapWrap: {
+
+  // Contact Us
+  contactRow: {
     width: "100%",
-    borderRadius: 16,
-    overflow: "hidden",
+    maxWidth: 1100,
+    alignSelf: "center",
+  },
+  contactInfoCol: {
+    gap: 16,
+  },
+  contactHeading: {
+    color: TEXT_DARK,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+  },
+  contactSubtext: {
+    color: TEXT_MUTED,
+    fontSize: 15,
+    lineHeight: 24,
+    maxWidth: 420,
+  },
+  contactDetails: {
+    gap: 12,
+    marginTop: 4,
+  },
+  contactLink: {
+    color: PRIMARY,
+    fontWeight: "700",
+  },
+
+  contactFormCard: {
+    width: "100%",
+    maxWidth: 460,
+    backgroundColor: SURFACE,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: BORDER,
+    padding: 28,
+    gap: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.06,
+    shadowRadius: 24,
+    elevation: 4,
   },
+  contactFormHeading: { color: TEXT_DARK, fontSize: 22, fontWeight: "800" },
+  contactFormSubtext: { color: TEXT_MUTED, fontSize: 14, marginBottom: 8 },
+  contactFormRow: { flexDirection: "row", gap: 12 },
+  contactInput: {
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: TEXT_DARK,
+    backgroundColor: BG,
+    minWidth: 0,
+  },
+  contactTextarea: {
+    minHeight: 100,
+    textAlignVertical: "top",
+  },
+  contactSubmitBtn: {
+    backgroundColor: PRIMARY,
+    borderRadius: 24,
+    paddingVertical: 14,
+    alignItems: "center",
+    marginTop: 8,
+  },
+  contactSubmitBtnText: { color: WHITE, fontSize: 15, fontWeight: "700" },
 
   // Footer
   footer: {
     backgroundColor: FOOTER_BG,
-    paddingTop: 56,
-    paddingBottom: 32,
-  },
-  footerInner: {
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    marginBottom: 40,
-  },
-  footerCol: { minWidth: 180, maxWidth: 300 },
-  footerBrand: {
-    color: WHITE,
-    fontSize: 20,
-    fontWeight: "700",
-    marginBottom: 10,
-  },
-  footerHeading: {
-    color: WHITE,
-    fontSize: 14,
-    fontWeight: "600",
-    marginBottom: 12,
-  },
-  footerMuted: {
-    color: FOOTER_MUTED,
-    fontSize: 14,
-    lineHeight: 22,
-    marginBottom: 4,
-  },
-  socialRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  socialChip: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  footerDivider: {
-    height: 1,
-    backgroundColor: "rgba(255,255,255,0.08)",
-    marginTop: 0,
-    marginBottom: 20,
+    paddingVertical: 20,
   },
   footerCopy: {
     color: FOOTER_COPY,

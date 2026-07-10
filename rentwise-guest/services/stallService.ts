@@ -9,13 +9,17 @@ export async function getStalls(){
         collection(db,"stalls")
     );
 
-  const stalls = snapshot.docs.map((doc)=>({
+  const stalls = snapshot.docs.map((doc)=>{
+    const data = doc.data() as Record<string, any>;
 
-    id: doc.id,
-
-    ...doc.data()
-
-  }));
+    return {
+      id: doc.id,
+      ...data,
+      spaceDimension:
+        data.spaceDimension ??
+        (data.width != null && data.length != null ? `${data.width} x ${data.length}` : undefined),
+    };
+  });
 
 
   return stalls;

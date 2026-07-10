@@ -16,6 +16,22 @@ import { getARObjects, getModelDownloadUrl } from "../services/modelService";
 import type { ARObject } from "../shared/types/arObject";
 import { ARSessionScene, PlacedState, ScaleAxis, SurfaceType } from "../features/ar/ARSessionScene";
 
+// ─── Theme (AR-specific blue/teal "tech" palette — intentionally distinct
+// from the rest of the guest site's green branding, since this is the
+// immersive camera-passthrough experience, not a marketing page) ─────────────
+const PRIMARY = "#0891B2";
+const PRIMARY_DARK = "#155E75";
+const ACCENT = "#F59E0B";
+// Dark chrome (header, hint banner, control panel, catalog rail) uses this as
+// rgba(8,28,38, alpha) — the RN StyleSheet values below inline the same hex
+// as literal rgba() strings so each surface can carry its own opacity. Deep
+// navy-teal instead of the old green-black, to match the new palette.
+const BG = "#FAFAF8";
+const SURFACE = "#FFFFFF";
+const TEXT_DARK = "#171A19";
+const TEXT_MUTED = "#5B6560";
+const DANGER = "#B3261E";
+
 const AXIS_LABELS: { axis: ScaleAxis; label: string }[] = [
   { axis: "x", label: "Width" },
   { axis: "y", label: "Height" },
@@ -466,13 +482,14 @@ export default function ARView() {
 }
 
 const styles = StyleSheet.create({
+  // Stays black — this is the live camera/AR passthrough backdrop, not brand chrome.
   screen: { flex: 1, backgroundColor: "#000" },
 
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "rgba(26,26,26,0.7)",
+    backgroundColor: "rgba(8,28,38,0.82)",
     paddingHorizontal: 16,
     paddingTop: 48,
     paddingBottom: 12,
@@ -489,9 +506,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 16,
   },
-  promptText: { color: "#fff", fontSize: 15, textAlign: "center", lineHeight: 22 },
+  promptText: {
+    color: "#fff",
+    fontSize: 15,
+    textAlign: "center",
+    lineHeight: 22,
+    maxWidth: 480,
+    alignSelf: "center",
+  },
   startBtn: {
-    backgroundColor: "#8b7355",
+    backgroundColor: PRIMARY,
     paddingVertical: 14,
     paddingHorizontal: 36,
     borderRadius: 24,
@@ -501,13 +525,13 @@ const styles = StyleSheet.create({
 
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: "rgba(8,28,38,0.6)",
     alignItems: "center",
     justifyContent: "center",
     padding: 24,
   },
   modalCard: {
-    backgroundColor: "#fff",
+    backgroundColor: SURFACE,
     borderRadius: 16,
     padding: 24,
     width: "100%",
@@ -515,10 +539,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 12,
   },
-  modalTitle: { fontSize: 17, fontWeight: "700", color: "#1a1a1a" },
-  modalMessage: { fontSize: 14, color: "#444", textAlign: "center", lineHeight: 20 },
+  modalTitle: { fontSize: 17, fontWeight: "700", color: TEXT_DARK },
+  modalMessage: { fontSize: 14, color: TEXT_MUTED, textAlign: "center", lineHeight: 20 },
   modalBtn: {
-    backgroundColor: "#8b7355",
+    backgroundColor: PRIMARY,
     paddingVertical: 12,
     paddingHorizontal: 32,
     borderRadius: 20,
@@ -536,7 +560,7 @@ const styles = StyleSheet.create({
   hintText: {
     color: "#fff",
     fontSize: 13,
-    backgroundColor: "rgba(0,0,0,0.5)",
+    backgroundColor: "rgba(8,28,38,0.75)",
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 16,
@@ -544,7 +568,7 @@ const styles = StyleSheet.create({
   },
   hintErrorText: {
     marginTop: 8,
-    backgroundColor: "rgba(139,61,61,0.85)",
+    backgroundColor: "rgba(179,38,30,0.88)",
     color: "#fff",
   },
 
@@ -553,7 +577,7 @@ const styles = StyleSheet.create({
     bottom: 110,
     left: 16,
     right: 16,
-    backgroundColor: "rgba(26,26,26,0.9)",
+    backgroundColor: "rgba(8,28,38,0.92)",
     borderRadius: 14,
     padding: 10,
     gap: 6,
@@ -564,7 +588,7 @@ const styles = StyleSheet.create({
   carouselItemLabel: { color: "#fff", fontSize: 10, fontWeight: "600" },
   controlBtnPair: { flexDirection: "row", gap: 6 },
   controlBtn: {
-    backgroundColor: "#6b5b45",
+    backgroundColor: PRIMARY_DARK,
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 12,
@@ -573,26 +597,26 @@ const styles = StyleSheet.create({
   },
   controlBtnDisabled: { opacity: 0.4 },
   controlBtnText: { color: "#fff", fontSize: 12, fontWeight: "600" },
-  deleteBtn: { backgroundColor: "#8b3d3d" },
+  deleteBtn: { backgroundColor: DANGER },
 
   catalogScroll: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: "rgba(26,26,26,0.7)",
+    backgroundColor: "rgba(8,28,38,0.82)",
   },
   catalogRow: { paddingHorizontal: 16, paddingVertical: 14, gap: 10 },
   catalogThumb: {
     width: 60,
     height: 60,
     borderRadius: 6,
-    backgroundColor: "#fff",
+    backgroundColor: SURFACE,
     overflow: "hidden",
     borderWidth: 2,
     borderColor: "transparent",
   },
-  catalogThumbActive: { borderColor: "#8b7355" },
+  catalogThumbActive: { borderColor: ACCENT },
   catalogThumbImage: { width: "100%", height: "100%" },
 
   webScreen: {
@@ -600,15 +624,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     padding: 32,
-    backgroundColor: "#fff",
+    backgroundColor: BG,
   },
-  webTitle: { fontSize: 24, fontWeight: "bold", marginBottom: 12, textAlign: "center" },
-  webMsg: { fontSize: 15, color: "#555", textAlign: "center", marginBottom: 24 },
+  webTitle: { fontSize: 24, fontWeight: "bold", marginBottom: 12, textAlign: "center", color: TEXT_DARK },
+  webMsg: { fontSize: 15, color: TEXT_MUTED, textAlign: "center", marginBottom: 24 },
   webCloseBtn: {
     paddingVertical: 12,
     paddingHorizontal: 28,
     borderWidth: 1,
+    borderColor: PRIMARY,
     borderRadius: 10,
   },
-  webCloseBtnText: { fontSize: 15 },
+  webCloseBtnText: { fontSize: 15, color: PRIMARY, fontWeight: "600" },
 });

@@ -6,9 +6,9 @@ import {
   TouchableOpacity,
   StyleSheet,
   Platform,
-  useWindowDimensions,
 } from "react-native";
 import { router } from "expo-router";
+import { useBreakpoints } from "../shared/hooks/useBreakpoints";
 
 const G_DARK = "#1B5E20";
 const G_LIGHT = "#4CAF50";
@@ -31,8 +31,7 @@ const SECTIONS = [
 ];
 
 export default function WetMarket() {
-  const { width } = useWindowDimensions();
-  const isMobile = width < 768;
+  const { isMobile, isTablet } = useBreakpoints();
 
   return (
     <View style={styles.screen}>
@@ -52,7 +51,7 @@ export default function WetMarket() {
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.titleSection}>
           <Text style={styles.categoryLabel}>ABOUT THE MARKET</Text>
-          <Text style={[styles.pageTitle, { fontSize: isMobile ? 28 : 40 }]}>
+          <Text style={[styles.pageTitle, { fontSize: isMobile ? 28 : isTablet ? 34 : 40 }]}>
             🐟 Wet Market
           </Text>
           <Text style={styles.pageSubtitle}>
@@ -85,8 +84,8 @@ export default function WetMarket() {
                 resizeMode="cover"
               />
             </View>
-            <View style={[styles.textBlock, { padding: isMobile ? 28 : 56 }]}>
-              <Text style={[styles.sectionTitle, { fontSize: isMobile ? 20 : 26 }]}>
+            <View style={[styles.textBlock, { padding: isMobile ? 28 : isTablet ? 40 : 56 }]}>
+              <Text style={[styles.sectionTitle, { fontSize: isMobile ? 20 : isTablet ? 23 : 26 }]}>
                 {section.title}
               </Text>
               <View style={styles.divider} />
@@ -96,7 +95,7 @@ export default function WetMarket() {
         ))}
 
         <View style={styles.ctaSection}>
-          <Text style={[styles.ctaHeading, { fontSize: isMobile ? 18 : 24 }]}>
+          <Text style={[styles.ctaHeading, { fontSize: isMobile ? 18 : isTablet ? 21 : 24 }]}>
             Interested in renting a stall?
           </Text>
           <TouchableOpacity
