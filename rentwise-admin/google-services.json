@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "223742757751",
+    "project_id": "rentwise-capstone-project",
+    "storage_bucket": "rentwise-capstone-project.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:223742757751:android:3c45066cdc47bddd49af72",
+        "android_client_info": {
+          "package_name": "com.anonymous.rentwiseadmin"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAfUgDMR_aXRlnXNBWUppNXmCRwtcB1BRU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:223742757751:android:a3b85ec348cd78de49af72",
+        "android_client_info": {
+          "package_name": "com.anonymous.rentwisetenant"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAfUgDMR_aXRlnXNBWUppNXmCRwtcB1BRU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

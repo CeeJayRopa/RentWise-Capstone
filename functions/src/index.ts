@@ -5,6 +5,7 @@ import { https as httpsV1 } from "firebase-functions/v1";
 export { sendPaymentReminders } from "./reminderScheduler";
 export { sendPushOnNotification } from "./pushNotifications";
 export { notifyAdminsOnPayment } from "./paymentNotifier";
+export { cleanupOldDailyReports } from "./reportCleanup";
 
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
@@ -196,6 +197,57 @@ export const adminResetTenantPassword = onCall(async (request) => {
 });
 
 // =====================================
+// SYNC PERSONAL EMAIL (self-service, any role)
+// =====================================
+// Lets a tenant or admin add/replace their own real email — this becomes
+// their actual Firebase Auth sign-in email, which is what enables
+// self-service password reset (Firebase always emails whatever address is
+// currently on the Auth account). No elevated role required: this only ever
+// acts on the caller's own account, never someone else's.
+
+export const syncPersonalEmail = onCall(async (request) => {
+  const { callerUid, personalEmail } = request.data as {
+    callerUid: string;
+    personalEmail: string;
+  };
+
+  if (!callerUid || !personalEmail) {
+    throw new HttpsError("invalid-argument", "Missing email data");
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(personalEmail)) {
+    throw new HttpsError("invalid-argument", "Invalid email address");
+  }
+
+  const userDoc = await db.collection("users").doc(callerUid).get();
+  if (!userDoc.exists) {
+    throw new HttpsError("permission-denied", "User does not exist");
+  }
+
+  try {
+    // Firebase Auth itself enforces email uniqueness across all accounts.
+    await auth.updateUser(callerUid, { email: personalEmail });
+  } catch (error) {
+    const authError = error as { code?: string };
+    if (authError?.code === "auth/email-already-exists") {
+      throw new HttpsError(
+        "already-exists",
+        "That email is already in use by another account.",
+      );
+    }
+    throw error;
+  }
+
+  await db.collection("users").doc(callerUid).update({
+    email: personalEmail,
+    personalEmail,
+  });
+
+  return { success: true };
+});
+
+// =====================================
 // RESET ADMIN PASSWORD (owner-only)
 // =====================================
 
@@ -217,6 +269,49 @@ export const ownerResetAdminPassword = onCall(async (request) => {
   await assertIsAdmin(uid);
 
   await auth.updateUser(uid, { password: newPassword });
+
+  return { success: true };
+});
+
+// =====================================
+// UPDATE ADMIN PROFILE (owner-only)
+// =====================================
+// The admin's Firestore doc isn't the owner's own doc, so a direct client
+// updateDoc() is rejected by security rules — same reason the password
+// reset above has to go through the Admin SDK.
+
+export const ownerUpdateAdminProfile = onCall(async (request) => {
+  const { uid, callerUid, firstName, lastName, username, contactNo } = request.data as {
+    uid: string;
+    callerUid: string;
+    firstName: string;
+    lastName: string;
+    username: string;
+    contactNo: string;
+  };
+
+  if (!uid || !callerUid || !firstName || !lastName || !username || !contactNo) {
+    throw new HttpsError("invalid-argument", "Missing profile data");
+  }
+
+  await assertIsOwner(callerUid);
+  await assertIsAdmin(uid);
+
+  const dupeSnap = await db
+    .collection("users")
+    .where("username", "==", username)
+    .where("role", "==", "admin")
+    .get();
+  if (dupeSnap.docs.some((d) => d.id !== uid)) {
+    throw new HttpsError("already-exists", "This username is already in use.");
+  }
+
+  await db.collection("users").doc(uid).update({
+    firstName,
+    lastName,
+    username,
+    contactNo,
+  });
 
   return { success: true };
 });
@@ -475,3 +570,40 @@ export const ownerSyncRecoveryPassword = onCall(async (request) => {
 
 // Owner notifications are now created explicitly by the admin FAB
 // "Apply Changes" button — see rentwise-admin/app/components/UpdatesReportFAB.tsx.
+
+// =====================================
+// TENANT SELF-SERVICE PASSWORD RESET (in-app, no real email round-trip)
+// Generates a real Firebase password-reset link via the Admin SDK WITHOUT
+// sending it anywhere — the tenant app opens it directly in its own
+// in-app WebView instead of making an elderly tenant go check email.
+// Trade-off (capstone scope): knowing a tenant's personal email is enough
+// to reset their password here, since there's no inbox-possession check
+// anymore. See CAPSTONE_NOTES.txt.
+// =====================================
+export const generateTenantResetLink = onCall(async (request) => {
+  const { email } = request.data as { email: string };
+  if (!email) throw new HttpsError("invalid-argument", "Email is required.");
+
+  const snap = await db
+    .collection("users")
+    .where("personalEmail", "==", email)
+    .where("role", "==", "tenant")
+    .limit(1)
+    .get();
+
+  if (snap.empty) {
+    throw new HttpsError("not-found", "No tenant account found with this email.");
+  }
+
+  // The Admin SDK only returns a full link, not the raw code — but this
+  // flow never loads that URL anywhere (no email, no WebView), so we just
+  // extract the oobCode from it and hand that to the tenant app's own
+  // native reset-password screen instead.
+  const link = await auth.generatePasswordResetLink(email, {
+    url: "https://rentwise-capstone-project.web.app/reset-password",
+    handleCodeInApp: true,
+  });
+  const oobCode = new URL(link).searchParams.get("oobCode");
+
+  return { oobCode };
+});

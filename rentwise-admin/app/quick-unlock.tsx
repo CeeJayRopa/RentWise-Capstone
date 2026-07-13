@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useRef, useState } from "react";
 import { router } from "expo-router";
 import { ShieldCheck, Lock, Eye, EyeOff } from "lucide-react-native";
@@ -20,6 +21,8 @@ import {
 
 import { auth } from "../shared/services/auth";
 import { getUserById } from "../shared/services/userServices";
+import { setRememberMe } from "../shared/services/rememberMe";
+import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 const MAX_ATTEMPTS = 5;
 
@@ -50,6 +53,7 @@ export default function QuickUnlock() {
 
   async function forceFullLogout(message: string) {
     await signOut(auth).catch(() => {});
+    await setRememberMe(false);
     Alert.alert("Signed out", message, [
       { text: "OK", onPress: () => router.replace("/login") },
     ]);
@@ -76,7 +80,7 @@ export default function QuickUnlock() {
         EmailAuthProvider.credential(user.email, password),
       );
       attemptsRef.current = 0;
-      router.replace("/dashboard");
+      router.replace("/welcome");
     } catch {
       attemptsRef.current += 1;
       if (attemptsRef.current >= MAX_ATTEMPTS) {
@@ -95,36 +99,42 @@ export default function QuickUnlock() {
 
   async function handleSignOut() {
     await signOut(auth).catch(() => {});
+    await setRememberMe(false);
     router.replace("/login");
   }
 
   if (checkingSession) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#0C2D6B" />
+        <ActivityIndicator size="large" color={colors.emerald} />
       </View>
     );
   }
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: "#0C2D6B" }}
+      style={{ flex: 1, backgroundColor: colors.emerald }}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
-      <View style={styles.topSection}>
+      <LinearGradient
+        colors={[colors.emerald, colors.ink]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.topSection}
+      >
         <View style={styles.avatarCircle}>
-          <ShieldCheck size={32} color="#0C2D6B" />
+          <ShieldCheck size={30} color={colors.emerald} />
         </View>
         <Text style={styles.welcomeBack}>Welcome back</Text>
         <Text style={styles.adminName}>{adminName}</Text>
-      </View>
+      </LinearGradient>
 
       <View style={styles.card}>
         <Text style={styles.heading}>Enter your password to continue</Text>
 
         <Text style={styles.fieldLabel}>Password</Text>
         <View style={[styles.inputWrapper, !!error && styles.inputWrapperError]}>
-          <Lock size={17} color="#2E6FD9" style={styles.leftIcon} />
+          <Lock size={17} color={colors.emeraldBright} style={styles.leftIcon} />
           <TextInput
             style={styles.textInput}
             value={password}
@@ -134,15 +144,15 @@ export default function QuickUnlock() {
             }}
             secureTextEntry={!showPassword}
             placeholder="Enter your password"
-            placeholderTextColor="#B4B2A9"
+            placeholderTextColor={colors.textMuted}
             editable={!unlocking}
             autoFocus
           />
-          <Pressable style={styles.rightIcon} onPress={() => setShowPassword((v) => !v)}>
+          <Pressable style={styles.rightIcon} onPress={() => setShowPassword((v) => !v)} hitSlop={8}>
             {showPassword ? (
-              <Eye size={17} color="#B4B2A9" />
+              <Eye size={17} color={colors.textMuted} />
             ) : (
-              <EyeOff size={17} color="#B4B2A9" />
+              <EyeOff size={17} color={colors.textMuted} />
             )}
           </Pressable>
         </View>
@@ -153,13 +163,13 @@ export default function QuickUnlock() {
           style={({ pressed }) => [
             styles.unlockBtn,
             unlocking && styles.unlockBtnDisabled,
-            pressed && !unlocking && { backgroundColor: "#091f4a" },
+            pressed && !unlocking && { backgroundColor: colors.ink },
           ]}
           onPress={handleUnlock}
           disabled={unlocking}
         >
           {unlocking ? (
-            <ActivityIndicator color="#fff" />
+            <ActivityIndicator color={colors.white} />
           ) : (
             <Text style={styles.unlockBtnText}>Unlock</Text>
           )}
@@ -178,102 +188,107 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#0C2D6B",
+    backgroundColor: colors.emerald,
   },
   topSection: {
     alignItems: "center",
     paddingTop: 80,
-    paddingBottom: 32,
+    paddingBottom: spacing.xxxl,
   },
   avatarCircle: {
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: "#E6F1FB",
+    backgroundColor: colors.parchment,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 16,
+    marginBottom: spacing.lg,
   },
   welcomeBack: {
-    color: "#B5D4F4",
-    fontSize: 13,
+    color: colors.emeraldSoft,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.medium,
   },
   adminName: {
-    color: "#FFFFFF",
-    fontSize: 22,
-    fontWeight: "500",
+    color: colors.white,
+    fontSize: fontSize.xxl,
+    fontFamily: fontFamily.bold,
     marginTop: 2,
   },
   card: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: colors.white,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    paddingHorizontal: 28,
-    paddingTop: 32,
+    marginTop: -24,
+    paddingHorizontal: spacing.xxl + 4,
+    paddingTop: spacing.xxxl,
   },
   heading: {
-    fontSize: 16,
-    fontWeight: "500",
-    color: "#0C2D6B",
-    marginBottom: 20,
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.semibold,
+    color: colors.ink,
+    marginBottom: spacing.xl,
   },
   fieldLabel: {
-    fontSize: 13,
-    fontWeight: "500",
-    color: "#444441",
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.textSecondary,
     marginBottom: 6,
   },
   inputWrapper: {
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1.5,
-    borderColor: "#B5D4F4",
-    borderRadius: 10,
-    backgroundColor: "#F7FAFF",
-    paddingHorizontal: 12,
+    borderColor: colors.emeraldSoft,
+    borderRadius: radius.sm,
+    backgroundColor: colors.mist,
+    paddingHorizontal: spacing.md,
   },
   inputWrapperError: {
-    borderColor: "#E24B4A",
+    borderColor: colors.error,
   },
-  leftIcon: { marginRight: 8 },
+  leftIcon: { marginRight: spacing.sm },
   rightIcon: { padding: 4 },
   textInput: {
     flex: 1,
     paddingVertical: 13,
-    fontSize: 15,
-    color: "#0C2D6B",
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
   },
   errorText: {
-    color: "#E24B4A",
-    fontSize: 12,
-    marginTop: 8,
+    color: colors.error,
+    fontSize: fontSize.xs + 1,
+    fontFamily: fontFamily.medium,
+    marginTop: spacing.sm,
   },
   unlockBtn: {
-    backgroundColor: "#0C2D6B",
-    borderRadius: 10,
-    paddingVertical: 14,
+    backgroundColor: colors.emerald,
+    borderRadius: radius.sm,
+    paddingVertical: spacing.md + 2,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 24,
+    marginTop: spacing.xxl,
     minHeight: 50,
+    ...shadow.button,
   },
   unlockBtnDisabled: {
     opacity: 0.6,
   },
   unlockBtnText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
+    color: colors.white,
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
   },
   signOutLink: {
     alignItems: "center",
-    marginTop: 18,
-    paddingVertical: 8,
+    marginTop: spacing.lg + 2,
+    paddingVertical: spacing.sm,
   },
   signOutLinkText: {
-    color: "#888780",
-    fontSize: 13,
-    fontWeight: "500",
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
   },
 });

@@ -9,48 +9,17 @@ import { createPayment } from "../services/paymentService";
 import {
   getPendingCheckoutSession,
   clearPendingCheckoutSession,
+  getPendingPaymentMethod,
+  clearPendingPaymentMethod,
 } from "../services/pendingPayment";
-
-// The admin always enters the stall's DAILY rate. Every schedule's period
-// charge is derived by multiplying that daily rate by however many days
-// fall in the period containing `date`.
-function computePeriodCharge(dailyRate: number, schedule: string, date: Date): number {
-  if (schedule === "daily") return dailyRate;
-  if (schedule === "weekly") return dailyRate * 7;
-  const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
-  if (schedule === "semi-monthly") {
-    const daysInHalf = date.getDate() <= 15 ? 15 : daysInMonth - 15;
-    return dailyRate * daysInHalf;
-  }
-  return dailyRate * daysInMonth; // monthly
-}
-
-// Mirrors rentwise-tenant/app/dashboard.tsx exactly — sums each billing
-// period's charge for every period from day 1 of the month through today's
-// period, inclusive, so "periods owed" here matches what the dashboard
-// would show as due.
-function chargedSinceMonthStart(dailyRate: number, schedule: string, today: Date): number {
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  const monthEndExclusive = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-  let total = 0;
-  let cursor = monthStart;
-  let guard = 0;
-  while (cursor <= today && guard < 31) {
-    const periodEnd = new Date(cursor);
-    if (schedule === "daily") periodEnd.setDate(periodEnd.getDate() + 1);
-    else if (schedule === "weekly") periodEnd.setDate(periodEnd.getDate() + 7);
-    else if (schedule === "semi-monthly") {
-      if (periodEnd.getDate() <= 15) periodEnd.setDate(16);
-      else { periodEnd.setMonth(periodEnd.getMonth() + 1); periodEnd.setDate(1); }
-    } else { periodEnd.setMonth(periodEnd.getMonth() + 1); periodEnd.setDate(1); }
-    const cappedEnd = periodEnd < monthEndExclusive ? periodEnd : monthEndExclusive;
-    const daysInChunk = Math.round((cappedEnd.getTime() - cursor.getTime()) / 86400000);
-    total += dailyRate * daysInChunk;
-    cursor = periodEnd;
-    guard++;
-  }
-  return total;
-}
+import {
+  computePeriodCharge,
+  chargedSinceMonthStart,
+  nextPeriodStart,
+  consecutivePeriodsEnding,
+  periodLabel,
+} from "../services/billingSchedule";
+import { colors, fontFamily, fontSize } from "../shared/theme";
 
 export default function PaymentSuccess() {
   const { amount } = useLocalSearchParams<{ amount: string }>();
@@ -60,7 +29,7 @@ export default function PaymentSuccess() {
       try {
         const user = auth.currentUser;
         if (!user) {
-          router.replace("/dashboard");
+          router.replace("/payments");
           return;
         }
 
@@ -69,7 +38,7 @@ export default function PaymentSuccess() {
 
         const tenantData = await getTenantData(user.uid);
         if (!tenantData) {
-          router.replace("/dashboard");
+          router.replace("/payments");
           return;
         }
 
@@ -84,19 +53,19 @@ export default function PaymentSuccess() {
         const sessionId = getPendingCheckoutSession();
         if (!sessionId) {
           // Already recorded by the in-app WebView handler
-          router.replace("/dashboard");
+          router.replace("/payments");
           return;
         }
         clearPendingCheckoutSession();
+        const pendingMethod = getPendingPaymentMethod();
+        clearPendingPaymentMethod();
+        const paymentMethodLabel = pendingMethod === "gcash" ? "GCash" : pendingMethod === "paymaya" ? "Maya" : "GCash/Maya";
 
         const receiptNo = "RW-ONLINE-" + Date.now().toString().slice(-8);
         const tenantName = `${tenantData.firstName} ${tenantData.lastName}`;
+        const schedule = stallData?.paymentSchedule ?? "monthly";
 
-        const scheduleRent = computePeriodCharge(
-          stallData?.price ?? 0,
-          stallData?.paymentSchedule ?? "monthly",
-          new Date(),
-        );
+        const scheduleRent = computePeriodCharge(stallData?.price ?? 0, schedule, new Date());
 
         // Same split as dashboard.tsx: only the portion beyond what's
         // already owed (arrears + today) counts as genuine advance.
@@ -115,11 +84,7 @@ export default function PaymentSuccess() {
           if (!pd || pd < monthStart) return sum;
           return sum + Number(data.amount || 0);
         }, 0);
-        const chargedToDate = chargedSinceMonthStart(
-          stallData?.price ?? 0,
-          stallData?.paymentSchedule ?? "monthly",
-          today,
-        );
+        const chargedToDate = chargedSinceMonthStart(stallData?.price ?? 0, schedule, today);
         const paymentDue = chargedToDate - paidThisMonth;
 
         const owedAmount = Math.max(paymentDue, scheduleRent || 0);
@@ -130,17 +95,35 @@ export default function PaymentSuccess() {
           scheduleRent > 0 ? Math.round(advanceAmount / scheduleRent) : 0;
         const periodsCovered = periodsOwed + periodsAdvance;
 
+        // Same itemization as the in-app WebView handler (payments.tsx) —
+        // lists each specific unpaid period this payment covers.
+        const owedBreakdown = consecutivePeriodsEnding(stallData?.price ?? 0, schedule, today, periodsOwed).map((p) => ({
+          label: periodLabel(schedule, p.date),
+          amount: p.amount,
+        }));
+        let advanceCursor = nextPeriodStart(schedule, today);
+        const advanceBreakdown: { label: string; amount: number }[] = [];
+        for (let i = 0; i < periodsAdvance; i++) {
+          advanceBreakdown.push({
+            label: `Advance – ${periodLabel(schedule, advanceCursor)}`,
+            amount: computePeriodCharge(stallData?.price ?? 0, schedule, advanceCursor),
+          });
+          advanceCursor = nextPeriodStart(schedule, advanceCursor);
+        }
+        const breakdown = [...owedBreakdown, ...advanceBreakdown];
+
         const receiptData = {
           receiptNo,
           tenantName,
           buildingNumber: stallData?.buildingNumber ?? "",
           spaceId: stallData?.spaceId ?? "",
-          paymentMethod: "GCash/Maya",
+          paymentMethod: paymentMethodLabel,
           date: new Date().toISOString(),
           rentAmount: scheduleRent,
           payment: paymentAmount,
           change: 0,
           status: "PENDING",
+          breakdown,
         };
 
         const newPayment: any = {
@@ -157,7 +140,7 @@ export default function PaymentSuccess() {
           stallId: tenantData.stallId ?? "",
           receiptNo,
           checkoutSessionId: sessionId ?? null,
-          paymentMethod: "GCash/Maya",
+          paymentMethod: paymentMethodLabel,
           receiptData,
           receipt: null,
           paymentId: null,
@@ -174,13 +157,13 @@ export default function PaymentSuccess() {
         );
       }
 
-      router.replace("/dashboard");
+      router.replace("/payments");
     })();
   }, []);
 
   return (
     <View style={styles.container}>
-      <ActivityIndicator size="large" color="#F5C518" />
+      <ActivityIndicator size="large" color={colors.gold} />
       <Text style={styles.text}>Recording payment...</Text>
     </View>
   );
@@ -191,11 +174,12 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#1A1A1A",
+    backgroundColor: colors.ink,
   },
   text: {
-    color: "#fff",
+    color: colors.parchment,
     marginTop: 16,
-    fontSize: 16,
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.medium,
   },
 });

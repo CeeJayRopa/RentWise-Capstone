@@ -12,13 +12,16 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
+        "backgroundColor": "#0E6B54",
+        "foregroundImage": "./assets/icon.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.rentwiseadmin"
+      "permissions": [
+        "android.permission.POST_NOTIFICATIONS"
+      ],
+      "package": "com.anonymous.rentwiseadmin",
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -30,26 +33,27 @@
         "expo-notifications",
         {
           "icon": "./assets/icon.png",
-          "color": "#F5C518",
+          "color": "#C9A227",
           "defaultChannel": "default"
         }
       ],
       [
         "expo-splash-screen",
         {
-          "image": "./assets/android-icon-foreground.png",
-          "imageWidth": 100,
+          "image": "./assets/rentwise-app-icon.png",
+          "imageWidth": 140,
           "resizeMode": "contain",
-          "backgroundColor": "#0C2D6B"
+          "backgroundColor": "#0E6B54"
         }
-      ]
+      ],
+      "expo-font"
     ],
-    "owner": "ceans-team",
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "ce2c3f66-91e2-4816-801d-ce3bb504425a"
+        "projectId": "f7eeb912-98f0-41a5-84d1-f4c4c20615bc"
       }
-    }
+    },
+    "owner": "rentwise"
   }
 }

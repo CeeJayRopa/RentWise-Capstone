@@ -11,13 +11,15 @@ import {
   Platform,
   ScrollView,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { ArrowLeft, KeyRound, Lock, Eye, EyeOff, AlertCircle, CheckCircle2 } from "lucide-react-native";
 import { getFunctions, httpsCallable } from "firebase/functions";
 
 import { firebaseApp } from "../shared/firebaseConfig";
 import { loginUser } from "../shared/services/auth";
+import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 const cloudFunctions = getFunctions(firebaseApp);
 
@@ -119,7 +121,7 @@ export default function OwnerForgotPassword() {
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: "#0C2D6B" }}
+      style={{ flex: 1, backgroundColor: colors.emerald }}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <ScrollView
@@ -129,21 +131,26 @@ export default function OwnerForgotPassword() {
         showsVerticalScrollIndicator={false}
         onLayout={(e) => { scrollViewHeightRef.current = e.nativeEvent.layout.height; }}
       >
-        <View style={[styles.topSection, { paddingTop: insets.top + 24 }]}>
+        <LinearGradient
+          colors={[colors.emerald, colors.ink]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[styles.topSection, { paddingTop: insets.top + 24 }]}
+        >
           <Pressable style={styles.backBtn} onPress={() => router.back()} hitSlop={12}>
-            <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
+            <ArrowLeft size={22} color={colors.white} />
           </Pressable>
           <View style={styles.logoCircle}>
-            <Ionicons name="key-outline" size={28} color="#0C2D6B" />
+            <KeyRound size={28} color={colors.emerald} />
           </View>
           <Text style={styles.appName}>Recover Password</Text>
           <Text style={styles.portalText}>Owner portal</Text>
-        </View>
+        </LinearGradient>
 
         <View style={[styles.card, { paddingBottom: Math.max(insets.bottom, 24) }]}>
           {step === "loading" && (
             <View style={{ paddingVertical: 40, alignItems: "center" }}>
-              <ActivityIndicator color="#0C2D6B" size="large" />
+              <ActivityIndicator color={colors.emerald} size="large" />
             </View>
           )}
 
@@ -154,7 +161,7 @@ export default function OwnerForgotPassword() {
                 No security questions have been set up yet. Set them up under My Account, under Change Password.
               </Text>
               <Pressable
-                style={({ pressed }) => [styles.signInBtn, { marginTop: 24 }, pressed && { backgroundColor: "#091f4a" }]}
+                style={({ pressed }) => [styles.signInBtn, { marginTop: spacing.xxl }, pressed && { backgroundColor: colors.ink }]}
                 onPress={() => router.replace("/login")}
               >
                 <Text style={styles.signInText}>Back to Sign in</Text>
@@ -167,7 +174,7 @@ export default function OwnerForgotPassword() {
               <Text style={styles.heading}>Answer your questions</Text>
               <Text style={styles.subheading}>Answer all 3 correctly to recover your password.</Text>
               {questions.map((q, i) => (
-                <View key={i} style={{ marginTop: 18 }}>
+                <View key={i} style={{ marginTop: spacing.lg + 2 }}>
                   <Text style={styles.fieldLabel}>{q}</Text>
                   <TextInput
                     style={styles.textInput}
@@ -181,7 +188,7 @@ export default function OwnerForgotPassword() {
                       setError("");
                     }}
                     placeholder="Your answer"
-                    placeholderTextColor="#B4B2A9"
+                    placeholderTextColor={colors.textMuted}
                     autoCapitalize="none"
                     editable={!verifying}
                     onFocus={scrollToRevealForm}
@@ -198,12 +205,12 @@ export default function OwnerForgotPassword() {
           {step === "reveal" && (
             <>
               <View style={styles.successIconCircle}>
-                <Ionicons name="checkmark-circle" size={40} color="#1D9E75" />
+                <CheckCircle2 size={40} color={colors.emerald} />
               </View>
               <Text style={styles.heading}>Verified!</Text>
               <Text style={styles.subheading}>Here is your current password.</Text>
-              <View style={[styles.inputWrapper, { marginTop: 20 }]}>
-                <Ionicons name="lock-closed-outline" size={17} color="#2E6FD9" style={styles.leftIcon} />
+              <View style={[styles.inputWrapper, { marginTop: spacing.xl }]}>
+                <Lock size={17} color={colors.emeraldBright} style={styles.leftIcon} />
                 <TextInput
                   style={[styles.textInput, { paddingLeft: 40, paddingRight: 40 }]}
                   value={revealedPassword}
@@ -211,7 +218,7 @@ export default function OwnerForgotPassword() {
                   secureTextEntry={!showPassword}
                 />
                 <Pressable style={styles.rightIcon} onPress={() => setShowPassword((v) => !v)}>
-                  <Ionicons name={showPassword ? "eye-outline" : "eye-off-outline"} size={17} color="#B4B2A9" />
+                  {showPassword ? <Eye size={17} color={colors.textMuted} /> : <EyeOff size={17} color={colors.textMuted} />}
                 </Pressable>
               </View>
               <SubmitButton label="Proceed" loading={proceeding} onPress={handleProceed} />
@@ -226,7 +233,7 @@ export default function OwnerForgotPassword() {
 function ErrorBanner({ text }: { text: string }) {
   return (
     <View style={styles.errorBanner}>
-      <Ionicons name="alert-circle-outline" size={16} color="#A32D2D" style={{ marginRight: 8 }} />
+      <AlertCircle size={16} color={colors.error} style={{ marginRight: 8 }} />
       <Text style={styles.errorText}>{text}</Text>
     </View>
   );
@@ -237,23 +244,20 @@ function SubmitButton({ label, loading, onPress }: { label: string; loading: boo
     <Pressable
       style={({ pressed }) => [
         styles.signInBtn,
-        { marginTop: 24 },
+        { marginTop: spacing.xxl },
         loading && styles.signInBtnDisabled,
-        pressed && !loading && { backgroundColor: "#091f4a", transform: [{ scale: 0.98 }] },
+        pressed && !loading && { backgroundColor: colors.ink, transform: [{ scale: 0.98 }] },
       ]}
       onPress={onPress}
       disabled={loading}
     >
-      {loading ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.signInText}>{label}</Text>}
+      {loading ? <ActivityIndicator color={colors.white} size="small" /> : <Text style={styles.signInText}>{label}</Text>}
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   topSection: {
-    backgroundColor: "#0C2D6B",
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
     alignItems: "center",
     paddingBottom: 32,
   },
@@ -261,36 +265,36 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 16,
     top: 0,
-    padding: 8,
+    padding: spacing.sm,
   },
   logoCircle: {
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: "#E6F1FB",
+    backgroundColor: colors.parchment,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 14,
+    marginBottom: spacing.md + 2,
   },
-  appName: { color: "#FFFFFF", fontSize: 22, fontWeight: "500" },
-  portalText: { color: "#B5D4F4", fontSize: 13, marginTop: 4 },
+  appName: { color: colors.white, fontSize: fontSize.xxl - 2, fontFamily: fontFamily.bold },
+  portalText: { color: colors.emeraldSoft, fontSize: fontSize.sm, fontFamily: fontFamily.medium, marginTop: 4 },
 
   card: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    marginTop: -16,
-    paddingHorizontal: 28,
-    paddingTop: 28,
+    backgroundColor: colors.white,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    marginTop: -radius.xl,
+    paddingHorizontal: spacing.xxl + 4,
+    paddingTop: spacing.xxl + 4,
   },
 
-  heading: { fontSize: 22, fontWeight: "500", color: "#0C2D6B" },
-  subheading: { fontSize: 14, color: "#888780", marginTop: 2 },
+  heading: { fontSize: fontSize.xl + 2, fontFamily: fontFamily.bold, color: colors.ink },
+  subheading: { fontSize: fontSize.base, color: colors.textSecondary, fontFamily: fontFamily.regular, marginTop: 2 },
 
-  successIconCircle: { alignItems: "center", marginBottom: 12 },
+  successIconCircle: { alignItems: "center", marginBottom: spacing.md },
 
-  fieldLabel: { fontSize: 13, fontWeight: "500", color: "#1A4DA0", marginBottom: 6 },
+  fieldLabel: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.emerald, marginBottom: 6 },
 
   inputWrapper: { position: "relative", flexDirection: "row", alignItems: "center" },
   leftIcon: { position: "absolute", left: 13, zIndex: 1 },
@@ -298,34 +302,36 @@ const styles = StyleSheet.create({
 
   textInput: {
     flex: 1,
-    borderRadius: 12,
+    borderRadius: radius.md,
     borderWidth: 1.5,
-    borderColor: "#B5D4F4",
-    backgroundColor: "#F0F4FA",
+    borderColor: colors.emeraldSoft,
+    backgroundColor: colors.mist,
     paddingVertical: 13,
-    paddingHorizontal: 14,
-    color: "#0C2D6B",
-    fontSize: 15,
+    paddingHorizontal: spacing.md + 2,
+    color: colors.ink,
+    fontFamily: fontFamily.medium,
+    fontSize: fontSize.base,
   },
 
   errorBanner: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 16,
-    backgroundColor: "#FCEBEB",
-    borderRadius: 8,
+    marginTop: spacing.lg,
+    backgroundColor: colors.errorSoft,
+    borderRadius: radius.sm - 2,
     paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingHorizontal: spacing.lg - 2,
   },
-  errorText: { fontSize: 13, color: "#A32D2D", flex: 1 },
+  errorText: { fontSize: fontSize.sm, color: colors.error, fontFamily: fontFamily.medium, flex: 1 },
 
   signInBtn: {
     width: "100%",
-    borderRadius: 14,
-    backgroundColor: "#0C2D6B",
+    borderRadius: radius.md + 2,
+    backgroundColor: colors.emerald,
     paddingVertical: 15,
     alignItems: "center",
+    ...shadow.button,
   },
   signInBtnDisabled: { opacity: 0.5 },
-  signInText: { color: "#FFFFFF", fontSize: 16, fontWeight: "500", textAlign: "center" },
+  signInText: { color: colors.white, fontSize: fontSize.md, fontFamily: fontFamily.bold, textAlign: "center" },
 });

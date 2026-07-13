@@ -10,11 +10,14 @@ import {
   Image,
   Alert,
   RefreshControl,
+  Animated,
+  Easing,
 } from "react-native";
 import * as Print from "expo-print";
 import RNBlobUtil from "react-native-blob-util";
+import { LinearGradient } from "expo-linear-gradient";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocalSearchParams, router } from "expo-router";
 import {
   addDoc,
@@ -29,7 +32,11 @@ import {
 
 import { db } from "../shared/services/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
+import { ArrowLeft, Bell, Check, FileText, Info, TrendingUp, CalendarClock, HelpCircle } from "lucide-react-native";
+import { Card, Badge, Avatar, Button } from "../shared/components/ui";
+import HelpTour, { HelpStep } from "./components/HelpTour";
+import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
+import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 const MONTHS = [
   "January",
@@ -45,6 +52,20 @@ const MONTHS = [
   "November",
   "December",
 ];
+
+// The admin always enters the stall's DAILY rate. Every schedule's period
+// charge is derived by multiplying that daily rate by however many days
+// fall in the period containing `date`. Mirrors financials.tsx exactly.
+function computePeriodCharge(dailyRate: number, schedule: string, date: Date): number {
+  if (schedule === "daily") return dailyRate;
+  if (schedule === "weekly") return dailyRate * 7;
+  const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  if (schedule === "semi-monthly") {
+    const daysInHalf = date.getDate() <= 15 ? 15 : daysInMonth - 15;
+    return dailyRate * daysInHalf;
+  }
+  return dailyRate * daysInMonth; // monthly
+}
 
 // Advances `d` to the start of the next billing period for `schedule`.
 function nextPeriodStart(schedule: string, d: Date): Date {
@@ -89,6 +110,88 @@ function chargedSinceMonthStart(dailyRate: number, schedule: string, today: Date
   return total;
 }
 
+// Steps `d` back to the start of the previous billing period for `schedule`
+// — the inverse of nextPeriodStart. Mirrors billingSchedule.ts exactly.
+function previousPeriodStart(schedule: string, d: Date): Date {
+  const n = new Date(d);
+  if (schedule === "daily") {
+    n.setDate(n.getDate() - 1);
+    return n;
+  }
+  if (schedule === "weekly") {
+    n.setDate(n.getDate() - 7);
+    return n;
+  }
+  if (schedule === "semi-monthly") {
+    if (n.getDate() > 15) {
+      n.setDate(1);
+      return n;
+    }
+    n.setMonth(n.getMonth() - 1);
+    const daysInPrevMonth = new Date(n.getFullYear(), n.getMonth() + 1, 0).getDate();
+    n.setDate(Math.min(16, daysInPrevMonth));
+    return n;
+  }
+  n.setMonth(n.getMonth() - 1);
+  n.setDate(1);
+  return n;
+}
+
+// Returns the `count` consecutive billing periods ending with the one
+// containing `endDate` (oldest first), each paired with that period's
+// charge. Mirrors billingSchedule.ts's consecutivePeriodsEnding exactly.
+function consecutivePeriodsEnding(
+  dailyRate: number,
+  schedule: string,
+  endDate: Date,
+  count: number,
+): { date: Date; amount: number }[] {
+  const periods: { date: Date; amount: number }[] = [];
+  let cursor = new Date(endDate);
+  for (let i = 0; i < Math.max(count, 0); i++) {
+    periods.push({ date: new Date(cursor), amount: computePeriodCharge(dailyRate, schedule, cursor) });
+    cursor = previousPeriodStart(schedule, cursor);
+  }
+  return periods.reverse();
+}
+
+// Human-readable label for a single billing period's start date. Mirrors
+// billingSchedule.ts's periodLabel exactly.
+function periodLabel(schedule: string, date: Date): string {
+  if (schedule === "daily") {
+    return `Daily Rent (${date.toLocaleDateString("en-US", { month: "long", day: "numeric" })})`;
+  }
+  if (schedule === "weekly") {
+    return `Weekly Rent (week of ${date.toLocaleDateString("en-US", { month: "long", day: "numeric" })})`;
+  }
+  if (schedule === "semi-monthly") {
+    const half = date.getDate() <= 15 ? "1st half" : "2nd half";
+    return `Rent – ${half} of ${date.toLocaleDateString("en-US", { month: "long" })}`;
+  }
+  return `Monthly Rent (${date.toLocaleDateString("en-US", { month: "long", year: "numeric" })})`;
+}
+
+// Older receipts (and admin-recorded cash payments) never stored a
+// `breakdown` array — only the lump `rentAmount`. Reconstructs the same
+// itemized, date-listed breakdown by working out how many consecutive
+// periods that lump sum represents. Mirrors ReceiptCardContent.tsx exactly.
+function synthesizeBreakdown(data: any, stall: any): { label: string; amount: number }[] {
+  const schedule = stall?.paymentSchedule;
+  const dailyRate = Number(stall?.price || 0);
+  const rentAmount = Number(data?.rentAmount || 0);
+  if (!schedule || dailyRate <= 0 || rentAmount <= 0) return [];
+
+  const receiptDate = data.date ? new Date(data.date) : new Date();
+  const onePeriodCharge = computePeriodCharge(dailyRate, schedule, receiptDate);
+  if (onePeriodCharge <= 0) return [];
+
+  const periodsCount = Math.max(1, Math.round(rentAmount / onePeriodCharge));
+  return consecutivePeriodsEnding(dailyRate, schedule, receiptDate, periodsCount).map((p) => ({
+    label: periodLabel(schedule, p.date),
+    amount: p.amount,
+  }));
+}
+
 export default function TenantPreview() {
   const insets = useSafeAreaInsets();
 
@@ -106,9 +209,49 @@ export default function TenantPreview() {
   const [imageViewerUrl, setImageViewerUrl] = useState<string | null>(null);
   const [digitalReceipt, setDigitalReceipt] = useState<any>(null);
 
+  const [tourVisible, setTourVisible] = useState(false);
+  const helpRef = useRef<View>(null);
+  const notifyRef = useRef<View>(null);
+  const paymentCardRef = useRef<View>(null);
+  const historyCardRef = useRef<View>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const progressAnim = useRef(new Animated.Value(0)).current;
+
+  // Scrolls a given section into view and gives the ScrollView time to
+  // settle before HelpTour measures it — otherwise a section below the
+  // fold would measure to its stale, off-screen position, and its
+  // spotlight would bleed past the visible screen edge.
+  const scrollSectionIntoView = (targetRef: React.RefObject<View | null>) =>
+    new Promise<void>((resolve) => {
+      const scrollNode = scrollRef.current?.getNativeScrollRef?.();
+      if (!scrollNode || !targetRef.current) { resolve(); return; }
+      targetRef.current.measureLayout(
+        scrollNode as any,
+        (_x: number, y: number) => {
+          scrollRef.current?.scrollTo({ y: Math.max(0, y - 100), animated: true });
+          setTimeout(resolve, 400);
+        },
+        () => resolve(),
+      );
+    });
+
   useEffect(() => {
     loadTenant();
   }, []);
+
+  // Auto-opens the guided tour the first time the admin ever lands on this
+  // page — never again after that, since it flips a persisted per-device
+  // flag. Can still be replayed anytime via the Help button.
+  useEffect(() => {
+    if (loading) return;
+    (async () => {
+      const seen = await hasSeenPageTour("admin-tenant-preview");
+      if (!seen) {
+        setTourVisible(true);
+        await markPageTourSeen("admin-tenant-preview");
+      }
+    })();
+  }, [loading]);
 
   async function onRefresh() {
     setRefreshing(true);
@@ -227,12 +370,28 @@ export default function TenantPreview() {
     }
   }
 
-  function formatDate(date: any) {
+  function formatDateShort(date: any) {
     if (!date) return "-";
-
     const d = date.toDate ? date.toDate() : new Date(date);
+    return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  }
 
-    return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+  // Mirrors rentwise-tenant/app/payment-history.tsx's methodLabel exactly.
+  function methodLabel(item: any): string {
+    const m = String(item.paymentMethod ?? "");
+    if (m.toLowerCase().includes("gcash") && !m.toLowerCase().includes("maya")) return "GCash";
+    if (m.toLowerCase().includes("maya")) return "Maya";
+    if (item.method === "online") return "Online";
+    return "Cash";
+  }
+
+  // Mirrors ReceiptCardContent.tsx's methodBadge — returns a logo image for
+  // wallet-based methods, or null for cash (no icon needed there).
+  function methodIcon(paymentMethod: string | undefined) {
+    const m = String(paymentMethod ?? "").toLowerCase();
+    if (m.includes("gcash")) return require("../assets/gcash.png");
+    if (m.includes("maya")) return require("../assets/maya-icon.png");
+    return null;
   }
 
   // Month-scoped balance — mirrors rentwise-tenant/app/dashboard.tsx exactly,
@@ -255,6 +414,56 @@ export default function TenantPreview() {
   const remainingBill = monthTotalCharge - paidThisMonth;
   const chargedToDate = chargedSinceMonthStart(dailyRate, paymentSchedule, today);
   const paymentDue = chargedToDate - paidThisMonth;
+
+  const periodCharge = computePeriodCharge(dailyRate, paymentSchedule, today);
+  const periodsOwed =
+    paymentDue > 0 && periodCharge > 0 ? Math.max(1, Math.round(paymentDue / periodCharge)) : 0;
+  const missedDuesText =
+    periodsOwed > 0
+      ? `Missed ${periodsOwed} ${paymentSchedule} due${periodsOwed !== 1 ? "s" : ""}`
+      : "You're all caught up";
+  const monthLabel = `${MONTHS[month]} ${year}`;
+  const progressPct = Math.max(0, Math.min(100, (paidThisMonth / Math.max(monthTotalCharge, 1)) * 100));
+  const scheduleLabel = paymentSchedule
+    ? paymentSchedule.charAt(0).toUpperCase() + paymentSchedule.slice(1)
+    : "—";
+
+  // Resets to 0 and animates back up whenever the underlying totals change
+  // (including the first time real data arrives), instead of the fill just
+  // snapping straight to the new percentage.
+  useEffect(() => {
+    Animated.sequence([
+      Animated.timing(progressAnim, {
+        toValue: 0,
+        duration: 250,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: false,
+      }),
+      Animated.timing(progressAnim, {
+        toValue: progressPct,
+        duration: 500,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }),
+    ]).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progressPct]);
+
+  const tourSteps: HelpStep[] = [
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", offsetY: 41, round: true },
+    { key: "notify", ref: notifyRef, title: "Notify", description: "Sends this tenant a reminder notification about their payment status.", offsetY: 41 },
+    { key: "payment", ref: paymentCardRef, title: "Rental payment", description: "This tenant's remaining bill this month, how much they've paid, and their current payment status.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(paymentCardRef) },
+    { key: "history", ref: historyCardRef, title: "Monthly payment history", description: "Every payment this tenant has made. Tap one with a receipt to view it.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(historyCardRef) },
+  ];
+
+  // For the digital receipt modal's Breakdown section — `data.payment` is
+  // what the tenant tendered (includes any change owed back for cash), so
+  // the real amount paid is that minus the change. Mirrors
+  // ReceiptCardContent.tsx exactly.
+  const receiptBreakdown = digitalReceipt ? synthesizeBreakdown(digitalReceipt, stall) : [];
+  const receiptAmountPaid = digitalReceipt
+    ? Number(digitalReceipt.payment ?? 0) - Number(digitalReceipt.change ?? 0)
+    : 0;
 
   const NOTIFY_MESSAGE =
     "The Market Administrator sent you a reminder regarding your rental account. Please check your payment status or contact the market office if you have any questions.";
@@ -283,7 +492,7 @@ export default function TenantPreview() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#0C2D6B" />
+        <ActivityIndicator size="large" color={colors.emerald} />
       </View>
     );
   }
@@ -291,41 +500,65 @@ export default function TenantPreview() {
   return (
     <View style={styles.root}>
       {/* HEADER */}
-      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
-          <Ionicons name="arrow-back" size={22} color="#E6F1FB" />
-        </TouchableOpacity>
+      <LinearGradient
+        colors={[colors.emerald, colors.ink]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.headerGradient}
+      >
+        <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
+          <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7} hitSlop={8}>
+            <ArrowLeft size={22} color={colors.emeraldSoft} />
+          </TouchableOpacity>
 
-        <Text style={styles.headerTitle}>Tenant Preview</Text>
+          <Text style={styles.headerTitle}>Tenant Preview</Text>
 
-        <Pressable
-          style={({ pressed }) => [
-            styles.notifyBtn,
-            sending && styles.notifyBtnDisabled,
-            pressed && !sending && styles.notifyBtnPressed,
-          ]}
-          onPress={handleNotifyTenant}
-          disabled={sending}
-        >
-          <Text style={styles.notifyBtnText}>
-            {sending ? "Sending..." : "Notify tenant"}
-          </Text>
-        </Pressable>
-      </View>
+          <View style={styles.headerRightGroup}>
+            <View ref={notifyRef} collapsable={false}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.notifyBtn,
+                  sending && styles.notifyBtnDisabled,
+                  pressed && !sending && styles.notifyBtnPressed,
+                ]}
+                onPress={handleNotifyTenant}
+                disabled={sending}
+              >
+                {sending ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <>
+                    <Bell size={14} color={colors.white} style={{ marginRight: 6 }} />
+                    <Text style={styles.notifyBtnText}>Notify</Text>
+                  </>
+                )}
+              </Pressable>
+            </View>
+
+            <View ref={helpRef} collapsable={false}>
+              <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
+                <HelpCircle size={22} color={colors.white} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </LinearGradient>
 
       <ScrollView
+        ref={scrollRef}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.body,
           { paddingBottom: insets.bottom + 32 },
         ]}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.emerald} />
         }
       >
         {/* PROFILE BANNER */}
         <View style={styles.banner}>
-          <View>
+          <Avatar name={`${tenant?.firstName ?? ""} ${tenant?.lastName ?? ""}`} size={54} />
+          <View style={styles.bannerTextWrap}>
             <Text style={styles.bannerWelcome}>Welcome, tenant!</Text>
             <Text style={styles.bannerName}>
               {tenant?.firstName} {tenant?.lastName}
@@ -336,107 +569,125 @@ export default function TenantPreview() {
           </View>
         </View>
 
-        {/* CARD 1 — RENTAL PAYMENT INFORMATION */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Rental Payment Information</Text>
+        {/* CARD 1 — RENTAL PAYMENT */}
+        <View ref={paymentCardRef} collapsable={false}>
+        <Card style={styles.cardOverride} noPadding>
+          <View style={styles.rpHeaderRow}>
+            <Text style={styles.cardTitle}>Rental Payment</Text>
+            <View style={styles.rpMonthBadge}>
+              <Text style={styles.rpMonthBadgeText}>{monthLabel}</Text>
+            </View>
+          </View>
 
-          <InfoRow
-            label="Payment"
-            value={`${paymentDue < 0 ? "-" : ""}₱${Math.abs(paymentDue).toLocaleString()}`}
-          />
-          <InfoRow
-            label="Payment Schedule"
-            value={
-              paymentSchedule
-                ? paymentSchedule.charAt(0).toUpperCase() + paymentSchedule.slice(1)
-                : "—"
-            }
-          />
-          <InfoRow
-            label="Remaining Bill"
-            value={`₱${remainingBill.toLocaleString()}`}
-            isLast
-            danger
-          />
+          <View style={styles.rpRemainingBox}>
+            <View style={styles.rpRemainingLabelRow}>
+              <Info size={13} color={colors.textSecondary} />
+              <Text style={styles.rpRemainingLabel}>Remaining Bill</Text>
+            </View>
+            <Text style={styles.rpRemainingAmount}>₱{remainingBill.toLocaleString()}</Text>
+
+            <View style={styles.rpProgressTrack}>
+              <Animated.View
+                style={[
+                  styles.rpProgressFill,
+                  {
+                    width: progressAnim.interpolate({
+                      inputRange: [0, 100],
+                      outputRange: ["0%", "100%"],
+                      extrapolate: "clamp",
+                    }),
+                  },
+                ]}
+              />
+            </View>
+
+            <View style={styles.rpProgressLabels}>
+              <Text style={styles.rpFooterText}>
+                <Text style={styles.rpFooterStrong}>₱{paidThisMonth.toLocaleString()}</Text> paid
+              </Text>
+              <Text style={styles.rpFooterText}>of ₱{monthTotalCharge.toLocaleString()}</Text>
+            </View>
+          </View>
+
+          <View style={styles.rpStatRow}>
+            <View style={styles.rpStatCard}>
+              <View style={styles.rpStatLabelRow}>
+                <TrendingUp size={13} color={colors.textSecondary} />
+                <Text style={styles.rpStatLabel}>Payment</Text>
+              </View>
+              <Text style={styles.rpStatValue}>
+                {paymentDue < 0 ? "-" : ""}₱{Math.abs(paymentDue).toLocaleString()}
+              </Text>
+              <Text style={styles.rpStatSub}>{missedDuesText}</Text>
+            </View>
+
+            <View style={styles.rpStatCard}>
+              <View style={styles.rpStatLabelRow}>
+                <CalendarClock size={13} color={colors.textSecondary} />
+                <Text style={styles.rpStatLabel}>Schedule</Text>
+              </View>
+              <Text style={styles.rpStatValue}>{scheduleLabel}</Text>
+              <Text style={styles.rpStatSub}>₱{dailyRate.toLocaleString()}/day</Text>
+            </View>
+          </View>
+        </Card>
         </View>
 
         {/* CARD 2 — MONTHLY PAYMENT HISTORY */}
-        <View style={styles.card}>
+        <View ref={historyCardRef} collapsable={false}>
+        <Card style={styles.cardOverride} noPadding>
           <Text style={styles.cardTitle}>Monthly Payment History</Text>
-
-          {/* Table header */}
-          <View style={styles.tableHeader}>
-            <Text style={[styles.colHeader, { flex: 2 }]}>Date</Text>
-            <Text style={[styles.colHeader, { flex: 2 }]}>Status</Text>
-            <Text style={[styles.colHeader, { flex: 1, textAlign: "right" }]}>Receipt</Text>
-          </View>
 
           {payments.length === 0 ? (
             <Text style={styles.empty}>No payments yet.</Text>
           ) : (
-            payments.map((item, index) => (
-              <View
-                key={item.id}
-                style={[
-                  styles.paymentRow,
-                  index === payments.length - 1 && { borderBottomWidth: 0 },
-                ]}
-              >
-                {/* Date */}
-                <Text style={[styles.paymentDate, { flex: 2 }]}>
-                  {formatDate(item.date)}
-                </Text>
+            payments.map((item) => {
+              const hasReceipt = !!(item.receipt || item.receiptData);
+              const Row = hasReceipt ? TouchableOpacity : View;
+              return (
+                <Row
+                  key={item.id}
+                  style={styles.txCard}
+                  {...(hasReceipt
+                    ? {
+                        onPress: () =>
+                          item.receipt
+                            ? setImageViewerUrl(item.receipt)
+                            : setDigitalReceipt(item.receiptData),
+                        activeOpacity: 0.7,
+                      }
+                    : {})}
+                >
+                  <View style={styles.rowIconCircle}>
+                    <FileText size={18} color={colors.emerald} />
+                  </View>
 
-                {/* Status badge */}
-                <View style={{ flex: 2 }}>
-                  <View
-                    style={[
-                      styles.statusBadge,
-                      item.status === "approved"
-                        ? styles.badgeApproved
-                        : item.status === "pending"
-                          ? styles.badgePending
-                          : styles.badgeRejected,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.statusText,
-                        item.status === "approved"
-                          ? styles.textApproved
-                          : item.status === "pending"
-                            ? styles.textPending
-                            : styles.textRejected,
-                      ]}
-                    >
-                      {item.status?.toUpperCase()}
+                  <View style={styles.rowInfo}>
+                    <Text style={styles.rowAmount}>₱{Number(item.amount || 0).toLocaleString()}</Text>
+                    <Text style={styles.rowDate}>
+                      {formatDateShort(item.date)}
+                      {item.receiptNo ? ` · #${item.receiptNo}` : ""}
                     </Text>
                   </View>
-                </View>
 
-                {/* Receipt */}
-                <View style={{ flex: 1, alignItems: "flex-end" }}>
-                  {item.receipt ? (
-                    <TouchableOpacity
-                      onPress={() => setImageViewerUrl(item.receipt)}
-                      activeOpacity={0.7}
-                    >
-                      <Ionicons name="receipt-outline" size={20} color="#1D9E75" />
-                    </TouchableOpacity>
-                  ) : item.receiptData ? (
-                    <TouchableOpacity
-                      onPress={() => setDigitalReceipt(item.receiptData)}
-                      activeOpacity={0.7}
-                    >
-                      <Ionicons name="receipt-outline" size={20} color="#1D9E75" />
-                    </TouchableOpacity>
-                  ) : (
-                    <Text style={styles.paymentDate}>—</Text>
-                  )}
-                </View>
-              </View>
-            ))
+                  <View style={styles.rowRight}>
+                    <Badge
+                      label={item.status === "approved" ? "PAID" : (item.status?.toUpperCase() ?? "")}
+                      tone={
+                        item.status === "approved"
+                          ? "success"
+                          : item.status === "pending"
+                            ? "warning"
+                            : "error"
+                      }
+                    />
+                    <Text style={styles.rowMethod}>via {methodLabel(item)}</Text>
+                  </View>
+                </Row>
+              );
+            })
           )}
+        </Card>
         </View>
       </ScrollView>
 
@@ -460,269 +711,431 @@ export default function TenantPreview() {
       <Modal visible={!!digitalReceipt} transparent animationType="fade">
         <View style={styles.modalBg}>
           <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>Tenant's Digital Receipt</Text>
+            <View style={styles.receiptHeaderRow}>
+              <View style={styles.receiptBadge}>
+                <FileText size={20} color={colors.emerald} />
+              </View>
+              <View>
+                <Text style={styles.receiptEyebrow}>Tenant's</Text>
+                <Text style={styles.receiptTitle}>Digital Receipt</Text>
+              </View>
+            </View>
 
-            <Text style={styles.modalRow}>Receipt No: {digitalReceipt?.receiptNo ?? ""}</Text>
-            <Text style={styles.modalRow}>Tenant Name: {digitalReceipt?.tenantName ?? ""}</Text>
-            <Text style={styles.modalRow}>Building Number: {digitalReceipt?.buildingNumber ?? ""}</Text>
-            <Text style={styles.modalRow}>Space ID: {digitalReceipt?.spaceId ?? ""}</Text>
-            <Text style={styles.modalRow}>
-              Date: {digitalReceipt?.date ? new Date(digitalReceipt.date).toLocaleDateString() : ""}
-            </Text>
-            <Text style={styles.modalRow}>Payment Method: {digitalReceipt?.paymentMethod ?? ""}</Text>
-            <Text style={styles.modalRow}>Rent Amount: ₱{digitalReceipt?.rentAmount ?? 0}</Text>
-            <Text style={styles.modalRow}>Amount Paid: ₱{digitalReceipt?.payment ?? 0}</Text>
-            {digitalReceipt?.change > 0 && (
-              <Text style={styles.modalRow}>Change: ₱{digitalReceipt.change}</Text>
+            <View style={styles.receiptDetailsBox}>
+              <View style={styles.receiptDetailRow}>
+                <Text style={styles.receiptDetailLabel}>Receipt No.</Text>
+                <Text style={styles.receiptDetailValue}>{digitalReceipt?.receiptNo ?? ""}</Text>
+              </View>
+              <View style={styles.receiptDetailRow}>
+                <Text style={styles.receiptDetailLabel}>Tenant</Text>
+                <Text style={styles.receiptDetailValue}>{digitalReceipt?.tenantName ?? ""}</Text>
+              </View>
+              <View style={styles.receiptDetailRow}>
+                <Text style={styles.receiptDetailLabel}>Building</Text>
+                <Text style={styles.receiptDetailValue}>{digitalReceipt?.buildingNumber ?? ""}</Text>
+              </View>
+              <View style={styles.receiptDetailRow}>
+                <Text style={styles.receiptDetailLabel}>Space ID</Text>
+                <Text style={styles.receiptDetailValue}>{digitalReceipt?.spaceId ?? ""}</Text>
+              </View>
+              <View style={styles.receiptDetailRow}>
+                <Text style={styles.receiptDetailLabel}>Date</Text>
+                <Text style={styles.receiptDetailValue}>
+                  {digitalReceipt?.date ? new Date(digitalReceipt.date).toLocaleDateString() : ""}
+                </Text>
+              </View>
+              <View style={styles.receiptDetailRow}>
+                <Text style={styles.receiptDetailLabel}>Method</Text>
+                <View style={styles.receiptMethodValueRow}>
+                  {methodIcon(digitalReceipt?.paymentMethod) && (
+                    <Image
+                      source={methodIcon(digitalReceipt?.paymentMethod)}
+                      style={styles.receiptMethodIcon}
+                      resizeMode="contain"
+                    />
+                  )}
+                  <Text style={styles.receiptDetailValue}>{digitalReceipt?.paymentMethod ?? ""}</Text>
+                </View>
+              </View>
+              <View style={styles.receiptDetailRow}>
+                <Text style={styles.receiptDetailLabel}>Rent</Text>
+                <Text style={styles.receiptDetailValue}>₱{digitalReceipt?.rentAmount ?? 0}</Text>
+              </View>
+              {digitalReceipt?.change > 0 && (
+                <View style={styles.receiptDetailRow}>
+                  <Text style={styles.receiptDetailLabel}>Change</Text>
+                  <Text style={styles.receiptDetailValue}>₱{digitalReceipt.change}</Text>
+                </View>
+              )}
+
+              <View style={styles.receiptStatusPill}>
+                {String(digitalReceipt?.status ?? "").toLowerCase() === "approved" && (
+                  <Check size={14} color={colors.emerald} style={{ marginRight: 6 }} />
+                )}
+                <Text style={styles.receiptStatusPillText}>
+                  {String(digitalReceipt?.status ?? "").toUpperCase()}
+                </Text>
+              </View>
+            </View>
+
+            {receiptBreakdown.length > 0 && (
+              <View style={styles.breakdownSection}>
+                <Text style={styles.breakdownTitle}>Breakdown</Text>
+                {receiptBreakdown.map((line, i) => (
+                  <View key={i} style={styles.breakdownRow}>
+                    <Text style={styles.breakdownLabel}>{line.label}</Text>
+                    <Text style={styles.breakdownValue}>₱{line.amount.toLocaleString()}</Text>
+                  </View>
+                ))}
+                <View style={styles.breakdownDivider} />
+                <View style={styles.breakdownRow}>
+                  <Text style={styles.breakdownTotalLabel}>Total</Text>
+                  <Text style={styles.breakdownTotalValue}>₱{receiptAmountPaid.toLocaleString()}</Text>
+                </View>
+              </View>
             )}
-            <Text style={styles.modalRow}>Approval Status: {digitalReceipt?.status ?? ""}</Text>
 
             <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={styles.modalBtnSecondary}
+              <Button
+                label="Close"
+                variant="secondary"
+                fullWidth={false}
                 onPress={() => setDigitalReceipt(null)}
-              >
-                <Text style={styles.modalBtnSecondaryText}>Close</Text>
-              </TouchableOpacity>
+                style={styles.receiptCloseBtn}
+              />
 
-              <TouchableOpacity
-                style={styles.modalBtnPrimary}
+              <Button
+                label="Download Receipt"
+                variant="primary"
+                fullWidth={false}
+                loading={generatingReceipt}
                 onPress={() => downloadOnlineReceipt(digitalReceipt)}
-                disabled={generatingReceipt}
-              >
-                {generatingReceipt ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <Text style={styles.modalBtnPrimaryText}>Download Receipt</Text>
-                )}
-              </TouchableOpacity>
+                style={styles.receiptDownloadBtn}
+              />
             </View>
           </View>
         </View>
       </Modal>
+
+      <HelpTour
+        visible={tourVisible}
+        steps={tourSteps}
+        onClose={() => {
+          setTourVisible(false);
+          scrollRef.current?.scrollTo({ y: 0, animated: true });
+        }}
+      />
     </View>
   );
 }
 
-function InfoRow({
-  label,
-  value,
-  isLast = false,
-  danger = false,
-}: {
-  label: string;
-  value: string;
-  isLast?: boolean;
-  danger?: boolean;
-}) {
-  return (
-    <View style={[styles.infoRow, !isLast && styles.infoRowBorder]}>
-      <Text style={styles.infoLabel}>{label}</Text>
-      <Text style={[styles.infoValue, danger && styles.infoValueDanger]}>
-        {value}
-      </Text>
-    </View>
-  );
-}
 
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#F0F4FA",
+    backgroundColor: colors.parchment,
   },
 
   center: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
+    backgroundColor: colors.parchment,
   },
 
   // ── Header ────────────────────────────────────────────────────────────────────
 
+  headerGradient: {
+    borderBottomLeftRadius: radius.xl + 4,
+    borderBottomRightRadius: radius.xl + 4,
+    overflow: "hidden",
+  },
+
   header: {
-    backgroundColor: "#0C2D6B",
-    paddingHorizontal: 20,
-    paddingBottom: 14,
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.md + 2,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
 
   headerTitle: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "500",
+    color: colors.white,
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.bold,
     flex: 1,
     textAlign: "center",
   },
 
+  headerRightGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+
+  headerIconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.16)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
   notifyBtn: {
-    backgroundColor: "#EF9F27",
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    transform: [{ scale: 1 }],
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.16)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.4)",
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md + 2,
+    paddingVertical: spacing.sm - 1,
+    minWidth: 84,
   },
 
   notifyBtnPressed: {
-    backgroundColor: "#BA7517",
-    transform: [{ scale: 0.97 }],
+    backgroundColor: "rgba(255,255,255,0.28)",
   },
 
   notifyBtnDisabled: {
-    opacity: 0.5,
+    opacity: 0.6,
   },
 
   notifyBtnText: {
-    color: "#fff",
-    fontSize: 13,
-    fontWeight: "500",
+    color: colors.white,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
   },
 
   // ── Body ─────────────────────────────────────────────────────────────────────
 
   body: {
-    paddingHorizontal: 16,
-    paddingTop: 20,
-    gap: 16,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.xl,
+    gap: spacing.lg,
   },
 
   // ── Profile banner ────────────────────────────────────────────────────────────
 
   banner: {
-    backgroundColor: "#1A4DA0",
-    borderRadius: 16,
-    paddingHorizontal: 20,
-    paddingVertical: 18,
+    backgroundColor: colors.emerald,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.lg + 2,
     flexDirection: "row",
     alignItems: "center",
-    gap: 14,
+    gap: spacing.md + 2,
+    ...shadow.card,
+  },
+
+  bannerTextWrap: {
+    flex: 1,
   },
 
   bannerWelcome: {
-    color: "#B5D4F4",
-    fontSize: 12,
+    color: colors.emeraldSoft,
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.medium,
   },
 
   bannerName: {
-    color: "#fff",
-    fontSize: 17,
-    fontWeight: "500",
+    color: colors.white,
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.bold,
     marginTop: 2,
   },
 
   bannerContact: {
-    color: "#B5D4F4",
-    fontSize: 13,
+    color: colors.emeraldSoft,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
     marginTop: 2,
   },
 
   // ── Card ─────────────────────────────────────────────────────────────────────
 
-  card: {
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    padding: 18,
-    borderWidth: 0.5,
-    borderColor: "#B5D4F4",
+  cardOverride: {
+    flexDirection: "column",
+    padding: spacing.lg + 2,
+    ...shadow.card,
   },
 
   cardTitle: {
-    fontSize: 15,
-    fontWeight: "500",
-    color: "#085041",
-    marginBottom: 14,
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    marginBottom: spacing.md + 2,
   },
 
-  // ── Info rows (Card 1) ────────────────────────────────────────────────────────
+  // ── Rental Payment card (Card 1) — mirrors rentwise-tenant/app/dashboard.tsx exactly ──
 
-  infoRow: {
+  rpHeaderRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingVertical: 12,
+    marginBottom: spacing.md + 2,
+  },
+  rpMonthBadge: {
+    backgroundColor: colors.emeraldSoft,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+  },
+  rpMonthBadgeText: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
   },
 
-  infoRowBorder: {
-    borderBottomWidth: 0.5,
-    borderBottomColor: "#E6F1FB",
+  rpRemainingBox: {
+    backgroundColor: colors.mist,
+    borderRadius: radius.md,
+    padding: spacing.lg,
   },
-
-  infoLabel: {
-    fontSize: 14,
-    color: "#888780",
-  },
-
-  infoValue: {
-    fontSize: 14,
-    fontWeight: "500",
-    color: "#0C2D6B",
-  },
-
-  infoValueDanger: {
-    color: "#E24B4A",
-  },
-
-  // ── Payment history table (Card 2) ────────────────────────────────────────────
-
-  tableHeader: {
-    backgroundColor: "#F0F4FA",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    flexDirection: "row",
-    marginBottom: 4,
-  },
-
-  colHeader: {
-    fontSize: 12,
-    fontWeight: "500",
-    color: "#5F5E5A",
-  },
-
-  paymentRow: {
+  rpRemainingLabelRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 14,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "#E6F1FB",
+    gap: 6,
+  },
+  rpRemainingLabel: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.textSecondary,
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+  },
+  rpRemainingAmount: {
+    fontSize: fontSize.display,
+    fontFamily: fontFamily.extrabold,
+    color: colors.error,
+    marginTop: 4,
+    marginBottom: spacing.md,
+  },
+  rpProgressTrack: {
+    height: 8,
+    borderRadius: radius.pill,
+    backgroundColor: colors.border,
+    overflow: "hidden",
+    marginBottom: spacing.sm,
+  },
+  rpProgressFill: {
+    height: "100%",
+    borderRadius: radius.pill,
+    backgroundColor: colors.emerald,
+  },
+  rpProgressLabels: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  rpFooterText: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+  },
+  rpFooterStrong: {
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
   },
 
-  paymentDate: {
-    fontSize: 14,
-    color: "#444441",
+  rpStatRow: {
+    flexDirection: "row",
+    gap: spacing.md,
+    marginTop: spacing.lg,
+  },
+  rpStatCard: {
+    flex: 1,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    padding: spacing.md + 2,
+  },
+  rpStatLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: spacing.sm,
+  },
+  rpStatLabel: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.medium,
+    color: colors.textSecondary,
+  },
+  rpStatValue: {
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    marginBottom: 2,
+  },
+  rpStatSub: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.regular,
+    color: colors.textMuted,
   },
 
-  // Status badges
+  // ── Payment history transaction cards (Card 2) — mirrors
+  // rentwise-tenant/app/payment-history.tsx's txCard exactly ──────────────────
 
-  statusBadge: {
-    alignSelf: "flex-start",
+  txCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md + 2,
+    marginBottom: spacing.md,
+  },
+
+  rowIconCircle: {
+    width: 40,
+    height: 40,
     borderRadius: 20,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    backgroundColor: colors.emeraldSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: spacing.md,
   },
 
-  badgeApproved: { backgroundColor: "#E1F5EE" },
-  badgePending: { backgroundColor: "#FAEEDA" },
-  badgeRejected: { backgroundColor: "#FCEBEB" },
-
-  statusText: {
-    fontSize: 11,
-    fontWeight: "500",
+  rowInfo: {
+    flex: 1,
   },
 
-  textApproved: { color: "#0F6E56" },
-  textPending: { color: "#BA7517" },
-  textRejected: { color: "#A32D2D" },
+  rowAmount: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+  },
+
+  rowDate: {
+    fontSize: fontSize.xs + 1,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+
+  rowRight: {
+    alignItems: "flex-end",
+  },
+
+  rowMethod: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.regular,
+    color: colors.textMuted,
+    marginTop: 4,
+  },
 
   // Empty state
 
   empty: {
-    paddingVertical: 24,
+    paddingVertical: spacing.xxl,
     textAlign: "center",
-    fontSize: 14,
-    color: "#B4B2A9",
+    fontSize: fontSize.base,
+    color: colors.textMuted,
+    fontFamily: fontFamily.regular,
   },
 
   // ── Receipt viewers ──────────────────────────────────────────────────────────
@@ -741,56 +1154,171 @@ const styles = StyleSheet.create({
 
   modalBg: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.45)",
+    backgroundColor: colors.overlay,
     justifyContent: "center",
     alignItems: "center",
   },
 
   modalBox: {
-    width: "85%",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    padding: 20,
-  },
-
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    marginBottom: 15,
-    color: "#0C2D6B",
-  },
-
-  modalRow: {
-    fontSize: 14,
-    color: "#444441",
-    marginBottom: 6,
+    width: "88%",
+    backgroundColor: colors.white,
+    borderRadius: radius.xl,
+    padding: spacing.xl,
+    ...shadow.raised,
   },
 
   modalButtons: {
     flexDirection: "row",
-    justifyContent: "flex-end",
-    marginTop: 16,
-    gap: 10,
+    marginTop: spacing.lg,
+    gap: spacing.sm + 2,
   },
 
-  modalBtnSecondary: {
-    borderWidth: 1,
-    borderColor: "#B5D4F4",
-    borderRadius: 8,
-    paddingVertical: 9,
-    paddingHorizontal: 18,
-  },
+  // ── Digital receipt modal ────────────────────────────────────────────────────
 
-  modalBtnSecondaryText: { fontSize: 14, color: "#0C2D6B" },
-
-  modalBtnPrimary: {
-    backgroundColor: "#0C2D6B",
-    borderRadius: 8,
-    paddingVertical: 9,
-    paddingHorizontal: 18,
-    minWidth: 130,
+  receiptHeaderRow: {
+    flexDirection: "row",
     alignItems: "center",
+    gap: spacing.md,
+    marginBottom: spacing.lg,
   },
 
-  modalBtnPrimaryText: { fontSize: 14, fontWeight: "600", color: "#FFFFFF" },
+  receiptBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.md,
+    backgroundColor: colors.emeraldSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  receiptEyebrow: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+
+  receiptTitle: {
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.extrabold,
+    color: colors.ink,
+  },
+
+  receiptDetailsBox: {
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: colors.borderStrong,
+    borderRadius: radius.lg,
+    backgroundColor: colors.mist,
+    padding: spacing.lg,
+  },
+
+  receiptDetailRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: spacing.xs + 2,
+  },
+
+  receiptDetailLabel: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.medium,
+    color: colors.textSecondary,
+  },
+
+  receiptDetailValue: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+  },
+
+  receiptMethodValueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+
+  receiptMethodIcon: {
+    width: 16,
+    height: 16,
+    borderRadius: 4,
+  },
+
+  receiptStatusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.successSoft,
+    borderRadius: radius.pill,
+    paddingVertical: spacing.sm + 2,
+    marginTop: spacing.md,
+  },
+
+  receiptStatusPillText: {
+    fontSize: fontSize.xs + 1,
+    fontFamily: fontFamily.bold,
+    color: colors.emerald,
+    letterSpacing: 0.4,
+  },
+
+  breakdownSection: {
+    marginTop: spacing.lg,
+  },
+
+  breakdownTitle: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    marginBottom: spacing.sm,
+  },
+
+  breakdownRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 5,
+  },
+
+  breakdownLabel: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.medium,
+    color: colors.emeraldBright,
+    flexShrink: 1,
+    paddingRight: spacing.sm,
+  },
+
+  breakdownValue: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.emeraldBright,
+  },
+
+  breakdownDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+    marginVertical: spacing.sm,
+  },
+
+  breakdownTotalLabel: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+  },
+
+  breakdownTotalValue: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+    color: colors.emerald,
+  },
+
+  receiptCloseBtn: {
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.xl,
+  },
+
+  receiptDownloadBtn: {
+    flex: 1,
+    borderRadius: radius.pill,
+    backgroundColor: colors.ink,
+  },
 });

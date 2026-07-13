@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -9,13 +9,17 @@ import {
   Alert,
   StyleSheet,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
+import { ArrowLeft, HelpCircle, Check } from "lucide-react-native";
 
 import { db } from "../shared/services/firestore";
 import { restoreTenantToNewStall } from "../shared/services/accountServices";
+import HelpTour, { HelpStep } from "./components/HelpTour";
+import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
+import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 type StallOption = {
   id: string;
@@ -32,23 +36,45 @@ export default function TenantRelocation() {
     uid: string;
     firstName: string;
     lastName: string;
-    username: string;
+    email: string;
     buildingNumber: string;
     spaceId: string;
     stallId: string;
   }>();
 
-  const { uid, firstName, lastName, username, buildingNumber, spaceId } = params;
+  const { uid, firstName, lastName, email, buildingNumber, spaceId } = params;
   const fullName = `${firstName} ${lastName}`.trim();
 
   const [stalls, setStalls] = useState<StallOption[]>([]);
   const [selectedStall, setSelectedStall] = useState<StallOption | null>(null);
   const [loading, setLoading] = useState(true);
   const [restoring, setRestoring] = useState(false);
+  const [tourVisible, setTourVisible] = useState(false);
+  const stallListRef = useRef<View>(null);
+  const restoreBtnRef = useRef<View>(null);
+
+  const tourSteps: HelpStep[] = [
+    { key: "stalls", ref: stallListRef, title: "Available stalls", description: "Pick which unoccupied stall to move this archived tenant into.", offsetY: 41 },
+    { key: "restore", ref: restoreBtnRef, title: "Restore account", description: "Restores the tenant's account and assigns them to the stall you selected above.", offsetY: 41 },
+  ];
 
   useEffect(() => {
     fetchUnoccupiedStalls();
   }, []);
+
+  // Auto-opens the guided tour the first time the owner ever lands on this
+  // page — never again after that, since it flips a persisted per-device
+  // flag. Can still be replayed anytime via the Help button.
+  useEffect(() => {
+    if (loading) return;
+    (async () => {
+      const seen = await hasSeenPageTour("owner-tenant-relocation");
+      if (!seen) {
+        setTourVisible(true);
+        await markPageTourSeen("owner-tenant-relocation");
+      }
+    })();
+  }, [loading]);
 
   const fetchUnoccupiedStalls = async () => {
     setLoading(true);
@@ -109,17 +135,27 @@ export default function TenantRelocation() {
   return (
     <View style={styles.screen}>
       {/* HEADER */}
-      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          activeOpacity={0.7}
-          disabled={restoring}
-        >
-          <Ionicons name="arrow-back" size={22} color="#E6F1FB" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Tenant Relocation</Text>
-        <View style={{ width: 22 }} />
-      </View>
+      <LinearGradient
+        colors={[colors.emerald, colors.ink]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.headerGradient}
+      >
+        <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            activeOpacity={0.7}
+            disabled={restoring}
+            style={styles.headerIconBtn}
+          >
+            <ArrowLeft size={22} color={colors.emeraldSoft} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Tenant Relocation</Text>
+          <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} disabled={restoring} style={styles.headerIconBtn}>
+            <HelpCircle size={22} color={colors.emeraldSoft} />
+          </TouchableOpacity>
+        </View>
+      </LinearGradient>
 
       {/* SCROLLABLE BODY */}
       <ScrollView
@@ -131,23 +167,25 @@ export default function TenantRelocation() {
         <View style={styles.infoCard}>
           <Text style={styles.cardLabel}>Archived tenant</Text>
           <Text style={styles.infoName}>{fullName}</Text>
-          <Text style={styles.infoUsername}>{username}@rentwise.app</Text>
-          <View style={styles.infoDivider} />
-          <Text style={styles.infoNotice}>
-            Previous stall{" "}
-            <Text style={styles.infoBold}>
-              Building {buildingNumber} {"·"} Space {spaceId}
+          <Text style={styles.infoUsername}>{email}</Text>
+          <View style={styles.noticeBox}>
+            <Text style={styles.infoNotice}>
+              Previous stall{" "}
+              <Text style={styles.infoBold}>
+                Building {buildingNumber} {"·"} Space {spaceId}
+              </Text>
+              {" "}is currently occupied. Select a new available stall below.
             </Text>
-            {" "}is currently occupied. Select a new available stall below.
-          </Text>
+          </View>
         </View>
 
         {/* AVAILABLE STALLS */}
+        <View ref={stallListRef} collapsable={false}>
         <Text style={styles.sectionLabel}>Available stalls</Text>
 
         {loading ? (
           <View style={styles.center}>
-            <ActivityIndicator color="#0C2D6B" size="large" />
+            <ActivityIndicator color={colors.emerald} size="large" />
           </View>
         ) : stalls.length === 0 ? (
           <Text style={styles.emptyText}>No available stalls at the moment.</Text>
@@ -171,17 +209,19 @@ export default function TenantRelocation() {
                   </Text>
                 </View>
                 <View style={[styles.radioOuter, selected && styles.radioOuterSelected]}>
-                  {selected && <View style={styles.radioInner} />}
+                  {selected && <Check size={14} color={colors.white} />}
                 </View>
               </TouchableOpacity>
             );
           })
         )}
+        </View>
       </ScrollView>
 
       {/* FOOTER — RESTORE BUTTON */}
       <View style={[styles.footer, { paddingBottom: insets.bottom + 28 }]}>
         <Pressable
+          ref={restoreBtnRef}
           style={({ pressed }) => [
             styles.restoreBtn,
             (!selectedStall || restoring) && styles.restoreBtnDisabled,
@@ -191,12 +231,13 @@ export default function TenantRelocation() {
           disabled={!selectedStall || restoring}
         >
           {restoring ? (
-            <ActivityIndicator color="#fff" size="small" />
+            <ActivityIndicator color={colors.white} size="small" />
           ) : (
             <Text style={styles.restoreBtnText}>Restore account</Text>
           )}
         </Pressable>
       </View>
+      <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
     </View>
   );
 }
@@ -204,23 +245,38 @@ export default function TenantRelocation() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "#F0F4FA",
+    backgroundColor: colors.parchment,
   },
 
   // ── Header ────────────────────────────────────────────────────────────────────
 
+  headerGradient: {
+    borderBottomLeftRadius: radius.xl + 4,
+    borderBottomRightRadius: radius.xl + 4,
+    overflow: "hidden",
+  },
+
   header: {
-    backgroundColor: "#0C2D6B",
-    paddingHorizontal: 20,
-    paddingBottom: 14,
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.md + 2,
     flexDirection: "row",
     alignItems: "center",
   },
 
+  headerIconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.16)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
   headerTitle: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "500",
+    color: colors.white,
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.bold,
     flex: 1,
     textAlign: "center",
   },
@@ -232,86 +288,89 @@ const styles = StyleSheet.create({
   },
 
   bodyContent: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
     paddingBottom: 100,
   },
 
   // ── Archived tenant card ──────────────────────────────────────────────────────
 
   infoCard: {
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    padding: 18,
-    borderWidth: 0.5,
-    borderColor: "#B5D4F4",
-    marginBottom: 24,
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    padding: spacing.lg + 2,
+    marginBottom: spacing.xxl,
+    ...shadow.card,
   },
 
   cardLabel: {
-    fontSize: 11,
-    fontWeight: "500",
-    color: "#2E6FD9",
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.emeraldBright,
     letterSpacing: 0.8,
     textTransform: "uppercase",
-    marginBottom: 8,
+    marginBottom: spacing.sm,
   },
 
   infoName: {
-    fontSize: 18,
-    fontWeight: "500",
-    color: "#0C2D6B",
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
   },
 
   infoUsername: {
-    fontSize: 14,
-    color: "#2E6FD9",
+    fontSize: fontSize.base,
+    color: colors.emeraldBright,
+    fontFamily: fontFamily.medium,
     marginTop: 2,
   },
 
-  infoDivider: {
-    height: 0.5,
-    backgroundColor: "#E6F1FB",
-    marginVertical: 14,
+  noticeBox: {
+    backgroundColor: colors.mist,
+    borderRadius: radius.md,
+    padding: spacing.md + 2,
+    marginTop: spacing.md + 2,
   },
 
   infoNotice: {
-    fontSize: 14,
-    color: "#444441",
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    fontFamily: fontFamily.regular,
     lineHeight: 20,
   },
 
   infoBold: {
-    fontWeight: "500",
-    color: "#0C2D6B",
+    fontFamily: fontFamily.semibold,
+    color: colors.ink,
   },
 
   // ── Section label ─────────────────────────────────────────────────────────────
 
   sectionLabel: {
-    fontSize: 11,
-    fontWeight: "500",
-    color: "#2E6FD9",
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.emeraldBright,
     letterSpacing: 0.8,
     textTransform: "uppercase",
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
 
   // ── Stall option card ─────────────────────────────────────────────────────────
 
   stallCard: {
-    backgroundColor: "#fff",
-    borderRadius: 14,
-    padding: 16,
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
     borderWidth: 1.5,
-    borderColor: "#B5D4F4",
-    marginBottom: 10,
+    borderColor: colors.emeraldSoft,
+    marginBottom: spacing.sm + 2,
     flexDirection: "row",
     alignItems: "center",
   },
 
   stallCardSelected: {
-    borderColor: "#0C2D6B",
+    borderWidth: 2,
+    borderColor: colors.ink,
   },
 
   stallInfo: {
@@ -319,14 +378,15 @@ const styles = StyleSheet.create({
   },
 
   stallTitle: {
-    fontSize: 15,
-    fontWeight: "500",
-    color: "#0C2D6B",
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.semibold,
+    color: colors.ink,
   },
 
   stallSub: {
-    fontSize: 13,
-    color: "#888780",
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    fontFamily: fontFamily.regular,
     marginTop: 4,
   },
 
@@ -337,22 +397,15 @@ const styles = StyleSheet.create({
     height: 22,
     borderRadius: 11,
     borderWidth: 2,
-    borderColor: "#B5D4F4",
+    borderColor: colors.emeraldSoft,
     backgroundColor: "transparent",
     alignItems: "center",
     justifyContent: "center",
   },
 
   radioOuterSelected: {
-    borderColor: "#0C2D6B",
-    backgroundColor: "#0C2D6B",
-  },
-
-  radioInner: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: "#fff",
+    borderColor: colors.ink,
+    backgroundColor: colors.ink,
   },
 
   // ── Empty / loading ───────────────────────────────────────────────────────────
@@ -363,10 +416,11 @@ const styles = StyleSheet.create({
   },
 
   emptyText: {
-    fontSize: 14,
-    color: "#888780",
+    fontSize: fontSize.base,
+    color: colors.textSecondary,
+    fontFamily: fontFamily.regular,
     textAlign: "center",
-    marginTop: 20,
+    marginTop: spacing.xl,
   },
 
   // ── Footer restore button ─────────────────────────────────────────────────────
@@ -376,34 +430,35 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: "#F0F4FA",
-    paddingHorizontal: 16,
-    paddingTop: 12,
+    backgroundColor: colors.parchment,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md + 2,
   },
 
   restoreBtn: {
     width: "100%",
-    backgroundColor: "#0C2D6B",
-    borderRadius: 14,
-    paddingVertical: 15,
+    backgroundColor: colors.ink,
+    borderRadius: radius.pill,
+    paddingVertical: 16,
     alignItems: "center",
     justifyContent: "center",
     transform: [{ scale: 1 }],
+    ...shadow.button,
   },
 
   restoreBtnPressed: {
-    backgroundColor: "#091f4a",
+    backgroundColor: colors.emerald,
     transform: [{ scale: 0.97 }],
   },
 
   restoreBtnDisabled: {
-    backgroundColor: "#B5D4F4",
+    backgroundColor: colors.emeraldSoft,
   },
 
   restoreBtnText: {
-    fontSize: 16,
-    fontWeight: "500",
-    color: "#fff",
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.semibold,
+    color: colors.white,
     textAlign: "center",
   },
 });

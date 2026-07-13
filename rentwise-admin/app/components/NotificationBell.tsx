@@ -10,17 +10,19 @@ import {
   Alert,
   StyleSheet,
 } from "react-native";
-import { collection, doc, onSnapshot, query, updateDoc, where } from "firebase/firestore";
-import { Ionicons } from "@expo/vector-icons";
+import { collection, doc, onSnapshot, query, updateDoc, where, writeBatch } from "firebase/firestore";
+import { Bell } from "lucide-react-native";
 import { router } from "expo-router";
 
 import { db } from "../../shared/services/firestore";
 import { auth } from "../../shared/services/auth";
+import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 
 type BellItem =
   | {
       id: string;
       kind: "passwordReset";
+      resolved: boolean;
       tenantId?: string;
       tenantName?: string;
       email?: string;
@@ -30,7 +32,9 @@ type BellItem =
   | {
       id: string;
       kind: "message";
+      resolved: boolean;
       message: string;
+      fromOwner?: boolean;
       createdAt?: any;
     };
 
@@ -40,12 +44,28 @@ function formatDate(date: any) {
   return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
 }
 
-export default function NotificationBell() {
+// Renders `**bold**` segments within a plain-text message (e.g. tenant name,
+// payment amount) as bold spans, without pulling in a markdown library.
+function renderMessage(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g).filter(Boolean);
+  return parts.map((part, i) =>
+    part.startsWith("**") && part.endsWith("**") ? (
+      <Text key={i} style={styles.itemTitleBold}>
+        {part.slice(2, -2)}
+      </Text>
+    ) : (
+      <Text key={i}>{part}</Text>
+    ),
+  );
+}
+
+export default function NotificationBell({ color = colors.emeraldSoft }: { color?: string }) {
   const [visible, setVisible] = useState(false);
   const [passwordResetItems, setPasswordResetItems] = useState<BellItem[]>([]);
   const [messageItems, setMessageItems] = useState<BellItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
 
   // Live listeners — keep the bell badge and list current even while the
   // modal is closed, instead of only refreshing at the moment it's opened.
@@ -57,10 +77,13 @@ export default function NotificationBell() {
           .map((d) => ({ id: d.id, ...d.data() }) as any)
           // Admin-targeted requests (admin forgot their own password) go to
           // the owner instead — see rentwise-owner/app/notifications.tsx.
-          .filter((r: any) => r.status === "pending" && r.requestedRole !== "admin")
+          // Resolved requests stay visible (tagged, action-less) instead of
+          // vanishing immediately, so "Clear All" has something to clear.
+          .filter((r: any) => r.requestedRole !== "admin")
           .map((r: any) => ({
             id: r.id,
             kind: "passwordReset" as const,
+            resolved: r.status !== "pending",
             tenantId: r.tenantId,
             tenantName: r.tenantName,
             email: r.email,
@@ -84,11 +107,14 @@ export default function NotificationBell() {
         (snap) => {
           const items: BellItem[] = snap.docs
             .map((d) => ({ id: d.id, ...d.data() }) as any)
-            .filter((r: any) => r.read !== true)
             .map((r: any) => ({
               id: r.id,
               kind: "message" as const,
+              // Owner acknowledgements are informational only — nothing for
+              // the admin to act on, so treat them as already resolved.
+              resolved: r.read === true || r.fromOwner === true,
               message: r.message,
+              fromOwner: r.fromOwner === true,
               createdAt: r.createdAt,
             }));
           setMessageItems(items);
@@ -104,10 +130,13 @@ export default function NotificationBell() {
   }, []);
 
   const requests = [...passwordResetItems, ...messageItems].sort((a, b) => {
+    // Unresolved items first (need attention), each group newest-first.
+    if (a.resolved !== b.resolved) return a.resolved ? 1 : -1;
     const aTs = a.createdAt?.seconds ?? 0;
     const bTs = b.createdAt?.seconds ?? 0;
     return bTs - aTs;
   });
+  const pendingCount = requests.filter((r) => !r.resolved).length;
 
   const openModal = () => setVisible(true);
   const closeModal = () => setVisible(false);
@@ -142,18 +171,50 @@ export default function NotificationBell() {
     }
   };
 
+  const handleClearAll = () => {
+    if (requests.length === 0 || pendingCount > 0) return;
+    Alert.alert(
+      "Clear Notifications",
+      "Remove all resolved notifications from this list?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Clear All", style: "destructive", onPress: doClearAll },
+      ],
+    );
+  };
+
+  const doClearAll = async () => {
+    setClearing(true);
+    try {
+      const batch = writeBatch(db);
+      for (const item of requests) {
+        batch.delete(
+          doc(db, item.kind === "passwordReset" ? "passwordResetRequests" : "notifications", item.id),
+        );
+      }
+      await batch.commit();
+    } catch (err) {
+      console.error("clearAll error:", err);
+      Alert.alert("Error", "Failed to clear notifications.");
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
     <>
       <TouchableOpacity
-        style={styles.bellBtn}
+        style={styles.bellWrap}
         onPress={openModal}
         activeOpacity={0.7}
       >
-        <Ionicons name="notifications-outline" size={24} color="#E6F1FB" />
-        {requests.length > 0 && (
+        <View style={styles.bellBtn}>
+          <Bell size={24} color={color} />
+        </View>
+        {pendingCount > 0 && (
           <View style={styles.badge}>
             <Text style={styles.badgeText}>
-              {requests.length > 9 ? "9+" : requests.length}
+              {pendingCount > 9 ? "9+" : pendingCount}
             </Text>
           </View>
         )}
@@ -179,7 +240,7 @@ export default function NotificationBell() {
 
             {loading ? (
               <View style={styles.loadingBox}>
-                <ActivityIndicator color="#2E6FD9" size="large" />
+                <ActivityIndicator color={colors.emerald} size="large" />
               </View>
             ) : requests.length === 0 ? (
               <View style={styles.emptyBox}>
@@ -193,51 +254,62 @@ export default function NotificationBell() {
               >
                 {requests.map((r) => (
                   <View key={r.id} style={styles.item}>
-                    <View>
-                      {r.kind === "passwordReset" ? (
-                        <>
-                          <Text style={styles.itemTitle}>
-                            Password reset — {r.tenantName || "Unknown tenant"}
-                          </Text>
-                          <Text style={styles.itemSub}>{r.email}</Text>
-                          <Text style={styles.itemSub}>
-                            Space: {r.spaceId || "—"}
-                          </Text>
-                        </>
-                      ) : (
-                        <Text style={styles.itemTitle}>{r.message}</Text>
-                      )}
-                      <Text style={styles.itemDate}>
-                        {formatDate(r.createdAt)}
-                      </Text>
-                    </View>
-                    <View style={styles.itemActions}>
-                      {r.kind === "passwordReset" && (
-                        <TouchableOpacity
-                          style={styles.goToTenantBtn}
-                          onPress={() => goToTenant(r)}
-                        >
-                          <Text style={styles.goToTenantBtnText}>
-                            Reset
-                          </Text>
-                        </TouchableOpacity>
-                      )}
-                      <TouchableOpacity
-                        style={[
-                          styles.resolveBtn,
-                          resolvingId === r.id && styles.btnDisabled,
-                        ]}
-                        onPress={() => resolveItem(r)}
-                        disabled={resolvingId === r.id}
-                      >
-                        {resolvingId === r.id ? (
-                          <ActivityIndicator color="#0C2D6B" size="small" />
+                    <View style={[styles.itemAccentBar, r.resolved && styles.itemAccentBarResolved]} />
+                    <View style={[styles.itemBody, r.resolved && styles.itemResolved]}>
+                      <View>
+                        {r.kind === "passwordReset" ? (
+                          <>
+                            <Text style={styles.itemTitle}>
+                              Password reset — {r.tenantName || "Unknown tenant"}
+                            </Text>
+                            <Text style={styles.itemSub}>{r.email}</Text>
+                            <Text style={styles.itemSub}>
+                              Space: {r.spaceId || "—"}
+                            </Text>
+                          </>
                         ) : (
-                          <Text style={styles.resolveBtnText}>
-                            Mark resolved
-                          </Text>
+                          <Text style={styles.itemTitle}>{renderMessage(r.message)}</Text>
                         )}
-                      </TouchableOpacity>
+                      </View>
+                      <View style={styles.itemFooter}>
+                        <Text style={styles.itemDate}>
+                          {formatDate(r.createdAt)}
+                        </Text>
+                        {r.kind === "message" && r.fromOwner ? null : r.resolved ? (
+                          <View style={styles.resolvedTag}>
+                            <Text style={styles.resolvedTagText}>Resolved</Text>
+                          </View>
+                        ) : (
+                        <View style={styles.itemActions}>
+                          {r.kind === "passwordReset" && (
+                            <TouchableOpacity
+                              style={styles.goToTenantBtn}
+                              onPress={() => goToTenant(r)}
+                            >
+                              <Text style={styles.goToTenantBtnText}>
+                                Reset
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                          <TouchableOpacity
+                            style={[
+                              styles.resolveBtn,
+                              resolvingId === r.id && styles.btnDisabled,
+                            ]}
+                            onPress={() => resolveItem(r)}
+                            disabled={resolvingId === r.id}
+                          >
+                            {resolvingId === r.id ? (
+                              <ActivityIndicator color={colors.emerald} size="small" />
+                            ) : (
+                              <Text style={styles.resolveBtnText}>
+                                Mark resolved
+                              </Text>
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        )}
+                      </View>
                     </View>
                   </View>
                 ))}
@@ -249,11 +321,27 @@ export default function NotificationBell() {
                 style={({ pressed }) => [
                   styles.btn,
                   styles.btnOutline,
-                  pressed && styles.btnOutlinePressed,
+                  (pendingCount > 0 || requests.length === 0 || clearing) && styles.btnDisabledOutline,
+                  pressed && pendingCount === 0 && requests.length > 0 && !clearing && styles.btnOutlinePressed,
+                ]}
+                onPress={handleClearAll}
+                disabled={pendingCount > 0 || requests.length === 0 || clearing}
+              >
+                {clearing ? (
+                  <ActivityIndicator color={colors.emerald} size="small" />
+                ) : (
+                  <Text style={styles.btnOutlineText}>Clear All</Text>
+                )}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.btn,
+                  styles.btnPrimary,
+                  pressed && styles.btnPrimaryPressed,
                 ]}
                 onPress={closeModal}
               >
-                <Text style={styles.btnOutlineText}>Close</Text>
+                <Text style={styles.btnPrimaryText}>Close</Text>
               </Pressable>
             </View>
           </View>
@@ -264,118 +352,160 @@ export default function NotificationBell() {
 }
 
 const styles = StyleSheet.create({
+  bellWrap: {
+    width: 40,
+    height: 40,
+  },
   bellBtn: {
-    width: 24,
-    height: 24,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.16)",
     justifyContent: "center",
     alignItems: "center",
   },
   badge: {
     position: "absolute",
-    top: -4,
-    right: -6,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: "#D64545",
+    top: -2,
+    right: -2,
+    minWidth: 17,
+    height: 17,
+    borderRadius: radius.pill,
+    backgroundColor: colors.error,
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 3,
+    borderWidth: 1.5,
+    borderColor: colors.ink,
   },
   badgeText: {
-    color: "#FFFFFF",
-    fontSize: 10,
-    fontWeight: "700",
+    color: colors.white,
+    fontSize: 9,
+    fontFamily: fontFamily.bold,
   },
 
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: colors.overlay,
     justifyContent: "center",
     alignItems: "center",
-    padding: 20,
+    padding: spacing.xl,
   },
 
   card: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    borderWidth: 0.5,
-    borderColor: "#B5D4F4",
+    backgroundColor: colors.parchment,
+    borderRadius: radius.xl + 4,
+    borderWidth: 2,
+    borderColor: colors.emeraldSoft,
     width: "100%",
     maxHeight: "90%",
     overflow: "hidden",
+    ...shadow.raised,
   },
 
   titleBar: {
-    backgroundColor: "#E6F1FB",
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    backgroundColor: colors.emeraldSoft,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.lg,
   },
   title: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#0C2D6B",
+    fontSize: fontSize.xxl,
+    fontFamily: fontFamily.extrabold,
+    color: colors.ink,
   },
 
   loadingBox: { paddingVertical: 48, alignItems: "center" },
   emptyBox: { paddingVertical: 48, alignItems: "center" },
-  emptyBoxText: { fontSize: 14, color: "#888780" },
+  emptyBoxText: { fontSize: fontSize.base, fontFamily: fontFamily.regular, color: colors.textSecondary },
 
   scrollArea: { flexGrow: 0, maxHeight: 420 },
-  scrollContent: { padding: 14, gap: 10 },
+  scrollContent: { padding: spacing.lg, gap: spacing.md },
 
   item: {
-    gap: 10,
-    borderWidth: 1,
-    borderColor: "#B5D4F4",
-    borderRadius: 10,
-    padding: 12,
+    flexDirection: "row",
+    borderRadius: radius.md,
+    overflow: "hidden",
+    ...shadow.subtle,
+  },
+  itemAccentBar: {
+    width: 4,
+    backgroundColor: colors.emerald,
+  },
+  itemAccentBarResolved: {
+    backgroundColor: colors.border,
+  },
+  itemBody: {
+    flex: 1,
+    gap: spacing.sm + 2,
+    backgroundColor: colors.white,
+    padding: spacing.md + 2,
+  },
+  itemResolved: {
+    opacity: 0.6,
+  },
+  itemFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   itemActions: {
     flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 8,
+    gap: spacing.sm,
   },
+  resolvedTag: {
+    backgroundColor: colors.mist,
+    borderRadius: radius.sm - 2,
+    paddingVertical: 4,
+    paddingHorizontal: spacing.md - 2,
+  },
+  resolvedTagText: { fontSize: fontSize.xs, fontFamily: fontFamily.semibold, color: colors.textSecondary },
   goToTenantBtn: {
-    backgroundColor: "#0C2D6B",
-    borderRadius: 8,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
+    backgroundColor: colors.emerald,
+    borderRadius: radius.pill,
+    paddingVertical: spacing.xs + 2,
+    paddingHorizontal: spacing.md + 2,
   },
-  goToTenantBtnText: { fontSize: 12, fontWeight: "600", color: "#FFFFFF" },
-  itemTitle: { fontSize: 13, fontWeight: "600", color: "#0C2D6B" },
-  itemSub: { fontSize: 12, color: "#444441", marginTop: 2 },
-  itemDate: { fontSize: 11, color: "#888780", marginTop: 4 },
+  goToTenantBtnText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.white },
+  itemTitle: { fontSize: fontSize.sm, fontFamily: fontFamily.regular, color: colors.ink, lineHeight: 19 },
+  itemTitleBold: { fontFamily: fontFamily.bold, color: colors.ink },
+  itemSub: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.regular, color: colors.textSecondary, marginTop: 2 },
+  itemDate: { fontSize: fontSize.xs, fontFamily: fontFamily.medium, color: colors.textMuted },
   resolveBtn: {
     borderWidth: 1.5,
-    borderColor: "#0C2D6B",
-    borderRadius: 8,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
+    borderColor: colors.emerald,
+    borderRadius: radius.pill,
+    backgroundColor: colors.white,
+    paddingVertical: spacing.xs + 2,
+    paddingHorizontal: spacing.md + 2,
   },
-  resolveBtnText: { fontSize: 12, fontWeight: "600", color: "#0C2D6B" },
+  resolveBtnText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.emerald },
 
   btnRow: {
     flexDirection: "row",
     justifyContent: "center",
-    gap: 10,
-    padding: 16,
-    borderTopWidth: 0.5,
-    borderTopColor: "#E6F1FB",
+    gap: spacing.sm + 2,
+    padding: spacing.lg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
   },
   btn: {
-    width: "50%",
-    paddingVertical: 11,
-    borderRadius: 10,
+    flex: 1,
+    paddingVertical: spacing.md + 2,
+    borderRadius: radius.pill,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 42,
+    minHeight: 48,
   },
-  btnOutline: { borderWidth: 1.5, borderColor: "#0C2D6B" },
+  btnOutline: { borderWidth: 1.5, borderColor: colors.emerald, backgroundColor: colors.white },
   btnOutlinePressed: {
-    backgroundColor: "#E6F1FB",
+    backgroundColor: colors.emeraldSoft,
     transform: [{ scale: 0.96 }],
   },
-  btnOutlineText: { fontSize: 14, fontWeight: "600", color: "#0C2D6B" },
+  btnOutlineText: { fontSize: fontSize.base, fontFamily: fontFamily.semibold, color: colors.emerald },
+  btnDisabledOutline: { opacity: 0.4 },
+  btnPrimary: { backgroundColor: colors.ink, ...shadow.button },
+  btnPrimaryPressed: { backgroundColor: colors.emerald, transform: [{ scale: 0.96 }] },
+  btnPrimaryText: { fontSize: fontSize.base, fontFamily: fontFamily.bold, color: colors.white },
   btnDisabled: { opacity: 0.5 },
 });

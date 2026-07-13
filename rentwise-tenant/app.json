@@ -5,23 +5,25 @@
     "scheme": "rentwise",
     "plugins": [
       "expo-router",
+      "expo-sharing",
       [
         "expo-notifications",
         {
           "icon": "./assets/icon.png",
-          "color": "#F5C518",
+          "color": "#C9A227",
           "defaultChannel": "default"
         }
       ],
       [
         "expo-splash-screen",
         {
-          "image": "./assets/android-icon-foreground.png",
-          "imageWidth": 100,
+          "image": "./assets/rentwise-app-icon.png",
+          "imageWidth": 140,
           "resizeMode": "contain",
-          "backgroundColor": "#0F6E56"
+          "backgroundColor": "#0E6B54"
         }
-      ]
+      ],
+      "expo-font"
     ],
     "version": "1.0.0",
     "orientation": "portrait",
@@ -32,13 +34,17 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0E6B54",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.rentwisetenant"
+      "permissions": [
+        "android.permission.POST_NOTIFICATIONS"
+      ],
+      "package": "com.anonymous.rentwisetenant",
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -46,9 +52,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "da395cf3-d504-46d4-8386-aeafe1f745f8"
+        "projectId": "db19ae57-a0c0-424e-bc6d-e00378b938d5"
       }
     },
-    "owner": "cean27"
+    "owner": "rentwise"
   }
 }

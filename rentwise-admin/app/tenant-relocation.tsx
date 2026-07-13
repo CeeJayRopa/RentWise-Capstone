@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -12,10 +12,15 @@ import {
 import { router, useLocalSearchParams } from "expo-router";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
+import { ChevronLeft, HelpCircle, Building2, Check } from "lucide-react-native";
 
 import { db } from "../shared/services/firestore";
-import { restoreTenantToNewStall } from "../shared/services/accountServices";
+import { restoreTenantToNewStall, relocateActiveTenant } from "../shared/services/accountServices";
+import HelpTour, { HelpStep } from "./components/HelpTour";
+import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
+import { Card, Button, EmptyState } from "../shared/components/ui";
+import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 type StallOption = {
   id: string;
@@ -32,23 +37,47 @@ export default function TenantRelocation() {
     uid: string;
     firstName: string;
     lastName: string;
-    username: string;
+    email: string;
     buildingNumber: string;
     spaceId: string;
     stallId: string;
+    mode?: string;
   }>();
 
-  const { uid, firstName, lastName, username, buildingNumber, spaceId } = params;
+  const { uid, firstName, lastName, email, buildingNumber, spaceId, stallId, mode } = params;
+  const isMove = mode === "move";
   const fullName = `${firstName} ${lastName}`.trim();
 
   const [stalls, setStalls] = useState<StallOption[]>([]);
   const [selectedStall, setSelectedStall] = useState<StallOption | null>(null);
   const [loading, setLoading] = useState(true);
   const [restoring, setRestoring] = useState(false);
+  const [tourVisible, setTourVisible] = useState(false);
+  const stallListRef = useRef<View>(null);
+  const restoreBtnRef = useRef<View>(null);
+
+  const tourSteps: HelpStep[] = [
+    { key: "stalls", ref: stallListRef, title: "Available stalls", description: "Pick which unoccupied stall to move this tenant into.", offsetY: 41 },
+    { key: "restore", ref: restoreBtnRef, title: isMove ? "Move Tenant" : "Restore account", description: isMove ? "Moves the tenant into the stall you selected above." : "Restores the tenant's account and assigns them to the stall you selected above.", offsetY: 41 },
+  ];
 
   useEffect(() => {
     fetchUnoccupiedStalls();
   }, []);
+
+  // Auto-opens the guided tour the first time the admin ever lands on this
+  // page — never again after that, since it flips a persisted per-device
+  // flag. Can still be replayed anytime via the Help button.
+  useEffect(() => {
+    if (loading) return;
+    (async () => {
+      const seen = await hasSeenPageTour("tenant-relocation");
+      if (!seen) {
+        setTourVisible(true);
+        await markPageTourSeen("tenant-relocation");
+      }
+    })();
+  }, [loading]);
 
   const fetchUnoccupiedStalls = async () => {
     setLoading(true);
@@ -87,17 +116,26 @@ export default function TenantRelocation() {
     }
     setRestoring(true);
     try {
-      await restoreTenantToNewStall(uid, selectedStall.id);
-      Alert.alert(
-        "Account Restored",
-        `${fullName} has been assigned to Building ${selectedStall.buildingNumber} · Space ${selectedStall.spaceId}.`,
-        [{ text: "OK", onPress: () => router.replace("/archives") }],
-      );
+      if (isMove) {
+        await relocateActiveTenant(uid, stallId, selectedStall.id);
+        Alert.alert(
+          "Tenant Moved",
+          `${fullName} has been moved to Building ${selectedStall.buildingNumber} · Space ${selectedStall.spaceId}.`,
+          [{ text: "OK", onPress: () => router.replace("/tenant-management") }],
+        );
+      } else {
+        await restoreTenantToNewStall(uid, selectedStall.id);
+        Alert.alert(
+          "Account Restored",
+          `${fullName} has been assigned to Building ${selectedStall.buildingNumber} · Space ${selectedStall.spaceId}.`,
+          [{ text: "OK", onPress: () => router.replace("/archives") }],
+        );
+      }
     } catch (err: any) {
       const msg =
         err?.message === "Selected stall is no longer available."
           ? "That stall was just taken. Please choose another."
-          : "Failed to restore tenant. Please try again.";
+          : `Failed to ${isMove ? "move" : "restore"} tenant. Please try again.`;
       Alert.alert("Error", msg);
       fetchUnoccupiedStalls();
       setSelectedStall(null);
@@ -109,17 +147,30 @@ export default function TenantRelocation() {
   return (
     <View style={styles.screen}>
       {/* HEADER */}
-      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
+      <LinearGradient
+        colors={[colors.emerald, colors.ink]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[styles.header, { paddingTop: insets.top + 14 }]}
+      >
         <TouchableOpacity
           onPress={() => router.back()}
           activeOpacity={0.7}
           disabled={restoring}
+          hitSlop={10}
         >
-          <Ionicons name="arrow-back" size={22} color="#E6F1FB" />
+          <ChevronLeft size={24} color={colors.white} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Tenant Relocation</Text>
-        <View style={{ width: 22 }} />
-      </View>
+        <Text style={styles.headerTitle}>{isMove ? "Move Tenant" : "Tenant Relocation"}</Text>
+        <TouchableOpacity
+          onPress={() => setTourVisible(true)}
+          activeOpacity={0.7}
+          disabled={restoring}
+          hitSlop={10}
+        >
+          <HelpCircle size={22} color={colors.white} />
+        </TouchableOpacity>
+      </LinearGradient>
 
       {/* SCROLLABLE BODY */}
       <ScrollView
@@ -127,30 +178,50 @@ export default function TenantRelocation() {
         contentContainerStyle={styles.bodyContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* ARCHIVED TENANT CARD */}
-        <View style={styles.infoCard}>
-          <Text style={styles.cardLabel}>Archived tenant</Text>
-          <Text style={styles.infoName}>{fullName}</Text>
-          <Text style={styles.infoUsername}>{username}@rentwise.app</Text>
-          <View style={styles.infoDivider} />
-          <Text style={styles.infoNotice}>
-            Previous stall{" "}
-            <Text style={styles.infoBold}>
-              Building {buildingNumber} {"·"} Space {spaceId}
-            </Text>
-            {" "}is currently occupied. Select a new available stall below.
-          </Text>
-        </View>
+        {/* TENANT CARD */}
+        <Card style={styles.infoCard}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.cardLabel}>{isMove ? "Current tenant" : "Archived tenant"}</Text>
+            <Text style={styles.infoName}>{fullName}</Text>
+            <Text style={styles.infoUsername}>{email}</Text>
+            <View style={styles.noticeBox}>
+              <Text style={styles.infoNotice}>
+                {isMove ? (
+                  <>
+                    Currently at{" "}
+                    <Text style={styles.infoBold}>
+                      Building {buildingNumber} {"·"} Space {spaceId}
+                    </Text>
+                    {"."} Select a new stall below.
+                  </>
+                ) : (
+                  <>
+                    Previous stall{" "}
+                    <Text style={styles.infoBold}>
+                      Building {buildingNumber} {"·"} Space {spaceId}
+                    </Text>
+                    {" "}is currently occupied. Select a new available stall below.
+                  </>
+                )}
+              </Text>
+            </View>
+          </View>
+        </Card>
 
         {/* AVAILABLE STALLS */}
+        <View ref={stallListRef} collapsable={false}>
         <Text style={styles.sectionLabel}>Available stalls</Text>
 
         {loading ? (
           <View style={styles.center}>
-            <ActivityIndicator color="#0C2D6B" size="large" />
+            <ActivityIndicator color={colors.emerald} size="large" />
           </View>
         ) : stalls.length === 0 ? (
-          <Text style={styles.emptyText}>No available stalls at the moment.</Text>
+          <EmptyState
+            icon={<Building2 size={26} color={colors.textMuted} />}
+            title="No available stalls"
+            subtitle="There are no available stalls at the moment."
+          />
         ) : (
           stalls.map((item) => {
             const selected = selectedStall?.id === item.id;
@@ -162,6 +233,9 @@ export default function TenantRelocation() {
                 activeOpacity={0.75}
                 disabled={restoring}
               >
+                <View style={[styles.stallIconWrap, selected && styles.stallIconWrapSelected]}>
+                  <Building2 size={18} color={selected ? colors.emerald : colors.textMuted} />
+                </View>
                 <View style={styles.stallInfo}>
                   <Text style={styles.stallTitle}>
                     Building {item.buildingNumber} {"·"} Space {item.spaceId}
@@ -171,32 +245,29 @@ export default function TenantRelocation() {
                   </Text>
                 </View>
                 <View style={[styles.radioOuter, selected && styles.radioOuterSelected]}>
-                  {selected && <View style={styles.radioInner} />}
+                  {selected && <Check size={14} color={colors.white} />}
                 </View>
               </TouchableOpacity>
             );
           })
         )}
+        </View>
       </ScrollView>
 
       {/* FOOTER — RESTORE BUTTON */}
       <View style={[styles.footer, { paddingBottom: insets.bottom + 28 }]}>
-        <Pressable
-          style={({ pressed }) => [
-            styles.restoreBtn,
-            (!selectedStall || restoring) && styles.restoreBtnDisabled,
-            pressed && !!selectedStall && !restoring && styles.restoreBtnPressed,
-          ]}
+        <View ref={restoreBtnRef} collapsable={false}>
+        <Button
+          label={isMove ? "Move Tenant" : "Restore account"}
           onPress={handleRestore}
           disabled={!selectedStall || restoring}
-        >
-          {restoring ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : (
-            <Text style={styles.restoreBtnText}>Restore account</Text>
-          )}
-        </Pressable>
+          loading={restoring}
+          style={styles.moveBtn}
+        />
+        </View>
       </View>
+
+      <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
     </View>
   );
 }
@@ -204,23 +275,24 @@ export default function TenantRelocation() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "#F0F4FA",
+    backgroundColor: colors.parchment,
   },
 
   // ── Header ────────────────────────────────────────────────────────────────────
 
   header: {
-    backgroundColor: "#0C2D6B",
-    paddingHorizontal: 20,
-    paddingBottom: 14,
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.lg,
     flexDirection: "row",
     alignItems: "center",
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
   },
 
   headerTitle: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "500",
+    color: colors.white,
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.bold,
     flex: 1,
     textAlign: "center",
   },
@@ -232,86 +304,102 @@ const styles = StyleSheet.create({
   },
 
   bodyContent: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
     paddingBottom: 100,
   },
 
   // ── Archived tenant card ──────────────────────────────────────────────────────
 
   infoCard: {
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    padding: 18,
-    borderWidth: 0.5,
-    borderColor: "#B5D4F4",
-    marginBottom: 24,
+    marginBottom: spacing.xxl,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
 
   cardLabel: {
-    fontSize: 11,
-    fontWeight: "500",
-    color: "#2E6FD9",
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
     letterSpacing: 0.8,
     textTransform: "uppercase",
-    marginBottom: 8,
+    marginBottom: spacing.sm,
   },
 
   infoName: {
-    fontSize: 18,
-    fontWeight: "500",
-    color: "#0C2D6B",
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.semibold,
+    color: colors.ink,
   },
 
   infoUsername: {
-    fontSize: 14,
-    color: "#2E6FD9",
+    fontSize: fontSize.base,
+    color: colors.textSecondary,
+    fontFamily: fontFamily.regular,
     marginTop: 2,
   },
 
-  infoDivider: {
-    height: 0.5,
-    backgroundColor: "#E6F1FB",
-    marginVertical: 14,
+  noticeBox: {
+    backgroundColor: colors.mist,
+    borderRadius: radius.md,
+    padding: spacing.md + 2,
+    marginTop: spacing.md + 2,
   },
 
   infoNotice: {
-    fontSize: 14,
-    color: "#444441",
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
     lineHeight: 20,
   },
 
   infoBold: {
-    fontWeight: "500",
-    color: "#0C2D6B",
+    fontFamily: fontFamily.semibold,
+    color: colors.ink,
   },
 
   // ── Section label ─────────────────────────────────────────────────────────────
 
   sectionLabel: {
-    fontSize: 11,
-    fontWeight: "500",
-    color: "#2E6FD9",
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
     letterSpacing: 0.8,
     textTransform: "uppercase",
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
 
   // ── Stall option card ─────────────────────────────────────────────────────────
 
   stallCard: {
-    backgroundColor: "#fff",
-    borderRadius: 14,
-    padding: 16,
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
     borderWidth: 1.5,
-    borderColor: "#B5D4F4",
-    marginBottom: 10,
+    borderColor: colors.border,
+    marginBottom: spacing.sm + 2,
     flexDirection: "row",
     alignItems: "center",
+    ...shadow.card,
   },
 
   stallCardSelected: {
-    borderColor: "#0C2D6B",
+    borderWidth: 2,
+    borderColor: colors.ink,
+  },
+
+  stallIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.md,
+    backgroundColor: colors.mist,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: spacing.md,
+  },
+
+  stallIconWrapSelected: {
+    backgroundColor: colors.emeraldSoft,
   },
 
   stallInfo: {
@@ -319,40 +407,34 @@ const styles = StyleSheet.create({
   },
 
   stallTitle: {
-    fontSize: 15,
-    fontWeight: "500",
-    color: "#0C2D6B",
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.semibold,
+    color: colors.ink,
   },
 
   stallSub: {
-    fontSize: 13,
-    color: "#888780",
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
     marginTop: 4,
   },
 
   // ── Radio button ──────────────────────────────────────────────────────────────
 
   radioOuter: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     borderWidth: 2,
-    borderColor: "#B5D4F4",
+    borderColor: colors.border,
     backgroundColor: "transparent",
     alignItems: "center",
     justifyContent: "center",
   },
 
   radioOuterSelected: {
-    borderColor: "#0C2D6B",
-    backgroundColor: "#0C2D6B",
-  },
-
-  radioInner: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: "#fff",
+    borderColor: colors.ink,
+    backgroundColor: colors.ink,
   },
 
   // ── Empty / loading ───────────────────────────────────────────────────────────
@@ -362,13 +444,6 @@ const styles = StyleSheet.create({
     paddingTop: 40,
   },
 
-  emptyText: {
-    fontSize: 14,
-    color: "#888780",
-    textAlign: "center",
-    marginTop: 20,
-  },
-
   // ── Footer restore button ─────────────────────────────────────────────────────
 
   footer: {
@@ -376,34 +451,13 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: "#F0F4FA",
-    paddingHorizontal: 16,
-    paddingTop: 12,
+    backgroundColor: colors.parchment,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
   },
 
-  restoreBtn: {
-    width: "100%",
-    backgroundColor: "#0C2D6B",
-    borderRadius: 14,
-    paddingVertical: 15,
-    alignItems: "center",
-    justifyContent: "center",
-    transform: [{ scale: 1 }],
-  },
-
-  restoreBtnPressed: {
-    backgroundColor: "#091f4a",
-    transform: [{ scale: 0.97 }],
-  },
-
-  restoreBtnDisabled: {
-    backgroundColor: "#B5D4F4",
-  },
-
-  restoreBtnText: {
-    fontSize: 16,
-    fontWeight: "500",
-    color: "#fff",
-    textAlign: "center",
+  moveBtn: {
+    borderRadius: radius.pill,
+    backgroundColor: colors.ink,
   },
 });

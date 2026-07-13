@@ -1,26 +1,29 @@
 import {
   View,
-  Text,
+  Image,
   StyleSheet,
   Animated,
   Easing,
-  Pressable,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRef, useEffect, useState } from "react";
 import { router } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { User } from "lucide-react-native";
 import { auth } from "../shared/firebaseConfig";
 import { getTenantData } from "../services/tenantService";
+import { colors, fontFamily, fontSize, spacing } from "../shared/theme";
 
 export default function Welcome() {
   const insets = useSafeAreaInsets();
   const [displayName, setDisplayName] = useState("Tenant");
+  const [photoURL, setPhotoURL] = useState<string | null>(null);
 
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-    getTenantData(uid)
+    const user = auth.currentUser;
+    if (!user) return;
+    setPhotoURL(user.photoURL ?? null);
+    getTenantData(user.uid)
       .then((data) => {
         if (data?.firstName) setDisplayName(data.firstName);
       })
@@ -30,11 +33,8 @@ export default function Welcome() {
   const pulseScale = useRef(new Animated.Value(1.0)).current;
   const pulseOpacity = useRef(new Animated.Value(0.4)).current;
 
-  const appNameAnim = useRef(new Animated.Value(0)).current;
   const avatarAnim = useRef(new Animated.Value(0)).current;
   const welcomeAnim = useRef(new Animated.Value(0)).current;
-  const subtextAnim = useRef(new Animated.Value(0)).current;
-  const buttonAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.loop(
@@ -63,12 +63,14 @@ export default function Welcome() {
       });
 
     Animated.stagger(140, [
-      entrance(appNameAnim),
       entrance(avatarAnim),
       entrance(welcomeAnim),
-      entrance(subtextAnim),
-      entrance(buttonAnim),
     ]).start();
+
+    // Auto-advances instead of waiting for a tap — this screen is just a
+    // brief greeting, not a step that needs confirmation.
+    const timer = setTimeout(() => router.replace("/dashboard"), 4000);
+    return () => clearTimeout(timer);
   }, []);
 
   const slideIn = (anim: Animated.Value) => ({
@@ -84,16 +86,15 @@ export default function Welcome() {
   });
 
   return (
-    <View
+    <LinearGradient
+      colors={[colors.emerald, colors.ink]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
       style={[
         styles.container,
         { paddingTop: insets.top, paddingBottom: insets.bottom },
       ]}
     >
-      <Animated.Text style={[styles.brand, slideIn(appNameAnim)]}>
-        RentWise
-      </Animated.Text>
-
       <Animated.View style={[styles.avatarWrapper, slideIn(avatarAnim)]}>
         <Animated.View
           style={[
@@ -101,105 +102,52 @@ export default function Welcome() {
             { transform: [{ scale: pulseScale }], opacity: pulseOpacity },
           ]}
         />
-        <View style={styles.outerRing}>
-          <View style={styles.innerCircle}>
-            <Ionicons name="person-outline" size={44} color="#0F6E56" />
+        {photoURL ? (
+          <Image source={{ uri: photoURL }} style={styles.avatarCircle} />
+        ) : (
+          <View style={styles.avatarCircle}>
+            <User size={32} color={colors.emerald} />
           </View>
-        </View>
+        )}
       </Animated.View>
 
       <Animated.Text style={[styles.welcome, slideIn(welcomeAnim)]}>
         Welcome, {displayName}!
       </Animated.Text>
-
-      <Animated.Text style={[styles.subtext, slideIn(subtextAnim)]}>
-        Ka Domeng Talipapa
-      </Animated.Text>
-
-      <Animated.View style={[styles.buttonWrapper, slideIn(buttonAnim)]}>
-        <Pressable
-          style={({ pressed }) => [
-            styles.button,
-            pressed && { backgroundColor: "#E1F5EE", transform: [{ scale: 0.97 }] },
-          ]}
-          onPress={() => router.replace("/dashboard")}
-        >
-          <Text style={styles.buttonText}>Continue</Text>
-        </Pressable>
-      </Animated.View>
-    </View>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0F6E56",
     alignItems: "center",
     justifyContent: "center",
-  },
-  brand: {
-    color: "#E1F5EE",
-    fontSize: 28,
-    fontWeight: "500",
-    letterSpacing: -0.5,
-    marginBottom: 40,
   },
   avatarWrapper: {
     alignItems: "center",
     justifyContent: "center",
+    marginBottom: spacing.xxl,
   },
   pulseRing: {
     position: "absolute",
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    backgroundColor: "#5DCAA5",
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: colors.emeraldBright,
   },
-  outerRing: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    backgroundColor: "#1D9E75",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  innerCircle: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: "#E1F5EE",
+  avatarCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: colors.parchment,
     alignItems: "center",
     justifyContent: "center",
   },
   welcome: {
-    color: "#fff",
-    fontSize: 24,
-    fontWeight: "500",
-    textAlign: "center",
-    marginTop: 32,
-  },
-  subtext: {
-    color: "#9FE1CB",
-    fontSize: 14,
-    marginTop: 4,
-    textAlign: "center",
-  },
-  buttonWrapper: {
-    marginTop: 40,
-    width: "72%",
-  },
-  button: {
-    borderRadius: 14,
-    backgroundColor: "#fff",
-    paddingVertical: 15,
-    alignItems: "center",
-    width: "100%",
-  },
-  buttonText: {
-    color: "#0F6E56",
-    fontSize: 16,
-    fontWeight: "500",
+    color: colors.white,
+    fontSize: fontSize.xxl,
+    fontFamily: fontFamily.bold,
     textAlign: "center",
   },
 });

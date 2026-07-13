@@ -1,15 +1,8 @@
-import { Platform, NativeModules } from "react-native";
+import { Platform } from "react-native";
 import { doc, updateDoc } from "firebase/firestore";
 import { db } from "./firestore";
 
-// expo-notifications requires ExpoDevice natively. If it's not registered,
-// we're in an environment where push won't work (e.g. Expo Go version mismatch).
-function isPushSupported(): boolean {
-  return !!NativeModules.ExpoDevice;
-}
-
 export function configurePushNotifications() {
-  if (!isPushSupported()) return;
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const Notifications = require("expo-notifications");
@@ -28,7 +21,6 @@ export function configurePushNotifications() {
 export async function registerForPushNotificationsAsync(
   userId: string,
 ): Promise<void> {
-  if (!isPushSupported()) return;
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const Device = require("expo-device");

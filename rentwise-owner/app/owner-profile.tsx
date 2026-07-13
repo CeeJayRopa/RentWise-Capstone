@@ -13,6 +13,7 @@ import {
   Modal,
   FlatList,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import {
   onAuthStateChanged,
@@ -22,13 +23,21 @@ import {
 } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
+import { ArrowLeft, HelpCircle, Eye, EyeOff, ChevronDown, CheckCircle2, LogOut } from "lucide-react-native";
 
-import { auth } from "../shared/services/auth";
+import { auth, logoutUser } from "../shared/services/auth";
+import { setRememberMe } from "../shared/services/rememberMe";
 import { firebaseApp } from "../shared/firebaseConfig";
 import { getUserById, updateUserProfile, isUsernameTaken } from "../shared/services/userServices";
+import HelpTour, { HelpStep } from "./components/HelpTour";
+import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
+import { Avatar, Card } from "../shared/components/ui";
+import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 const cloudFunctions = getFunctions(firebaseApp);
+
+const FIELD_MINT = "#C7E3C2";
+const FIELD_MINT_DARK = "#A9CBA1";
 
 const SECURITY_QUESTIONS = [
   "When did Ka Domeng start?",
@@ -52,6 +61,10 @@ export default function OwnerProfile() {
   const [username, setUsername] = useState("");
   const [contactNo, setContactNo] = useState("");
   const [original, setOriginal] = useState({ firstName: "", lastName: "", username: "", contactNo: "" });
+  const [firstNameError, setFirstNameError] = useState("");
+  const [lastNameError, setLastNameError] = useState("");
+  const [usernameError, setUsernameError] = useState("");
+  const [contactNoError, setContactNoError] = useState("");
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -68,10 +81,43 @@ export default function OwnerProfile() {
   const [pickerSlot, setPickerSlot] = useState<0 | 1 | 2 | null>(null);
   const [savingSecQ, setSavingSecQ] = useState(false);
 
+  const [focusedField, setFocusedField] = useState<string | null>(null);
+
   const toastAnim = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(20)).current;
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
+  const [tourVisible, setTourVisible] = useState(false);
+  const fieldsRef = useRef<View>(null);
+  const editBtnRef = useRef<View>(null);
+  const pwSectionRef = useRef<View>(null);
+  const secQSectionRef = useRef<View>(null);
+  const scrollRef = useRef<ScrollView>(null);
+
+  // Scrolls a given section into view and gives the ScrollView time to
+  // settle before HelpTour measures it — otherwise a section below the
+  // fold (e.g. the security questions) would measure to its stale,
+  // off-screen position instead of where it actually ends up on screen.
+  const scrollSectionIntoView = (targetRef: React.RefObject<View | null>) =>
+    new Promise<void>((resolve) => {
+      const scrollNode = scrollRef.current?.getNativeScrollRef?.();
+      if (!scrollNode || !targetRef.current) { resolve(); return; }
+      targetRef.current.measureLayout(
+        scrollNode as any,
+        (_x: number, y: number) => {
+          scrollRef.current?.scrollTo({ y: Math.max(0, y - 100), animated: true });
+          setTimeout(resolve, 400);
+        },
+        () => resolve(),
+      );
+    });
+
+  const tourSteps: HelpStep[] = [
+    { key: "fields", ref: fieldsRef, title: "Your details", description: "Your last name, first name, login username, and contact number.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(fieldsRef) },
+    { key: "edit", ref: editBtnRef, title: "Edit Profile", description: "Unlocks your name, username, and contact number so you can update them, plus the password fields below.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(editBtnRef) },
+    { key: "password", ref: pwSectionRef, title: "Change password", description: "Set a new login password. Must be 8-12 characters with an uppercase letter, a number, and a special character.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(pwSectionRef) },
+    { key: "secquestions", ref: secQSectionRef, title: "Security questions", description: "Set 3 recovery questions so you can get back into your account if you ever forget your password.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(secQSectionRef) },
+  ];
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -81,6 +127,20 @@ export default function OwnerProfile() {
     });
     return unsub;
   }, []);
+
+  // Auto-opens the guided tour the first time the owner ever lands on this
+  // page — never again after that, since it flips a persisted per-device
+  // flag. Can still be replayed anytime via the Help button.
+  useEffect(() => {
+    if (loading) return;
+    (async () => {
+      const seen = await hasSeenPageTour("owner-profile");
+      if (!seen) {
+        setTourVisible(true);
+        await markPageTourSeen("owner-profile");
+      }
+    })();
+  }, [loading]);
 
   const loadProfile = async (uid: string) => {
     try {
@@ -121,6 +181,25 @@ export default function OwnerProfile() {
     ]).start(() => setToastVisible(false));
   };
 
+  const validateProfileFields = (fn: string, ln: string, un: string, cn: string): boolean => {
+    let valid = true;
+
+    if (!fn) { setFirstNameError("First name is required."); valid = false; }
+    else setFirstNameError("");
+
+    if (!ln) { setLastNameError("Last name is required."); valid = false; }
+    else setLastNameError("");
+
+    if (!un) { setUsernameError("Username is required."); valid = false; }
+    else setUsernameError("");
+
+    if (!cn) { setContactNoError("Contact number is required."); valid = false; }
+    else if (cn.length !== 11) { setContactNoError("Enter a valid 11-digit contact number."); valid = false; }
+    else setContactNoError("");
+
+    return valid;
+  };
+
   const handleSave = async () => {
     const user = auth.currentUser;
     if (!user) return;
@@ -130,17 +209,14 @@ export default function OwnerProfile() {
     const un = username.trim();
     const cn = contactNo.trim();
 
-    if (!fn || !ln || !un || !cn) {
-      Alert.alert("Missing Information", "All fields are required.");
-      return;
-    }
+    if (!validateProfileFields(fn, ln, un, cn)) return;
 
     setSaving(true);
     try {
       if (un !== original.username) {
         const taken = await isUsernameTaken(un, "owner", user.uid);
         if (taken) {
-          Alert.alert("Username Taken", "This username is already in use. Please choose another.");
+          setUsernameError("This username is already in use.");
           return;
         }
       }
@@ -263,10 +339,16 @@ export default function OwnerProfile() {
     }
   };
 
+  const handleLogout = async () => {
+    await logoutUser();
+    await setRememberMe(false);
+    router.replace("/login");
+  };
+
   if (checking || loading) {
     return (
       <View style={styles.fullCenter}>
-        <ActivityIndicator color="#0C2D6B" size="large" />
+        <ActivityIndicator color={colors.emerald} size="large" />
       </View>
     );
   }
@@ -274,225 +356,289 @@ export default function OwnerProfile() {
   return (
     <View style={styles.screen}>
       {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity style={styles.headerBtn} onPress={() => router.replace("/dashboard")} activeOpacity={0.7}>
-          <Ionicons name="arrow-back" size={22} color="#E6F1FB" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>RentWise</Text>
-        <View style={styles.headerBtn} />
-      </View>
-
-      {/* Sub-header */}
-      <View style={styles.subHeader}>
-        <Text style={styles.subHeaderText}>My Account</Text>
-      </View>
+      <LinearGradient
+        colors={[colors.emerald, colors.ink]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.headerGradient}
+      >
+        <View style={[styles.header, { paddingTop: insets.top + 8, paddingBottom: spacing.lg + 2 }]}>
+          <TouchableOpacity style={styles.headerBtn} onPress={() => router.replace("/dashboard")} activeOpacity={0.7}>
+            <ArrowLeft size={22} color={colors.emeraldSoft} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>My Account</Text>
+          <TouchableOpacity style={styles.headerBtn} onPress={() => setTourVisible(true)} activeOpacity={0.7}>
+            <HelpCircle size={22} color={colors.emeraldSoft} />
+          </TouchableOpacity>
+        </View>
+      </LinearGradient>
 
       <ScrollView
+        ref={scrollRef}
         style={styles.scroll}
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 40 }]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* Last Name */}
-        <Text style={styles.fieldLabel}>Last Name</Text>
-        <TextInput
-          style={[styles.input, !isEditing && styles.inputReadOnly]}
-          value={lastName}
-          onChangeText={setLastName}
-          placeholder="Last Name"
-          placeholderTextColor="#B5D4F4"
-          editable={isEditing}
-        />
+        {/* IDENTITY CARD */}
+        <Card style={styles.identityCard}>
+          <View style={styles.identityInner}>
+            <Avatar name={`${firstName} ${lastName}`} size={90} />
+            <Text style={styles.identityName}>{firstName} {lastName}</Text>
+            <Text style={styles.identityRole}>Property Owner</Text>
+          </View>
+        </Card>
 
-        {/* First Name */}
-        <Text style={styles.fieldLabel}>First Name</Text>
-        <TextInput
-          style={[styles.input, !isEditing && styles.inputReadOnly]}
-          value={firstName}
-          onChangeText={setFirstName}
-          placeholder="First Name"
-          placeholderTextColor="#B5D4F4"
-          editable={isEditing}
-        />
-
-        {/* Username */}
-        <Text style={styles.fieldLabel}>Username</Text>
-        <View style={[styles.rowField, !isEditing && styles.rowFieldReadOnly]}>
+        {/* FIELDS CARD */}
+        <View ref={fieldsRef} collapsable={false} style={{ width: "100%" }}>
+        <Card style={styles.fieldsCard}>
+          <Text style={styles.fieldLabel}>Last name</Text>
           <TextInput
-            style={[styles.rowInput, !isEditing && styles.rowInputReadOnly]}
-            value={username}
-            onChangeText={setUsername}
-            placeholder="username"
-            placeholderTextColor="#B5D4F4"
-            autoCapitalize="none"
+            style={[
+              styles.input,
+              focusedField === "lastName" && isEditing && styles.inputFocused,
+              !isEditing && styles.inputReadOnly,
+              !!lastNameError && styles.inputErrorBorder,
+            ]}
+            value={lastName}
+            onChangeText={(t) => { setLastName(t); if (lastNameError) setLastNameError(""); }}
+            placeholder="Last name"
+            placeholderTextColor={colors.textMuted}
+            onFocus={() => setFocusedField("lastName")}
+            onBlur={() => setFocusedField(null)}
             editable={isEditing}
           />
-          <Text style={styles.suffix}>@rentwise.app</Text>
-        </View>
+          {!!lastNameError && <Text style={styles.fieldError}>{lastNameError}</Text>}
 
-        {/* Contact */}
-        <Text style={styles.fieldLabel}>Contact No.</Text>
-        <View style={[styles.rowField, !isEditing && styles.rowFieldReadOnly]}>
-          <Text style={styles.prefix}>+63</Text>
+          <Text style={styles.fieldLabel}>First name</Text>
           <TextInput
-            style={[styles.rowInput, !isEditing && styles.rowInputReadOnly]}
-            value={contactNo}
-            onChangeText={(t) => setContactNo(t.replace(/\D/g, "").slice(0, 11))}
-            placeholder="09XXXXXXXXX"
-            placeholderTextColor="#B5D4F4"
-            keyboardType="phone-pad"
-            maxLength={11}
+            style={[
+              styles.input,
+              focusedField === "firstName" && isEditing && styles.inputFocused,
+              !isEditing && styles.inputReadOnly,
+              !!firstNameError && styles.inputErrorBorder,
+            ]}
+            value={firstName}
+            onChangeText={(t) => { setFirstName(t); if (firstNameError) setFirstNameError(""); }}
+            placeholder="First name"
+            placeholderTextColor={colors.textMuted}
+            onFocus={() => setFocusedField("firstName")}
+            onBlur={() => setFocusedField(null)}
             editable={isEditing}
           />
+          {!!firstNameError && <Text style={styles.fieldError}>{firstNameError}</Text>}
+
+          <Text style={styles.fieldLabel}>Username</Text>
+          <View
+            style={[
+              styles.rowField,
+              focusedField === "username" && isEditing && styles.rowFieldFocused,
+              !isEditing && styles.rowFieldReadOnly,
+              !!usernameError && styles.inputErrorBorder,
+            ]}
+          >
+            <TextInput
+              style={[styles.rowInput, !isEditing && styles.rowInputReadOnly]}
+              value={username}
+              onChangeText={(t) => { setUsername(t); if (usernameError) setUsernameError(""); }}
+              placeholder="username"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              onFocus={() => setFocusedField("username")}
+              onBlur={() => setFocusedField(null)}
+              editable={isEditing}
+            />
+            <Text style={styles.suffix}>@rentwise.app</Text>
+          </View>
+          {!!usernameError && <Text style={styles.fieldError}>{usernameError}</Text>}
+
+          <Text style={styles.fieldLabel}>Contact no.</Text>
+          <View style={styles.phoneRow}>
+            <View style={[styles.phonePrefix, !isEditing && styles.phonePrefixReadOnly]}>
+              <Text style={styles.phonePrefixText}>+63</Text>
+            </View>
+            <View
+              style={[
+                styles.phoneInputWrap,
+                focusedField === "contactNo" && isEditing && styles.rowFieldFocused,
+                !isEditing && styles.rowFieldReadOnly,
+                !!contactNoError && styles.inputErrorBorder,
+              ]}
+            >
+              <TextInput
+                style={[styles.rowInput, !isEditing && styles.rowInputReadOnly]}
+                value={contactNo}
+                onChangeText={(t) => { setContactNo(t.replace(/\D/g, "").slice(0, 11)); if (contactNoError) setContactNoError(""); }}
+                placeholder="09XXXXXXXXX"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="phone-pad"
+                maxLength={11}
+                onFocus={() => setFocusedField("contactNo")}
+                onBlur={() => setFocusedField(null)}
+                editable={isEditing}
+              />
+            </View>
+          </View>
+          {!!contactNoError && <Text style={styles.fieldError}>{contactNoError}</Text>}
+        </Card>
         </View>
 
         {/* Edit / Save Button */}
-        <TouchableOpacity
-          style={[styles.saveBtn, isEditing && (saving || hasEmptyField || !hasChanges) && styles.btnDisabled]}
-          onPress={isEditing ? handleSave : () => setIsEditing(true)}
-          disabled={isEditing && (saving || hasEmptyField || !hasChanges)}
-          activeOpacity={0.8}
-        >
-          {saving
-            ? <ActivityIndicator color="#FFFFFF" size="small" />
-            : <Text style={styles.saveBtnText}>{isEditing ? "Save changes" : "Edit Profile"}</Text>
-          }
-        </TouchableOpacity>
-
-        {/* Divider */}
-        <View style={styles.divider} />
-
-        <Text style={styles.sectionTitle}>Change Password</Text>
-
-        {/* New Password */}
-        <Text style={styles.fieldLabel}>New Password</Text>
-        <View style={[styles.pwField, !isEditing && styles.pwFieldReadOnly, !!pwError && styles.pwFieldError]}>
-          <TextInput
-            style={styles.pwInput}
-            value={newPassword}
-            onChangeText={(t) => { setNewPassword(t); setPwError(""); if (confirmPassword && confirmPassword === t) setConfirmError(""); }}
-            secureTextEntry={!showNewPass}
-            placeholder="New password"
-            placeholderTextColor="#B5D4F4"
-            autoCapitalize="none"
-            maxLength={12}
-            editable={isEditing}
-          />
-          <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowNewPass((v) => !v)} activeOpacity={0.7}>
-            <Ionicons name={showNewPass ? "eye-outline" : "eye-off-outline"} size={18} color="#1A4DA0" />
-          </TouchableOpacity>
-        </View>
-        {!!pwError && <Text style={styles.fieldError}>{pwError}</Text>}
-        <Text style={styles.pwHint}>Min. 8 characters with Capitalize letter, number and special characters</Text>
-
-        {/* Confirm Password */}
-        <Text style={styles.fieldLabel}>Confirm Password</Text>
-        <View style={[styles.pwField, !isEditing && styles.pwFieldReadOnly, !!confirmError && styles.pwFieldError]}>
-          <TextInput
-            style={styles.pwInput}
-            value={confirmPassword}
-            onChangeText={(t) => { setConfirmPassword(t); setConfirmError(t && t !== newPassword ? "Passwords do not match." : ""); }}
-            secureTextEntry={!showConfirmPass}
-            placeholder="Confirm new password"
-            placeholderTextColor="#B5D4F4"
-            autoCapitalize="none"
-            maxLength={12}
-            editable={isEditing}
-          />
-          <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowConfirmPass((v) => !v)} activeOpacity={0.7}>
-            <Ionicons name={showConfirmPass ? "eye-outline" : "eye-off-outline"} size={18} color="#1A4DA0" />
-          </TouchableOpacity>
-        </View>
-        {!!confirmError && <Text style={styles.fieldError}>{confirmError}</Text>}
-
-        {/* Update Password Button — only appears once Edit Profile has been tapped */}
-        {isEditing && (
+        <View ref={editBtnRef} collapsable={false} style={{ width: "100%" }}>
           <TouchableOpacity
-            style={[styles.updatePwBtn, (changingPw || newPassword.length < 8 || confirmPassword.length < 8) && styles.btnDisabled]}
-            onPress={handleChangePassword}
-            disabled={changingPw || newPassword.length < 8 || confirmPassword.length < 8}
+            style={[styles.saveBtn, isEditing && (saving || hasEmptyField || !hasChanges) && styles.btnDisabled]}
+            onPress={isEditing ? handleSave : () => setIsEditing(true)}
+            disabled={isEditing && (saving || hasEmptyField || !hasChanges)}
             activeOpacity={0.8}
           >
-            {changingPw
-              ? <ActivityIndicator color="#FFFFFF" size="small" />
-              : <Text style={styles.saveBtnText}>Update Password</Text>
+            {saving
+              ? <ActivityIndicator color={colors.white} size="small" />
+              : <Text style={styles.saveBtnText}>{isEditing ? "Save changes" : "Edit Profile"}</Text>
             }
           </TouchableOpacity>
-        )}
+        </View>
 
-        {/* Divider */}
-        <View style={styles.divider} />
+        {/* PASSWORD CARD */}
+        <View ref={pwSectionRef} collapsable={false} style={{ width: "100%" }}>
+        <Card style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Change Password</Text>
 
-        <Text style={styles.sectionTitle}>Security Questions</Text>
-        <Text style={styles.pwHint}>
-          Set 3 questions so you can recover your password later if you forget it.
-        </Text>
-
-        {[0, 1, 2].map((slot) => (
-          <View key={slot} style={{ width: "100%", marginTop: slot === 0 ? 12 : 0 }}>
-            <Text style={styles.fieldLabel}>Question {slot + 1}</Text>
-            <TouchableOpacity
-              style={[styles.rowField, !isEditing && styles.rowFieldReadOnly, { paddingHorizontal: 14, paddingVertical: 12 }]}
-              onPress={() => isEditing && setPickerSlot(slot as 0 | 1 | 2)}
-              disabled={!isEditing}
-              activeOpacity={0.7}
-            >
-              <Text style={[{ flex: 1, fontSize: 15, color: secQuestions[slot] ? "#0C2D6B" : "#B5D4F4" }]}>
-                {secQuestions[slot] || "Select a question"}
-              </Text>
-              <Ionicons name="chevron-down" size={16} color="#1A4DA0" />
-            </TouchableOpacity>
-
+          <Text style={styles.fieldLabel}>New password</Text>
+          <View style={[styles.pwField, !isEditing && styles.rowFieldReadOnly, !!pwError && styles.inputErrorBorder]}>
             <TextInput
-              style={[styles.input, !isEditing && styles.inputReadOnly, { marginTop: 8 }]}
-              value={secAnswers[slot]}
-              onChangeText={(t) => setSecAnswers((prev) => {
-                const next = [...prev] as [string, string, string];
-                next[slot] = t;
-                return next;
-              })}
-              placeholder="Your answer"
-              placeholderTextColor="#B5D4F4"
+              style={styles.rowInput}
+              value={newPassword}
+              onChangeText={(t) => { setNewPassword(t); setPwError(""); if (confirmPassword && confirmPassword === t) setConfirmError(""); }}
+              secureTextEntry={!showNewPass}
+              placeholder="New password"
+              placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
+              maxLength={12}
               editable={isEditing}
             />
+            <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowNewPass((v) => !v)} activeOpacity={0.7}>
+              {showNewPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+            </TouchableOpacity>
           </View>
-        ))}
+          {!!pwError && <Text style={styles.fieldError}>{pwError}</Text>}
+          <Text style={styles.hint}>Min. 8 characters with a capital letter, a number, and a special character.</Text>
 
-        {isEditing && (
-          <>
-            <Text style={styles.fieldLabel}>Current Password</Text>
-            <View style={styles.pwField}>
-              <TextInput
-                style={styles.pwInput}
-                value={secCurrentPassword}
-                onChangeText={setSecCurrentPassword}
-                secureTextEntry={!showSecCurrentPass}
-                placeholder="Confirm it's you"
-                placeholderTextColor="#B5D4F4"
-                autoCapitalize="none"
-              />
-              <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowSecCurrentPass((v) => !v)} activeOpacity={0.7}>
-                <Ionicons name={showSecCurrentPass ? "eye-outline" : "eye-off-outline"} size={18} color="#1A4DA0" />
-              </TouchableOpacity>
-            </View>
+          <Text style={styles.fieldLabel}>Confirm password</Text>
+          <View style={[styles.pwField, !isEditing && styles.rowFieldReadOnly, !!confirmError && styles.inputErrorBorder]}>
+            <TextInput
+              style={styles.rowInput}
+              value={confirmPassword}
+              onChangeText={(t) => { setConfirmPassword(t); setConfirmError(t && t !== newPassword ? "Passwords do not match." : ""); }}
+              secureTextEntry={!showConfirmPass}
+              placeholder="Confirm new password"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              maxLength={12}
+              editable={isEditing}
+            />
+            <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowConfirmPass((v) => !v)} activeOpacity={0.7}>
+              {showConfirmPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+            </TouchableOpacity>
+          </View>
+          {!!confirmError && <Text style={styles.fieldError}>{confirmError}</Text>}
 
+          {isEditing && (
             <TouchableOpacity
-              style={[
-                styles.updatePwBtn,
-                (savingSecQ || !secSlotsFilled || !secCurrentPassword) && styles.btnDisabled,
-              ]}
-              onPress={handleSaveSecurityQuestions}
-              disabled={savingSecQ || !secSlotsFilled || !secCurrentPassword}
+              style={[styles.updatePwBtn, (changingPw || newPassword.length < 8 || confirmPassword.length < 8) && styles.btnDisabled]}
+              onPress={handleChangePassword}
+              disabled={changingPw || newPassword.length < 8 || confirmPassword.length < 8}
               activeOpacity={0.8}
             >
-              {savingSecQ
-                ? <ActivityIndicator color="#FFFFFF" size="small" />
-                : <Text style={styles.saveBtnText}>Save Security Questions</Text>
+              {changingPw
+                ? <ActivityIndicator color={colors.white} size="small" />
+                : <Text style={styles.saveBtnText}>Update Password</Text>
               }
             </TouchableOpacity>
-          </>
-        )}
+          )}
+        </Card>
+        </View>
+
+        {/* SECURITY QUESTIONS CARD */}
+        <View ref={secQSectionRef} collapsable={false} style={{ width: "100%" }}>
+        <Card style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Security Questions</Text>
+          <Text style={styles.hint}>
+            Set 3 questions so you can recover your password later if you forget it.
+          </Text>
+
+          {[0, 1, 2].map((slot) => (
+            <View key={slot} style={{ width: "100%", marginTop: spacing.sm }}>
+              <Text style={styles.fieldLabel}>Question {slot + 1}</Text>
+              <TouchableOpacity
+                style={[styles.rowField, !isEditing && styles.rowFieldReadOnly, { paddingHorizontal: spacing.lg, paddingVertical: spacing.md + 1 }]}
+                onPress={() => isEditing && setPickerSlot(slot as 0 | 1 | 2)}
+                disabled={!isEditing}
+                activeOpacity={0.7}
+              >
+                <Text style={[{ flex: 1, fontSize: fontSize.base, fontFamily: fontFamily.medium, color: secQuestions[slot] ? colors.ink : colors.textMuted }]}>
+                  {secQuestions[slot] || "Select a question"}
+                </Text>
+                <ChevronDown size={16} color={colors.emerald} />
+              </TouchableOpacity>
+
+              <TextInput
+                style={[styles.input, !isEditing && styles.inputReadOnly, { marginTop: spacing.sm, marginBottom: 0 }]}
+                value={secAnswers[slot]}
+                onChangeText={(t) => setSecAnswers((prev) => {
+                  const next = [...prev] as [string, string, string];
+                  next[slot] = t;
+                  return next;
+                })}
+                placeholder="Your answer"
+                placeholderTextColor={colors.textMuted}
+                autoCapitalize="none"
+                editable={isEditing}
+              />
+            </View>
+          ))}
+
+          {isEditing && (
+            <>
+              <Text style={[styles.fieldLabel, { marginTop: spacing.lg }]}>Current Password</Text>
+              <View style={styles.pwField}>
+                <TextInput
+                  style={styles.rowInput}
+                  value={secCurrentPassword}
+                  onChangeText={setSecCurrentPassword}
+                  secureTextEntry={!showSecCurrentPass}
+                  placeholder="Confirm it's you"
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowSecCurrentPass((v) => !v)} activeOpacity={0.7}>
+                  {showSecCurrentPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity
+                style={[
+                  styles.updatePwBtn,
+                  (savingSecQ || !secSlotsFilled || !secCurrentPassword) && styles.btnDisabled,
+                ]}
+                onPress={handleSaveSecurityQuestions}
+                disabled={savingSecQ || !secSlotsFilled || !secCurrentPassword}
+                activeOpacity={0.8}
+              >
+                {savingSecQ
+                  ? <ActivityIndicator color={colors.white} size="small" />
+                  : <Text style={styles.saveBtnText}>Save Security Questions</Text>
+                }
+              </TouchableOpacity>
+            </>
+          )}
+        </Card>
+        </View>
+
+        {/* Logout */}
+        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.7}>
+          <LogOut size={18} color={colors.error} style={{ marginRight: spacing.sm + 2 }} />
+          <Text style={styles.logoutBtnText}>Logout Account</Text>
+        </TouchableOpacity>
       </ScrollView>
 
       {/* Security question picker */}
@@ -530,194 +676,353 @@ export default function OwnerProfile() {
       {toastVisible && (
         <Animated.View style={[styles.overlay, { opacity: toastAnim }]}>
           <Animated.View style={[styles.toast, { transform: [{ translateY: toastTranslateY }] }]}>
-            <Ionicons name="checkmark-circle" size={22} color="#7AAEF0" />
+            <CheckCircle2 size={22} color={colors.emeraldBright} />
             <Text style={styles.toastText}>{toastMsg}</Text>
           </Animated.View>
         </Animated.View>
       )}
+      <HelpTour
+        visible={tourVisible}
+        steps={tourSteps}
+        onClose={() => {
+          setTourVisible(false);
+          // The tour auto-scrolls down to reach later steps — scroll back
+          // to the top once it's done so the owner isn't left mid-page.
+          scrollRef.current?.scrollTo({ y: 0, animated: true });
+        }}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#F0F4FA" },
-  fullCenter: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#F0F4FA" },
+  screen: { flex: 1, backgroundColor: colors.parchment },
+  fullCenter: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: colors.parchment },
+
+  headerGradient: {
+    borderBottomLeftRadius: radius.xl + 4,
+    borderBottomRightRadius: radius.xl + 4,
+    overflow: "hidden",
+  },
 
   header: {
-    backgroundColor: "#0C2D6B",
-    paddingBottom: 14,
-    paddingHorizontal: 16,
+    paddingBottom: spacing.md + 2,
+    paddingHorizontal: spacing.lg,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  headerBtn: { width: 36, alignItems: "center", justifyContent: "center" },
-  headerTitle: { fontSize: 20, fontWeight: "700", color: "#FFFFFF" },
-
-  subHeader: {
-    backgroundColor: "#1A4DA0",
-    paddingVertical: 14,
+  headerBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.16)",
     alignItems: "center",
+    justifyContent: "center",
   },
-  subHeaderText: { fontSize: 16, fontWeight: "600", color: "#FFFFFF" },
+  headerTitle: {
+    flex: 1,
+    textAlign: "center",
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.bold,
+    color: colors.white,
+  },
 
   scroll: { flex: 1 },
   content: {
     alignItems: "center",
-    paddingHorizontal: 24,
-    paddingTop: 28,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xxl,
+  },
+
+  // ── Identity card ─────────────────────────────────────────────────────────────
+
+  identityCard: {
+    width: "100%",
+    marginBottom: spacing.lg,
+  },
+
+  identityInner: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: spacing.sm,
+  },
+
+  identityName: {
+    fontSize: fontSize.xl,
+    fontFamily: fontFamily.extrabold,
+    color: colors.ink,
+    marginTop: spacing.lg,
+  },
+
+  identityRole: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.medium,
+    color: colors.emerald,
+    marginTop: 2,
+  },
+
+  // ── Fields card / sections ───────────────────────────────────────────────────
+
+  fieldsCard: {
+    width: "100%",
+    marginBottom: spacing.lg,
+  },
+
+  sectionCard: {
+    width: "100%",
+    marginTop: spacing.lg,
+    marginBottom: spacing.sm,
+  },
+
+  sectionTitle: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    marginBottom: spacing.lg,
   },
 
   fieldLabel: {
     alignSelf: "flex-start",
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#1A4DA0",
-    marginBottom: 6,
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: spacing.sm - 2,
   },
+
   input: {
     width: "100%",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: "#B5D4F4",
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: "#0C2D6B",
-    marginBottom: 16,
+    backgroundColor: colors.mist,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md + 1,
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
+    marginBottom: spacing.lg,
   },
+
+  inputFocused: {
+    borderColor: colors.emeraldBright,
+    backgroundColor: colors.white,
+  },
+
   inputReadOnly: {
-    backgroundColor: "#EEF2FA",
-    color: "#6B87B8",
+    backgroundColor: FIELD_MINT,
+    borderColor: FIELD_MINT,
+    borderRadius: radius.xl,
+    color: colors.ink,
   },
+
+  inputErrorBorder: {
+    borderColor: colors.error,
+  },
+
+  // ── Row fields (username, phone) ─────────────────────────────────────────────
+
   rowField: {
     width: "100%",
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: "#B5D4F4",
-    marginBottom: 16,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.mist,
+    overflow: "hidden",
+    marginBottom: spacing.lg,
   },
+
+  rowFieldFocused: {
+    borderColor: colors.emeraldBright,
+    backgroundColor: colors.white,
+  },
+
+  rowFieldReadOnly: {
+    backgroundColor: FIELD_MINT,
+    borderColor: FIELD_MINT,
+    borderRadius: radius.xl,
+  },
+
   rowInput: {
     flex: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: "#0C2D6B",
-  },
-  rowFieldReadOnly: {
-    backgroundColor: "#EEF2FA",
-  },
-  rowInputReadOnly: {
-    color: "#6B87B8",
-  },
-  suffix: {
-    fontSize: 13,
-    color: "#1A4DA0",
-    paddingRight: 12,
-    fontWeight: "500",
-  },
-  prefix: {
-    paddingHorizontal: 12,
-    fontSize: 15,
-    color: "#0C2D6B",
-    fontWeight: "600",
-    borderRightWidth: 1,
-    borderRightColor: "#B5D4F4",
-    paddingVertical: 12,
+    paddingHorizontal: spacing.md + 2,
+    paddingVertical: spacing.md + 1,
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
   },
 
-  saveBtn: {
-    marginTop: 20,
-    backgroundColor: "#0C2D6B",
-    paddingVertical: 14,
-    paddingHorizontal: 64,
-    borderRadius: 30,
+  rowInputReadOnly: {
+    color: colors.ink,
+    fontFamily: fontFamily.bold,
+  },
+
+  suffix: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+    paddingRight: spacing.lg,
+    fontFamily: fontFamily.medium,
+  },
+
+  // ── Phone row ─────────────────────────────────────────────────────────────────
+
+  phoneRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm + 2,
+    marginBottom: spacing.lg,
+  },
+
+  phonePrefix: {
+    backgroundColor: colors.emeraldSoft,
+    borderRadius: radius.xl,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md + 1,
+    justifyContent: "center",
     alignItems: "center",
   },
-  btnDisabled: { opacity: 0.5 },
-  saveBtnText: { fontSize: 16, fontWeight: "700", color: "#FFFFFF" },
 
-  divider: {
-    width: "100%",
-    height: 1,
-    backgroundColor: "#B5D4F4",
-    marginTop: 28,
-    marginBottom: 20,
+  phonePrefixReadOnly: {
+    backgroundColor: FIELD_MINT_DARK,
   },
-  sectionTitle: {
-    alignSelf: "flex-start",
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#0C2D6B",
-    marginBottom: 16,
+
+  phonePrefixText: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
   },
+
+  phoneInputWrap: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.mist,
+    overflow: "hidden",
+  },
+
+  // ── Password fields ───────────────────────────────────────────────────────────
 
   pwField: {
     width: "100%",
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: "#B5D4F4",
-    marginBottom: 4,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.mist,
+    marginBottom: spacing.xs,
   },
-  pwFieldError: { borderColor: "#C0392B" },
-  pwFieldReadOnly: { backgroundColor: "#EEF2FA" },
-  pwInput: {
-    flex: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: "#0C2D6B",
+
+  eyeBtn: { paddingHorizontal: spacing.md, paddingVertical: spacing.md },
+
+  fieldError: {
+    alignSelf: "flex-start",
+    fontSize: fontSize.xs,
+    color: colors.error,
+    fontFamily: fontFamily.medium,
+    marginBottom: spacing.sm,
+    marginTop: -spacing.sm + 2,
   },
-  eyeBtn: { paddingHorizontal: 12, paddingVertical: 12 },
-  fieldError: { alignSelf: "flex-start", fontSize: 12, color: "#C0392B", marginBottom: 4 },
-  pwHint: { alignSelf: "flex-start", fontSize: 11, color: "#7AAEF0", marginBottom: 16 },
+
+  hint: {
+    alignSelf: "flex-start",
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    fontFamily: fontFamily.regular,
+    marginBottom: spacing.lg,
+  },
+
+  // ── Buttons ───────────────────────────────────────────────────────────────────
+
+  saveBtn: {
+    width: "100%",
+    borderRadius: radius.pill,
+    backgroundColor: colors.ink,
+    paddingVertical: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    ...shadow.button,
+  },
+
+  btnDisabled: { opacity: 0.45 },
+
+  saveBtnText: {
+    color: colors.white,
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
+    textAlign: "center",
+  },
 
   updatePwBtn: {
-    marginTop: 20,
-    backgroundColor: "#1A4DA0",
-    paddingVertical: 14,
-    paddingHorizontal: 48,
-    borderRadius: 30,
+    width: "100%",
+    borderRadius: radius.pill,
+    backgroundColor: colors.ink,
+    paddingVertical: 16,
     alignItems: "center",
-    marginBottom: 8,
+    justifyContent: "center",
+    marginTop: spacing.md,
+    ...shadow.button,
   },
+
+  logoutBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "100%",
+    borderRadius: radius.pill,
+    backgroundColor: colors.errorSoft,
+    paddingVertical: 16,
+    marginTop: spacing.lg,
+  },
+  logoutBtnText: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.semibold,
+    color: colors.error,
+  },
+
+  // ── Security question picker ─────────────────────────────────────────────────
 
   pickerOverlay: {
     flex: 1,
-    backgroundColor: "rgba(12,45,107,0.4)",
+    backgroundColor: colors.overlay,
     justifyContent: "center",
     alignItems: "center",
-    padding: 24,
+    padding: spacing.xxl,
   },
   pickerCard: {
     width: "100%",
     maxHeight: "70%",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    padding: 16,
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    ...shadow.raised,
   },
   pickerTitle: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#0C2D6B",
-    marginBottom: 10,
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    marginBottom: spacing.sm + 2,
   },
   pickerItem: {
-    paddingVertical: 12,
+    paddingVertical: spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: "#EEF2FA",
+    borderBottomColor: colors.mist,
   },
   pickerItemText: {
-    fontSize: 14,
-    color: "#0C2D6B",
+    fontSize: fontSize.sm,
+    color: colors.ink,
+    fontFamily: fontFamily.regular,
   },
+
+  // ── Toast ─────────────────────────────────────────────────────────────────────
 
   overlay: {
     position: "absolute",
@@ -725,18 +1030,23 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: "rgba(0,0,0,0.5)",
+    backgroundColor: colors.overlay,
     justifyContent: "center",
     alignItems: "center",
   },
   toast: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: spacing.sm,
+    backgroundColor: colors.white,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xl,
+    borderRadius: radius.md,
+    ...shadow.raised,
   },
   toastText: {
-    color: "#B5D4F4",
-    fontSize: 18,
-    fontWeight: "500",
+    color: colors.ink,
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.semibold,
   },
 });

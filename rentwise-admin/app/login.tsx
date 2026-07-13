@@ -15,11 +15,13 @@ import {
   ActivityIndicator,
   Modal,
   Alert,
+  Image,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useRef, useEffect } from "react";
 import { router } from "expo-router";
-import { ShieldCheck, Mail, Lock, Eye, EyeOff, AlertCircle, X, Info } from "lucide-react-native";
+import { Mail, Lock, Eye, EyeOff, AlertCircle, X, Info, Check } from "lucide-react-native";
 import { collection, query, where, getDocs, addDoc, serverTimestamp } from "firebase/firestore";
 
 import { loginUser } from "../shared/services/auth";
@@ -31,6 +33,8 @@ import {
   resetLockout,
   formatLockoutRemaining,
 } from "../shared/services/loginLockout";
+import { setRememberMe } from "../shared/services/rememberMe";
+import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -45,6 +49,7 @@ export default function Login() {
   const [passwordFocused, setPasswordFocused] = useState(false);
   const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
   const [, setLockoutTick] = useState(0);
+  const [rememberMe, setRememberMeChecked] = useState(false);
 
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [fpEmail, setFpEmail] = useState("");
@@ -98,9 +103,15 @@ export default function Login() {
     // onFocus fires before the keyboard has finished animating in, so a
     // fixed delay can land short if the OS is still resizing the window —
     // scroll again once Android/iOS confirms the keyboard is fully shown.
-    const sub = Keyboard.addListener("keyboardDidShow", scrollToRevealForm);
+    // Skipped while the forgot-password modal is open — its own text field
+    // triggers this same event, and scrolling the login form behind a
+    // semi-transparent modal made it look like the login screen was
+    // reacting to taps inside the modal.
+    const sub = Keyboard.addListener("keyboardDidShow", () => {
+      if (!showForgotModal) scrollToRevealForm();
+    });
     return () => sub.remove();
-  }, []);
+  }, [showForgotModal]);
 
   // Ticks every second while locked out so the countdown text stays live,
   // and clears the lockout automatically once it expires.
@@ -169,7 +180,7 @@ export default function Login() {
     setLoading(true);
     try {
       let email = identifier;
-      const userDoc = await getUserByUsername(identifier);
+      const userDoc = await getUserByUsername(identifier, "admin");
       if (userDoc) {
         email = userDoc.email;
       } else if (!email.includes("@")) {
@@ -185,6 +196,7 @@ export default function Login() {
         return;
       }
       await resetLockout(identifier);
+      await setRememberMe(rememberMe);
       router.replace("/welcome");
     } catch {
       const { lockoutUntil: newLockout, remainingAttempts, lockoutLevel } =
@@ -238,6 +250,10 @@ export default function Login() {
       }
       const matched = snap.docs[0];
       const data = matched.data();
+
+      // Admin password resets always go to the owner to handle manually —
+      // no self-service path, by design (reduces owner's workload only
+      // where it's safe to; an admin account resetting itself isn't).
       await addDoc(collection(db, "passwordResetRequests"), {
         email: trimmed,
         tenantId: matched.id,
@@ -258,7 +274,7 @@ export default function Login() {
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: "#0C2D6B" }}
+      style={{ flex: 1, backgroundColor: colors.emerald }}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <ScrollView
@@ -270,8 +286,13 @@ export default function Login() {
       >
         <View style={{ flex: 1, minHeight: SCREEN_HEIGHT }}>
 
-          {/* Top navy section */}
-          <View style={[styles.topSection, { paddingTop: insets.top + 24 }]}>
+          {/* Top gradient hero */}
+          <LinearGradient
+            colors={[colors.emerald, colors.ink]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[styles.topSection, { paddingTop: insets.top + 24 }]}
+          >
             <Animated.View style={[styles.logoGroup, slideIn(logoAnim)]}>
               <Animated.View
                 style={[
@@ -279,17 +300,23 @@ export default function Login() {
                   { transform: [{ scale: pulseScale }], opacity: pulseOpacity },
                 ]}
               />
-              <View style={styles.logoCircle}>
-                <ShieldCheck size={28} color="#0C2D6B" />
-              </View>
+              <LinearGradient
+                colors={[colors.emerald, colors.ink]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.logoCircle}
+              >
+                <Image
+                  source={require("../assets/rentwise-icon.png")}
+                  style={styles.logoImage}
+                  resizeMode="contain"
+                />
+              </LinearGradient>
             </Animated.View>
             <Animated.Text style={[styles.appName, slideIn(logoAnim)]}>
-              RentWise
-            </Animated.Text>
-            <Animated.Text style={[styles.portalText, slideIn(logoAnim)]}>
               Admin portal
             </Animated.Text>
-          </View>
+          </LinearGradient>
 
           {/* White card */}
           <View style={[styles.card, { paddingBottom: Math.max(insets.bottom, 24) }]}>
@@ -301,17 +328,17 @@ export default function Login() {
             </Animated.View>
 
             {/* Email field */}
-            <Animated.View style={[{ marginTop: 24 }, slideIn(emailAnim)]}>
+            <Animated.View style={[{ marginTop: spacing.xxl }, slideIn(emailAnim)]}>
               <Text style={styles.fieldLabel}>Email</Text>
               <View style={styles.inputWrapper}>
-                <Mail size={17} color="#2E6FD9" style={styles.leftIcon} />
+                <Mail size={17} color={colors.emeraldBright} style={styles.leftIcon} />
                 <TextInput
                   ref={emailInputRef}
                   style={[styles.textInput, emailFocused && styles.textInputFocused]}
                   value={username}
                   onChangeText={(t) => { setUsername(t); setError(""); }}
                   placeholder="username@rentwise.app"
-                  placeholderTextColor="#B4B2A9"
+                  placeholderTextColor={colors.textMuted}
                   autoCapitalize="none"
                   autoCorrect={false}
                   keyboardType="email-address"
@@ -326,10 +353,10 @@ export default function Login() {
             </Animated.View>
 
             {/* Password field */}
-            <Animated.View style={[{ marginTop: 16 }, slideIn(passwordAnim)]}>
+            <Animated.View style={[{ marginTop: spacing.lg }, slideIn(passwordAnim)]}>
               <Text style={styles.fieldLabel}>Password</Text>
               <View style={styles.inputWrapper}>
-                <Lock size={17} color="#2E6FD9" style={styles.leftIcon} />
+                <Lock size={17} color={colors.emeraldBright} style={styles.leftIcon} />
                 <TextInput
                   ref={passwordInputRef}
                   style={[styles.textInput, passwordFocused && styles.textInputFocused]}
@@ -337,7 +364,7 @@ export default function Login() {
                   onChangeText={(t) => { setPassword(t); setError(""); }}
                   secureTextEntry={!showPassword}
                   placeholder="Enter your password"
-                  placeholderTextColor="#B4B2A9"
+                  placeholderTextColor={colors.textMuted}
                   editable={!loading && !lockoutUntil}
                   onFocus={() => { setPasswordFocused(true); scrollToRevealForm(); }}
                   onBlur={() => setPasswordFocused(false)}
@@ -347,47 +374,57 @@ export default function Login() {
                   onPress={() => setShowPassword((v) => !v)}
                   activeOpacity={0.7}
                 >
-                  {showPassword ? <Eye size={17} color="#B4B2A9" /> : <EyeOff size={17} color="#B4B2A9" />}
+                  {showPassword ? <Eye size={17} color={colors.textMuted} /> : <EyeOff size={17} color={colors.textMuted} />}
                 </TouchableOpacity>
               </View>
             </Animated.View>
 
-            {/* Forgot password link */}
-            <Pressable
-              style={styles.forgotLink}
-              onPress={() => setShowForgotModal(true)}
-            >
-              <Text style={styles.forgotLinkText}>Forgot password?</Text>
-            </Pressable>
+            {/* Remember me + Forgot password row */}
+            <View style={styles.optionsRow}>
+              <Pressable
+                style={styles.rememberMeRow}
+                onPress={() => setRememberMeChecked((v) => !v)}
+                hitSlop={8}
+              >
+                <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
+                  {rememberMe && <Check size={13} color={colors.white} />}
+                </View>
+                <Text style={styles.rememberMeText}>Remember me</Text>
+              </Pressable>
+
+              <Pressable onPress={() => setShowForgotModal(true)}>
+                <Text style={styles.forgotLinkText}>Forgot password?</Text>
+              </Pressable>
+            </View>
 
             {/* Lockout / error banner */}
             {lockoutUntil ? (
               <View style={styles.errorBanner}>
-                <AlertCircle size={16} color="#A32D2D" style={{ marginRight: 8 }} />
+                <AlertCircle size={16} color={colors.error} style={{ marginRight: 8 }} />
                 <Text style={styles.errorText}>
                   Too many failed attempts. Try again in {formatLockoutRemaining(lockoutUntil)}.
                 </Text>
               </View>
             ) : !!error && (
               <View style={styles.errorBanner}>
-                <AlertCircle size={16} color="#A32D2D" style={{ marginRight: 8 }} />
+                <AlertCircle size={16} color={colors.error} style={{ marginRight: 8 }} />
                 <Text style={styles.errorText}>{error}</Text>
               </View>
             )}
 
             {/* Sign in button */}
-            <Animated.View ref={buttonRef} style={[{ marginTop: 28 }, slideIn(buttonAnim)]}>
+            <Animated.View ref={buttonRef} style={[{ marginTop: spacing.xxl + 4 }, slideIn(buttonAnim)]}>
               <Pressable
                 style={({ pressed }) => [
                   styles.signInBtn,
                   (loading || !!lockoutUntil) && styles.signInBtnDisabled,
-                  pressed && !loading && !lockoutUntil && { backgroundColor: "#091f4a", transform: [{ scale: 0.98 }] },
+                  pressed && !loading && !lockoutUntil && { backgroundColor: colors.ink, transform: [{ scale: 0.98 }] },
                 ]}
                 onPress={handleLogin}
                 disabled={loading || !!lockoutUntil}
               >
                 {loading ? (
-                  <ActivityIndicator color="#fff" size="small" />
+                  <ActivityIndicator color={colors.white} size="small" />
                 ) : (
                   <Text style={styles.signInText}>Sign in</Text>
                 )}
@@ -406,33 +443,33 @@ export default function Login() {
         onRequestClose={closeForgotModal}
       >
         <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={{ flex: 1, backgroundColor: colors.overlay }}
+          behavior="padding"
         >
           <View style={fp.overlay}>
             <View style={fp.card}>
               <Pressable style={fp.closeBtn} onPress={closeForgotModal}>
-                <X size={16} color="#5F5E5A" />
+                <X size={16} color={colors.textSecondary} />
               </Pressable>
 
               <View style={fp.iconCircle}>
-                <Mail size={24} color="#0C2D6B" />
+                <Mail size={22} color={colors.emerald} />
               </View>
               <Text style={fp.title}>Forgot password</Text>
               <Text style={fp.subtitle}>
                 Enter your admin email and we'll send your request to the owner.
               </Text>
 
-              <View style={{ marginTop: 22, alignSelf: "stretch" }}>
+              <View style={{ marginTop: spacing.xxl - 2, alignSelf: "stretch" }}>
                 <Text style={fp.label}>Email</Text>
                 <View style={fp.inputWrapper}>
-                  <Mail size={16} color="#2E6FD9" style={fp.inputIcon} />
+                  <Mail size={16} color={colors.emeraldBright} style={fp.inputIcon} />
                   <TextInput
                     style={[fp.input, fpEmailFocused && fp.inputFocused]}
                     value={fpEmail}
                     onChangeText={(t) => { setFpEmail(t); setFpError(null); }}
                     placeholder="username@rentwise.app"
-                    placeholderTextColor="#B4B2A9"
+                    placeholderTextColor={colors.textMuted}
                     keyboardType="email-address"
                     autoCapitalize="none"
                     onFocus={() => setFpEmailFocused(true)}
@@ -444,7 +481,7 @@ export default function Login() {
 
               {fpSuccess ? (
                 <View style={fp.successBox}>
-                  <Info size={15} color="#0C2D6B" style={fp.successIcon} />
+                  <Info size={15} color={colors.emerald} style={fp.successIcon} />
                   <Text style={fp.successText}>
                     Request sent. The owner will contact you shortly.
                   </Text>
@@ -453,13 +490,13 @@ export default function Login() {
                 <Pressable
                   style={({ pressed }) => [
                     fp.submitBtn,
-                    pressed && { backgroundColor: "#091f4a", transform: [{ scale: 0.97 }] },
+                    pressed && { backgroundColor: colors.ink, transform: [{ scale: 0.97 }] },
                   ]}
                   onPress={handleForgotSubmit}
                   disabled={fpLoading}
                 >
                   {fpLoading
-                    ? <ActivityIndicator color="#fff" />
+                    ? <ActivityIndicator color={colors.white} />
                     : <Text style={fp.submitText}>Submit request</Text>
                   }
                 </Pressable>
@@ -475,9 +512,6 @@ export default function Login() {
 const styles = StyleSheet.create({
   topSection: {
     height: SCREEN_HEIGHT * 0.38,
-    backgroundColor: "#0C2D6B",
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
     alignItems: "center",
     justifyContent: "center",
     paddingBottom: 32,
@@ -494,56 +528,56 @@ const styles = StyleSheet.create({
     width: 84,
     height: 84,
     borderRadius: 999,
-    backgroundColor: "#7AAEF0",
+    backgroundColor: colors.emeraldBright,
   },
 
   logoCircle: {
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: "#E6F1FB",
+    overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
   },
 
-  appName: {
-    color: "#FFFFFF",
-    fontSize: 26,
-    fontWeight: "500",
+  logoImage: {
+    width: 64,
+    height: 64,
   },
 
-  portalText: {
-    color: "#B5D4F4",
-    fontSize: 13,
-    marginTop: 4,
+  appName: {
+    color: colors.white,
+    fontSize: fontSize.xxl + 2,
+    fontFamily: fontFamily.bold,
   },
 
   card: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    marginTop: -16,
-    paddingHorizontal: 28,
-    paddingTop: 28,
+    backgroundColor: colors.white,
+    borderTopLeftRadius: radius.xl + 4,
+    borderTopRightRadius: radius.xl + 4,
+    marginTop: -(radius.xl + 4),
+    paddingHorizontal: spacing.xxl + 4,
+    paddingTop: spacing.xxl + 4,
   },
 
   heading: {
-    fontSize: 22,
-    fontWeight: "500",
-    color: "#0C2D6B",
+    fontSize: fontSize.xl + 2,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
   },
 
   subheading: {
-    fontSize: 14,
-    color: "#888780",
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
     marginTop: 2,
   },
 
   fieldLabel: {
-    fontSize: 13,
-    fontWeight: "500",
-    color: "#1A4DA0",
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
     marginBottom: 6,
   },
 
@@ -568,43 +602,47 @@ const styles = StyleSheet.create({
 
   textInput: {
     flex: 1,
-    borderRadius: 12,
+    borderRadius: radius.md,
     borderWidth: 1.5,
-    borderColor: "#B5D4F4",
-    backgroundColor: "#F0F4FA",
+    borderColor: colors.emeraldSoft,
+    backgroundColor: colors.mist,
     paddingVertical: 13,
     paddingLeft: 40,
     paddingRight: 40,
-    color: "#0C2D6B",
-    fontSize: 15,
+    color: colors.ink,
+    fontFamily: fontFamily.medium,
+    fontSize: fontSize.base,
   },
 
   textInputFocused: {
-    borderColor: "#2E6FD9",
+    borderColor: colors.emeraldBright,
+    backgroundColor: colors.white,
   },
 
   errorBanner: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 12,
-    backgroundColor: "#FCEBEB",
-    borderRadius: 8,
+    marginTop: spacing.md,
+    backgroundColor: colors.errorSoft,
+    borderRadius: radius.sm - 2,
     paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingHorizontal: spacing.lg - 2,
   },
 
   errorText: {
-    fontSize: 13,
-    color: "#A32D2D",
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.medium,
+    color: colors.error,
     flex: 1,
   },
 
   signInBtn: {
     width: "100%",
-    borderRadius: 14,
-    backgroundColor: "#0C2D6B",
+    borderRadius: radius.md + 2,
+    backgroundColor: colors.emerald,
     paddingVertical: 15,
     alignItems: "center",
+    ...shadow.button,
   },
 
   signInBtnDisabled: {
@@ -612,44 +650,71 @@ const styles = StyleSheet.create({
   },
 
   signInText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "500",
+    color: colors.white,
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
     textAlign: "center",
   },
 
-  forgotLink: {
-    alignSelf: "flex-end",
-    marginTop: 10,
+  forgotLinkText: {
+    fontSize: fontSize.sm,
+    color: colors.emeraldBright,
+    fontFamily: fontFamily.semibold,
   },
 
-  forgotLinkText: {
-    fontSize: 13,
-    color: "#2E6FD9",
-    fontWeight: "500",
+  optionsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: spacing.lg - 2,
+  },
+  rememberMeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: colors.emeraldSoft,
+    backgroundColor: colors.white,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: spacing.sm,
+  },
+  checkboxChecked: {
+    backgroundColor: colors.emerald,
+    borderColor: colors.emerald,
+  },
+  rememberMeText: {
+    fontSize: fontSize.sm,
+    color: colors.ink,
+    fontFamily: fontFamily.medium,
   },
 });
 
 const fp = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(12,45,107,0.55)",
+    backgroundColor: colors.overlay,
     alignItems: "center",
     justifyContent: "flex-start",
-    paddingTop: 120,
-    paddingHorizontal: 16,
-    paddingBottom: 16,
+    paddingTop: 220,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.lg,
   },
   card: {
-    backgroundColor: "#fff",
-    borderRadius: 20,
+    backgroundColor: colors.white,
+    borderRadius: radius.xl,
     width: "88%",
     maxWidth: 340,
-    paddingTop: 28,
-    paddingBottom: 24,
-    paddingHorizontal: 24,
+    paddingTop: spacing.xxl + 4,
+    paddingBottom: spacing.xxl,
+    paddingHorizontal: spacing.xxl,
     position: "relative",
     alignItems: "center",
+    ...shadow.raised,
   },
   closeBtn: {
     position: "absolute",
@@ -658,7 +723,7 @@ const fp = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: "#F0F4FA",
+    backgroundColor: colors.mist,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -666,29 +731,30 @@ const fp = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: 26,
-    backgroundColor: "#E6F1FB",
+    backgroundColor: colors.emeraldSoft,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 14,
+    marginBottom: spacing.md + 2,
   },
   title: {
-    fontSize: 19,
-    fontWeight: "500",
-    color: "#0C2D6B",
+    fontSize: fontSize.lg + 1,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
     textAlign: "center",
   },
   subtitle: {
-    fontSize: 13,
-    color: "#888780",
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
     textAlign: "center",
     marginTop: 6,
     lineHeight: 19,
     paddingHorizontal: 4,
   },
   label: {
-    fontSize: 13,
-    fontWeight: "500",
-    color: "#1A4DA0",
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
     marginBottom: 6,
     alignSelf: "flex-start",
   },
@@ -704,56 +770,61 @@ const fp = StyleSheet.create({
   },
   input: {
     width: "100%",
-    borderRadius: 12,
+    borderRadius: radius.md,
     borderWidth: 1.5,
-    borderColor: "#B5D4F4",
-    backgroundColor: "#F0F4FA",
+    borderColor: colors.emeraldSoft,
+    backgroundColor: colors.mist,
     paddingVertical: 12,
     paddingLeft: 38,
-    paddingRight: 16,
-    color: "#0C2D6B",
-    fontSize: 14,
+    paddingRight: spacing.lg,
+    color: colors.ink,
+    fontFamily: fontFamily.medium,
+    fontSize: fontSize.base - 1,
   },
   inputFocused: {
-    borderColor: "#2E6FD9",
+    borderColor: colors.emeraldBright,
+    backgroundColor: colors.white,
   },
   errorText: {
-    color: "#A32D2D",
-    fontSize: 12,
+    color: colors.error,
+    fontSize: fontSize.xs + 1,
+    fontFamily: fontFamily.medium,
     marginTop: 6,
     alignSelf: "flex-start",
   },
   submitBtn: {
-    marginTop: 20,
+    marginTop: spacing.xl,
     width: "100%",
-    borderRadius: 14,
-    backgroundColor: "#0C2D6B",
+    borderRadius: radius.md + 2,
+    backgroundColor: colors.emerald,
     paddingVertical: 13,
     alignItems: "center",
+    ...shadow.button,
   },
   submitText: {
-    color: "#fff",
-    fontSize: 15,
-    fontWeight: "500",
+    color: colors.white,
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
     textAlign: "center",
   },
   successBox: {
-    marginTop: 14,
-    backgroundColor: "#E6F1FB",
-    borderRadius: 10,
+    marginTop: spacing.md + 2,
+    backgroundColor: colors.emeraldSoft,
+    borderRadius: radius.sm,
     paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingHorizontal: spacing.md,
     flexDirection: "row",
     alignItems: "flex-start",
     width: "100%",
   },
   successIcon: {
-    marginRight: 8,
+    marginRight: spacing.sm,
     marginTop: 1,
   },
   successText: {
-    fontSize: 12,
-    color: "#0C2D6B",
+    fontSize: fontSize.xs + 1,
+    fontFamily: fontFamily.medium,
+    color: colors.emerald,
     lineHeight: 18,
     flex: 1,
   },

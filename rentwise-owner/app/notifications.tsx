@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -8,9 +8,10 @@ import {
   ActivityIndicator,
   Alert,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { ArrowLeft, HelpCircle, KeyRound, Bell } from "lucide-react-native";
 import {
   addDoc,
   collection,
@@ -28,6 +29,9 @@ import {
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
+import HelpTour, { HelpStep } from "./components/HelpTour";
+import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
+import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 type OwnerNotification = {
   id: string;
@@ -91,6 +95,20 @@ export default function Notifications() {
   const [approving, setApproving] = useState(false);
   const [clearing, setClearing] = useState(false);
   const unsubRef = useRef<(() => void) | null>(null);
+  const [tourVisible, setTourVisible] = useState(false);
+  const actionRowRef = useRef<View>(null);
+  const cardRef = useRef<View>(null);
+  const checkReportRef = useRef<View>(null);
+
+  const firstPendingIndex = notifications.findIndex((n) => isPendingStatus(n.status) && n.updateId);
+
+  const tourSteps: HelpStep[] = [
+    { key: "actions", ref: actionRowRef, title: "Acknowledge All / Clear All", description: "Acknowledge All approves every pending update at once. Clear All removes already-acknowledged notifications from this list.", offsetY: 41 },
+    { key: "card", ref: cardRef, title: "Notification", description: "Shows who made the update, when, and its current status.", offsetY: 41 },
+    ...(firstPendingIndex !== -1
+      ? [{ key: "checkreport", ref: checkReportRef, title: "Check Report", description: "Opens the full details of a pending update so you can review it before acknowledging.", offsetY: 41 }]
+      : []),
+  ];
 
   const fetchAdminResets = useCallback(async () => {
     try {
@@ -162,6 +180,20 @@ export default function Notifications() {
     }, [subscribe, fetchAdminResets]),
   );
 
+  // Auto-opens the guided tour the first time the owner ever lands on this
+  // page — never again after that, since it flips a persisted per-device
+  // flag. Can still be replayed anytime via the Help button.
+  useEffect(() => {
+    if (loading) return;
+    (async () => {
+      const seen = await hasSeenPageTour("owner-notifications");
+      if (!seen) {
+        setTourVisible(true);
+        await markPageTourSeen("owner-notifications");
+      }
+    })();
+  }, [loading]);
+
   const markRead = async (item: OwnerNotification) => {
     if (item.read) return;
     try {
@@ -207,6 +239,7 @@ export default function Notifications() {
               userId: data.changedBy,
               message: `Your "${label}" update was acknowledged by the owner.`,
               read: false,
+              fromOwner: true,
               createdAt: serverTimestamp(),
             });
           }
@@ -265,6 +298,7 @@ export default function Notifications() {
 
   const handleClearAll = () => {
     if (notifications.length === 0) return;
+    if (pendingCount > 0) return;
     Alert.alert(
       "Clear Notifications",
       "Remove all notifications from your list?",
@@ -287,7 +321,7 @@ export default function Notifications() {
   if (loading) {
     return (
       <View style={styles.loadingBox}>
-        <ActivityIndicator size="large" color="#0C2D6B" />
+        <ActivityIndicator size="large" color={colors.emerald} />
       </View>
     );
   }
@@ -295,36 +329,45 @@ export default function Notifications() {
   return (
     <View style={styles.root}>
       {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backBtn}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="arrow-back" size={22} color="#E6F1FB" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>RentWise</Text>
-        <View style={styles.backBtn} />
-      </View>
+      <LinearGradient
+        colors={[colors.emerald, colors.ink]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.headerGradient}
+      >
+        <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backBtn}
+            activeOpacity={0.7}
+          >
+            <ArrowLeft size={22} color={colors.emeraldSoft} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>RentWise</Text>
+          <TouchableOpacity onPress={() => setTourVisible(true)} style={styles.backBtn} activeOpacity={0.7}>
+            <HelpCircle size={22} color={colors.emeraldSoft} />
+          </TouchableOpacity>
+        </View>
 
-      {/* Sub-header */}
-      <View style={styles.subHeader}>
-        <Text style={styles.subHeaderText}>Notifications</Text>
-      </View>
+        {/* Sub-header */}
+        <View style={styles.subHeader}>
+          <Text style={styles.subHeaderText}>Notifications</Text>
+        </View>
+      </LinearGradient>
 
       <ScrollView
         style={styles.body}
-        contentContainerStyle={{ padding: 16, paddingTop: 20, paddingBottom: insets.bottom + 24 }}
+        contentContainerStyle={{ padding: spacing.lg, paddingTop: spacing.xl, paddingBottom: insets.bottom + 24 }}
       >
         {/* Admin password reset requests */}
         {adminResets.length > 0 && (
-          <View style={{ marginBottom: 14 }}>
+          <View style={{ marginBottom: spacing.md + 2 }}>
             <Text style={styles.sectionTitle}>Admin Password Resets</Text>
             {adminResets.map((item) => (
               <View key={item.id} style={styles.card}>
                 <View style={styles.cardRow}>
                   <View style={styles.bellCircle}>
-                    <Ionicons name="key-outline" size={20} color="#0C2D6B" />
+                    <KeyRound size={20} color={colors.emerald} />
                   </View>
                   <View style={styles.cardContent}>
                     <Text style={styles.senderName}>
@@ -354,7 +397,7 @@ export default function Notifications() {
                         activeOpacity={0.8}
                       >
                         {resolvingResetId === item.id ? (
-                          <ActivityIndicator color="#0C2D6B" size="small" />
+                          <ActivityIndicator color={colors.emerald} size="small" />
                         ) : (
                           <Text style={styles.resolveResetBtnText}>
                             Mark resolved
@@ -371,7 +414,7 @@ export default function Notifications() {
 
         {/* Action buttons */}
         {notifications.length > 0 && (
-          <View style={styles.actionRow}>
+          <View style={styles.actionRow} ref={actionRowRef} collapsable={false}>
             {pendingCount > 0 && (
               <TouchableOpacity
                 style={[styles.approveAllBtn, busy && styles.btnDisabled]}
@@ -380,7 +423,7 @@ export default function Notifications() {
                 activeOpacity={0.8}
               >
                 {approving ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
+                  <ActivityIndicator color={colors.white} size="small" />
                 ) : (
                   <Text style={styles.approveAllText}>
                     Acknowledge All ({pendingCount})
@@ -390,13 +433,13 @@ export default function Notifications() {
             )}
 
             <TouchableOpacity
-              style={[styles.clearBtn, busy && styles.btnDisabled]}
+              style={[styles.clearBtn, (busy || pendingCount > 0) && styles.btnDisabled]}
               onPress={handleClearAll}
-              disabled={busy}
+              disabled={busy || pendingCount > 0}
               activeOpacity={0.8}
             >
               {clearing ? (
-                <ActivityIndicator color="#C0392B" size="small" />
+                <ActivityIndicator color={colors.error} size="small" />
               ) : (
                 <Text style={styles.clearText}>Clear All</Text>
               )}
@@ -409,17 +452,19 @@ export default function Notifications() {
             <Text style={styles.emptyText}>No notifications yet.</Text>
           </View>
         ) : (
-          notifications.map((item) => {
+          notifications.map((item, index) => {
             const isPending = isPendingStatus(item.status);
             const isRejected = item.status === "Rejected";
             return (
               <View
                 key={item.id}
+                ref={index === 0 ? cardRef : undefined}
+                collapsable={false}
                 style={[styles.card, !item.read && styles.cardUnread]}
               >
                 <View style={styles.cardRow}>
                   <View style={styles.bellCircle}>
-                    <Ionicons name="notifications-outline" size={20} color="#0C2D6B" />
+                    <Bell size={20} color={colors.emerald} />
                   </View>
 
                   <View style={styles.cardContent}>
@@ -455,6 +500,7 @@ export default function Notifications() {
 
                 {isPending && item.updateId ? (
                   <TouchableOpacity
+                    ref={index === firstPendingIndex ? checkReportRef : undefined}
                     style={[styles.checkReportBtn, styles.checkReportBtnCentered]}
                     onPress={() => handleCheckReport(item)}
                     activeOpacity={0.8}
@@ -467,45 +513,58 @@ export default function Notifications() {
           })
         )}
       </ScrollView>
+      <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#F0F4FA" },
+  root: { flex: 1, backgroundColor: colors.parchment },
 
   loadingBox: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#F0F4FA",
+    backgroundColor: colors.parchment,
+  },
+
+  headerGradient: {
+    borderBottomLeftRadius: radius.xl + 4,
+    borderBottomRightRadius: radius.xl + 4,
+    overflow: "hidden",
   },
 
   header: {
-    backgroundColor: "#0C2D6B",
-    paddingHorizontal: 20,
-    paddingBottom: 14,
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.md + 2,
     flexDirection: "row",
     alignItems: "center",
   },
-  backBtn: { width: 36, alignItems: "center", justifyContent: "center" },
+  backBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.16)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   headerTitle: {
     flex: 1,
     textAlign: "center",
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "500",
+    color: colors.white,
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.bold,
   },
 
   subHeader: {
-    backgroundColor: "#1A4DA0",
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md + 2,
   },
   subHeaderText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "500",
+    color: colors.white,
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.semibold,
     textAlign: "center",
   },
 
@@ -513,65 +572,65 @@ const styles = StyleSheet.create({
 
   actionRow: {
     flexDirection: "row",
-    gap: 10,
-    marginBottom: 16,
+    gap: spacing.sm + 2,
+    marginBottom: spacing.lg,
   },
   approveAllBtn: {
     flex: 1,
-    backgroundColor: "#0C2D6B",
-    borderRadius: 10,
+    backgroundColor: colors.emerald,
+    borderRadius: radius.sm,
     paddingVertical: 11,
     alignItems: "center",
     justifyContent: "center",
     minHeight: 42,
+    ...shadow.button,
   },
   approveAllText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#FFFFFF",
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.white,
   },
   clearBtn: {
     flex: 1,
-    borderRadius: 10,
+    borderRadius: radius.sm,
     paddingVertical: 11,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1.5,
-    borderColor: "#A32D2D",
-    backgroundColor: "#FFFFFF",
+    borderColor: colors.error,
+    backgroundColor: colors.white,
     minHeight: 42,
   },
   clearText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#A32D2D",
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.error,
   },
   btnDisabled: { opacity: 0.5 },
 
   card: {
-    backgroundColor: "#fff",
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 0.5,
-    borderColor: "#B5D4F4",
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    padding: spacing.md + 2,
+    marginBottom: spacing.sm + 2,
+    ...shadow.card,
   },
   cardUnread: {
     borderLeftWidth: 3,
-    borderLeftColor: "#2E6FD9",
+    borderLeftColor: colors.emeraldBright,
   },
 
   cardRow: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: 12,
+    gap: spacing.md,
   },
 
   bellCircle: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: "#E6F1FB",
+    backgroundColor: colors.emeraldSoft,
     alignItems: "center",
     justifyContent: "center",
     flexShrink: 0,
@@ -585,58 +644,59 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 4,
   },
-  senderName: { fontSize: 14, fontWeight: "600", color: "#0C2D6B" },
-  timeText: { fontSize: 12, color: "#888780" },
+  senderName: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.ink },
+  timeText: { fontSize: fontSize.xs + 1, color: colors.textSecondary, fontFamily: fontFamily.regular },
 
   messageText: {
-    fontSize: 13,
-    color: "#444441",
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    fontFamily: fontFamily.regular,
     lineHeight: 18,
     marginBottom: 6,
   },
 
-  statusLine: { fontSize: 13, marginBottom: 8 },
-  statusLabel: { fontWeight: "600", color: "#0C2D6B" },
-  statusValue: { fontWeight: "600" },
-  statusPending: { color: "#BA7517" },
-  statusApproved: { color: "#0F6E56" },
-  statusRejected: { color: "#A32D2D" },
+  statusLine: { fontSize: fontSize.sm, marginBottom: spacing.sm },
+  statusLabel: { fontFamily: fontFamily.semibold, color: colors.ink },
+  statusValue: { fontFamily: fontFamily.semibold },
+  statusPending: { color: colors.warning },
+  statusApproved: { color: colors.emerald },
+  statusRejected: { color: colors.error },
 
   checkReportBtn: {
     alignSelf: "flex-start",
-    backgroundColor: "#0C2D6B",
-    paddingHorizontal: 14,
+    backgroundColor: colors.emerald,
+    paddingHorizontal: spacing.md + 2,
     paddingVertical: 6,
-    borderRadius: 20,
+    borderRadius: radius.pill,
   },
   checkReportBtnCentered: {
     alignSelf: "center",
-    marginTop: 10,
+    marginTop: spacing.sm + 2,
   },
-  checkReportText: { fontSize: 12, fontWeight: "600", color: "#FFFFFF" },
+  checkReportText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.white },
 
   sectionTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#0C2D6B",
-    marginBottom: 8,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.ink,
+    marginBottom: spacing.sm,
   },
   resetActionsRow: {
     flexDirection: "row",
-    gap: 8,
+    gap: spacing.sm,
     marginTop: 6,
   },
   resolveResetBtn: {
     alignSelf: "flex-start",
-    backgroundColor: "#F0F4FA",
+    backgroundColor: colors.mist,
     borderWidth: 1,
-    borderColor: "#B5D4F4",
-    paddingHorizontal: 14,
+    borderColor: colors.emeraldSoft,
+    paddingHorizontal: spacing.md + 2,
     paddingVertical: 6,
-    borderRadius: 20,
+    borderRadius: radius.pill,
   },
-  resolveResetBtnText: { fontSize: 12, fontWeight: "600", color: "#0C2D6B" },
+  resolveResetBtnText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.emerald },
 
   empty: { alignItems: "center", paddingTop: 80 },
-  emptyText: { fontSize: 15, color: "#888780" },
+  emptyText: { fontSize: fontSize.base, color: colors.textSecondary, fontFamily: fontFamily.regular },
 });

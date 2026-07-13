@@ -1,21 +1,22 @@
-﻿import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
   Animated,
   Easing,
-  Pressable,
   ActivityIndicator,
   Image,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { Ionicons } from "@expo/vector-icons";
+import { Building2 } from "lucide-react-native";
 
 import { auth } from "../shared/services/auth";
 import { getUserById } from "../shared/services/userServices";
+import { colors, fontFamily, fontSize, spacing } from "../shared/theme";
 
 export default function Welcome() {
   const insets = useSafeAreaInsets();
@@ -27,9 +28,7 @@ export default function Welcome() {
   const pulseOpacity = useRef(new Animated.Value(0.4)).current;
 
   const avatarAnim = useRef(new Animated.Value(0)).current;
-  const appNameAnim = useRef(new Animated.Value(0)).current;
   const welcomeAnim = useRef(new Animated.Value(0)).current;
-  const buttonAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -75,10 +74,13 @@ export default function Welcome() {
 
     Animated.stagger(140, [
       entrance(avatarAnim),
-      entrance(appNameAnim),
       entrance(welcomeAnim),
-      entrance(buttonAnim),
     ]).start();
+
+    // Auto-advances instead of waiting for a tap — this screen is just a
+    // brief greeting, not a step that needs confirmation.
+    const timer = setTimeout(() => router.replace("/dashboard"), 2000);
+    return () => clearTimeout(timer);
   }, [checking]);
 
   const slideIn = (anim: Animated.Value) => ({
@@ -89,13 +91,16 @@ export default function Welcome() {
   if (checking) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color="#E6F1FB" size="large" />
+        <ActivityIndicator color={colors.emeraldSoft} size="large" />
       </View>
     );
   }
 
   return (
-    <View
+    <LinearGradient
+      colors={[colors.emerald, colors.ink]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
       style={[
         styles.container,
         { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 16 },
@@ -113,34 +118,16 @@ export default function Welcome() {
           <Image source={{ uri: photoURL }} style={styles.avatarCircle} />
         ) : (
           <View style={styles.avatarCircle}>
-            <Ionicons name="business-outline" size={36} color="#0C2D6B" />
+            <Building2 size={36} color={colors.emerald} />
           </View>
         )}
       </Animated.View>
-
-      {/* App name */}
-      <Animated.Text style={[styles.appName, slideIn(appNameAnim)]}>
-        RentWise
-      </Animated.Text>
 
       {/* Welcome text */}
       <Animated.Text style={[styles.welcomeText, slideIn(welcomeAnim)]}>
         Welcome, {displayName}!
       </Animated.Text>
-
-      {/* Continue button */}
-      <Animated.View style={[styles.buttonWrapper, slideIn(buttonAnim)]}>
-        <Pressable
-          style={({ pressed }) => [
-            styles.button,
-            pressed && { backgroundColor: "#E6F1FB", transform: [{ scale: 0.97 }] },
-          ]}
-          onPress={() => router.replace("/dashboard")}
-        >
-          <Text style={styles.buttonText}>Continue</Text>
-        </Pressable>
-      </Animated.View>
-    </View>
+    </LinearGradient>
   );
 }
 
@@ -149,22 +136,20 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#0C2D6B",
+    backgroundColor: colors.emerald,
   },
 
   container: {
     flex: 1,
-    backgroundColor: "#0C2D6B",
     justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: 24,
+    paddingHorizontal: spacing.xxl,
   },
 
-  // â”€â”€ Avatar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   avatarWrapper: {
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 24,
+    marginBottom: spacing.xxl,
   },
 
   pulseRing: {
@@ -172,63 +157,32 @@ const styles = StyleSheet.create({
     width: 88,
     height: 88,
     borderRadius: 44,
-    backgroundColor: "#7AAEF0",
+    backgroundColor: colors.emeraldBright,
   },
 
   avatarCircle: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: "#E6F1FB",
+    backgroundColor: colors.parchment,
     alignItems: "center",
     justifyContent: "center",
   },
 
-  // â”€â”€ App name â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  appName: {
-    fontSize: 26,
-    fontWeight: "500",
-    color: "#E6F1FB",
-    textAlign: "center",
-    marginBottom: 4,
-  },
-
-  // â”€â”€ Welcome text â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   welcomeText: {
-    fontSize: 20,
-    fontWeight: "500",
-    color: "#fff",
+    fontSize: fontSize.xl,
+    fontFamily: fontFamily.bold,
+    color: colors.white,
     textAlign: "center",
-    marginBottom: 48,
+    marginBottom: spacing.xxxl + 16,
   },
 
-  // â”€â”€ Subtext â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   subtext: {
-    fontSize: 14,
-    color: "#B5D4F4",
+    fontSize: fontSize.base,
+    color: colors.emeraldSoft,
     marginTop: 4,
     textAlign: "center",
-    marginBottom: 40,
+    marginBottom: spacing.xxxl + 8,
   },
 
-  // â”€â”€ Button â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  buttonWrapper: {
-    width: "72%",
-  },
-
-  button: {
-    width: "100%",
-    borderRadius: 14,
-    backgroundColor: "#fff",
-    paddingVertical: 15,
-    alignItems: "center",
-  },
-
-  buttonText: {
-    color: "#0C2D6B",
-    fontSize: 16,
-    fontWeight: "500",
-    textAlign: "center",
-  },
 });
-

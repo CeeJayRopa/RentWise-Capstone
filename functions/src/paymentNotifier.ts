@@ -26,7 +26,7 @@ export const notifyAdminsOnPayment = onDocumentCreated(
     const tenantName: string = data.tenantName || "A tenant";
     const amount: number = Number(data.amount || 0);
     const spaceId: string = data.spaceId || "—";
-    const message = `${tenantName} submitted an online payment of ₱${amount.toLocaleString()} for Space ${spaceId} — awaiting confirmation.`;
+    const message = `**${tenantName}** submitted an online payment of **₱${amount.toLocaleString()}** for Space ${spaceId} — awaiting confirmation.`;
 
     const batch = db.batch();
     for (const adminDoc of adminsSnap.docs) {

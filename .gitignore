@@ -27,6 +27,8 @@ ui-debug.log
 # Build outputs
 functions/lib/
 paymongo-api/node_modules/
+*.apk
+*.aab
 
 # OS
 .DS_Store

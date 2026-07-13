@@ -2,10 +2,11 @@ import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { useEffect, useState } from "react";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { router } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Bell } from "lucide-react-native";
 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
+import { colors, fontFamily, radius } from "../../shared/theme";
 
 export default function OwnerBellIcon() {
   const [unreadCount, setUnreadCount] = useState(0);
@@ -45,11 +46,13 @@ export default function OwnerBellIcon() {
 
   return (
     <TouchableOpacity
-      style={styles.btn}
+      style={styles.wrap}
       onPress={() => router.push("/notifications" as any)}
       activeOpacity={0.7}
     >
-      <Ionicons name="notifications-outline" size={24} color="#E6F1FB" />
+      <View style={styles.btn}>
+        <Bell size={24} color={colors.emeraldSoft} />
+      </View>
       {totalCount > 0 && (
         <View style={styles.badge}>
           <Text style={styles.badgeText}>{totalCount > 9 ? "9+" : totalCount}</Text>
@@ -60,26 +63,36 @@ export default function OwnerBellIcon() {
 }
 
 const styles = StyleSheet.create({
+  wrap: {
+    width: 40,
+    height: 40,
+  },
   btn: {
-    width: 36,
-    alignItems: "flex-end",
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.16)",
+    alignItems: "center",
     justifyContent: "center",
   },
   badge: {
     position: "absolute",
-    top: -4,
+    top: -2,
     right: -2,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: "#D64545",
+    minWidth: 17,
+    height: 17,
+    borderRadius: radius.pill,
+    backgroundColor: colors.error,
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 3,
+    borderWidth: 1.5,
+    borderColor: colors.ink,
   },
   badgeText: {
-    color: "#FFFFFF",
-    fontSize: 10,
-    fontWeight: "700",
+    color: colors.white,
+    fontSize: 9,
+    fontFamily: fontFamily.bold,
   },
 });

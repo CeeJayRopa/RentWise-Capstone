@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Alert,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useRef, useState } from "react";
@@ -21,10 +22,20 @@ import {
   updateDoc,
   writeBatch,
 } from "firebase/firestore";
-import { Ionicons } from "@expo/vector-icons";
+import {
+  ArrowLeft,
+  Bell,
+  BellOff,
+  Check,
+  Trash2,
+  AlarmClock,
+  Wallet,
+  CheckCircle2,
+} from "lucide-react-native";
 
 import { auth } from "../shared/firebaseConfig";
 import { db } from "../shared/services/firestore";
+import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 type Notification = {
   id: string;
@@ -33,6 +44,39 @@ type Notification = {
   read: boolean;
   createdAt: any;
 };
+
+// The backend only ever writes a single `message` sentence — there's no
+// category field to key off of. Sniffing keywords out of that sentence is
+// the only way to give each notification a distinct title/icon/color
+// without touching every Cloud Function that creates one.
+function categorize(message: string) {
+  const m = message.toLowerCase();
+  if (m.includes("rent") && (m.includes("due") || m.includes("overdue"))) {
+    return { title: "Rent Due", icon: AlarmClock, iconColor: colors.error, iconBg: colors.errorSoft };
+  }
+  if (m.includes("payment") && (m.includes("received") || m.includes("posted") || m.includes("approved") || m.includes("rejected"))) {
+    return { title: "Payment Update", icon: Wallet, iconColor: colors.emerald, iconBg: colors.emeraldSoft };
+  }
+  if (m.includes("acknowledge") || m.includes("update")) {
+    return { title: "Update", icon: CheckCircle2, iconColor: colors.emerald, iconBg: colors.emeraldSoft };
+  }
+  return { title: "Notification", icon: Bell, iconColor: colors.emerald, iconBg: colors.emeraldSoft };
+}
+
+function relativeTime(ts: any): string {
+  if (!ts) return "";
+  const d: Date = ts.toDate ? ts.toDate() : new Date(ts);
+  const diffMs = Date.now() - d.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return "JUST NOW";
+  if (diffMin < 60) return `${diffMin}M AGO`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}H AGO`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay === 1) return "YESTERDAY";
+  if (diffDay < 7) return `${diffDay}D AGO`;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase();
+}
 
 export default function Notification() {
   const insets = useSafeAreaInsets();
@@ -131,98 +175,95 @@ export default function Notification() {
     );
   };
 
-  const formatDate = (ts: any): string => {
-    if (!ts) return "";
-    const d: Date = ts.toDate ? ts.toDate() : new Date(ts);
-    return d.toLocaleString("en-PH", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-  };
-
   if (loading) {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator size="large" color="#0F6E56" />
+        <ActivityIndicator size="large" color={colors.emerald} />
       </View>
     );
   }
 
-  const hasUnread = notifications.some((n) => !n.read);
+  const unreadCount = notifications.filter((n) => !n.read).length;
+  const hasUnread = unreadCount > 0;
 
   return (
     <View style={styles.root}>
       {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={22} color="#E1F5EE" />
+      <LinearGradient
+        colors={[colors.emerald, colors.ink]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.headerGradient}
+      >
+        <View style={[styles.headerRow, { paddingTop: insets.top + 14 }]}>
+          <TouchableOpacity style={styles.headerIconBtn} onPress={() => router.back()} hitSlop={8}>
+            <ArrowLeft size={20} color={colors.white} />
+          </TouchableOpacity>
+          <Text style={styles.headerRowTitle}>RentWise</Text>
+          <View style={{ width: 38 }} />
+        </View>
+
+        <View style={styles.titleBlock}>
+          <Text style={styles.pageTitle}>Notifications</Text>
+          <Text style={styles.pageSubtitle}>
+            {unreadCount} unread update{unreadCount !== 1 ? "s" : ""}
+          </Text>
+        </View>
+      </LinearGradient>
+
+      <View style={styles.actionsRow}>
+        <TouchableOpacity
+          style={[styles.actionPill, (!hasUnread || markingAll) && styles.actionPillDisabled]}
+          onPress={markAllRead}
+          disabled={!hasUnread || markingAll}
+        >
+          <Check size={14} color={colors.emerald} />
+          <Text style={styles.actionPillTextGreen}>{markingAll ? "Marking…" : "Mark all read"}</Text>
         </TouchableOpacity>
 
-        <Text style={styles.headerTitle}>RentWise</Text>
-
-        <View style={{ width: 22 }} />
+        <TouchableOpacity
+          style={[styles.actionPill, (notifications.length === 0 || clearing) && styles.actionPillDisabled]}
+          onPress={handleClearAll}
+          disabled={notifications.length === 0 || clearing}
+        >
+          <Trash2 size={14} color={colors.error} />
+          <Text style={styles.actionPillTextRed}>{clearing ? "Clearing…" : "Clear all"}</Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView
         style={styles.body}
-        contentContainerStyle={[styles.bodyContent, { paddingBottom: insets.bottom + 20 }]}
+        contentContainerStyle={[styles.bodyContent, { paddingBottom: insets.bottom + 24 }]}
+        showsVerticalScrollIndicator={false}
       >
-        <View style={styles.titleRow}>
-          <Text style={styles.pageTitle}>Notifications</Text>
-
-          <View style={styles.actionsRow}>
-            <TouchableOpacity
-              style={[styles.actionCard, styles.markAllCard, (!hasUnread || markingAll) && styles.markAllDisabled]}
-              onPress={markAllRead}
-              disabled={!hasUnread || markingAll}
-            >
-              <Text style={styles.markAllText}>
-                {markingAll ? "..." : "Mark all"}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.actionCard, styles.clearCard, (notifications.length === 0 || clearing) && styles.markAllDisabled]}
-              onPress={handleClearAll}
-              disabled={notifications.length === 0 || clearing}
-            >
-              <Text style={styles.clearText}>
-                {clearing ? "..." : "Clear"}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
         {notifications.length === 0 ? (
           <View style={styles.empty}>
-            <Ionicons name="notifications-off-outline" size={48} color="#9FE1CB" style={{ marginBottom: 16 }} />
+            <BellOff size={44} color={colors.emeraldSoft} style={{ marginBottom: 16 }} />
             <Text style={styles.emptyText}>No notifications yet.</Text>
           </View>
         ) : (
-          notifications.map((item) => (
-            <TouchableOpacity
-              key={item.id}
-              style={[styles.card, item.read ? styles.cardRead : styles.cardUnread]}
-              onPress={() => markRead(item)}
-              activeOpacity={0.8}
-            >
-              {!item.read && <View style={styles.accentBar} />}
-              <View style={styles.cardBody}>
-                <View style={styles.iconCircle}>
-                  <Ionicons name="notifications-outline" size={18} color="#0F6E56" />
+          notifications.map((item) => {
+            const cat = categorize(item.message);
+            const Icon = cat.icon;
+            return (
+              <TouchableOpacity
+                key={item.id}
+                style={styles.card}
+                onPress={() => markRead(item)}
+                activeOpacity={0.8}
+              >
+                <View style={[styles.iconCircle, { backgroundColor: cat.iconBg }]}>
+                  <Icon size={18} color={cat.iconColor} />
                 </View>
                 <View style={styles.textGroup}>
+                  <Text style={styles.cardTitle}>{cat.title}</Text>
                   <Text style={styles.message}>{item.message}</Text>
-                  <Text style={styles.timestamp}>{formatDate(item.createdAt)}</Text>
+                  <Text style={styles.timestamp}>{relativeTime(item.createdAt)}</Text>
                 </View>
                 {!item.read && <View style={styles.unreadDot} />}
-              </View>
-            </TouchableOpacity>
-          ))
+              </TouchableOpacity>
+            );
+          })
         )}
       </ScrollView>
     </View>
@@ -232,134 +273,126 @@ export default function Notification() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#0F6E56",
+    backgroundColor: colors.parchment,
   },
 
   loading: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#F1EFE8",
+    backgroundColor: colors.parchment,
   },
 
   // ── Header ──────────────────────────────────────
-  header: {
-    backgroundColor: "#0F6E56",
+  headerGradient: {
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    overflow: "hidden",
+    paddingBottom: spacing.xl,
+  },
+
+  headerRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingBottom: 14,
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.lg,
   },
 
-  headerTitle: {
-    flex: 1,
-    textAlign: "center",
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "500",
+  headerIconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "rgba(255,255,255,0.14)",
+    alignItems: "center",
+    justifyContent: "center",
   },
 
-  // ── Action cards ──────────────────────────────────
+  headerRowTitle: {
+    color: colors.white,
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
+  },
+
+  titleBlock: {
+    paddingHorizontal: spacing.xl,
+  },
+
+  pageTitle: {
+    color: colors.white,
+    fontSize: fontSize.xxl,
+    fontFamily: fontFamily.extrabold,
+  },
+
+  pageSubtitle: {
+    color: colors.emeraldSoft,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.medium,
+    marginTop: 2,
+  },
+
+  // ── Floating action pills ─────────────────────────
   actionsRow: {
     flexDirection: "row",
-    gap: 8,
+    gap: spacing.md,
+    marginHorizontal: spacing.xl,
+    marginTop: spacing.lg,
+    marginBottom: spacing.lg,
   },
 
-  actionCard: {
-    borderRadius: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+  actionPill: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: colors.white,
+    borderRadius: radius.pill,
+    paddingVertical: spacing.md,
+    ...shadow.card,
   },
 
-  markAllCard: {
-    backgroundColor: "#1D9E75",
+  actionPillDisabled: {
+    opacity: 0.45,
   },
 
-  clearCard: {
-    backgroundColor: "#E24B4A",
+  actionPillTextGreen: {
+    color: colors.emerald,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
   },
 
-  markAllText: {
-    color: "#fff",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-
-  clearText: {
-    color: "#fff",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-
-  markAllDisabled: {
-    opacity: 0.4,
+  actionPillTextRed: {
+    color: colors.error,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
   },
 
   // ── Body ────────────────────────────────────────
   body: {
     flex: 1,
-    backgroundColor: "#F1EFE8",
   },
 
   bodyContent: {
-    paddingHorizontal: 16,
-    paddingTop: 20,
-  },
-
-  titleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 16,
-  },
-
-  pageTitle: {
-    fontSize: 20,
-    fontWeight: "500",
-    color: "#085041",
+    paddingHorizontal: spacing.lg,
   },
 
   // ── Notification card ─────────────────────────────
   card: {
-    borderRadius: 16,
-    borderWidth: 0.5,
-    marginBottom: 12,
-    flexDirection: "row",
-    overflow: "hidden",
-  },
-
-  cardRead: {
-    backgroundColor: "#fff",
-    borderColor: "#E1F5EE",
-  },
-
-  cardUnread: {
-    backgroundColor: "#f7fdf9",
-    borderColor: "#9FE1CB",
-  },
-
-  accentBar: {
-    width: 3,
-    borderRadius: 2,
-    backgroundColor: "#1D9E75",
-    alignSelf: "stretch",
-    marginRight: 4,
-  },
-
-  cardBody: {
-    flex: 1,
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: 12,
-    padding: 16,
+    gap: spacing.md,
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+    ...shadow.card,
   },
 
   iconCircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: "#E1F5EE",
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -368,23 +401,33 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
+  cardTitle: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+  },
+
   message: {
-    fontSize: 14,
-    color: "#444441",
-    lineHeight: 20,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+    lineHeight: 19,
+    marginTop: 2,
   },
 
   timestamp: {
-    fontSize: 12,
-    color: "#B4B2A9",
-    marginTop: 6,
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.textMuted,
+    letterSpacing: 0.3,
+    marginTop: spacing.sm,
   },
 
   unreadDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#1D9E75",
+    backgroundColor: colors.emeraldBright,
     marginTop: 4,
   },
 
@@ -395,8 +438,9 @@ const styles = StyleSheet.create({
   },
 
   emptyText: {
-    fontSize: 15,
-    color: "#888780",
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
     textAlign: "center",
   },
 });

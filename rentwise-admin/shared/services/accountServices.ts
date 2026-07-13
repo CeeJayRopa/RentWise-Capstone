@@ -32,9 +32,13 @@ export const DEFAULT_TENANT_PASSWORD = "@Tenant123";
 type CreateTenantParams = {
   firstName: string;
   lastName: string;
-  username: string;
   contactNo: string;
   stallId: string;
+  // Required — every tenant account is a real Gmail (or other real email)
+  // address now. That email is directly the account's Firebase Auth
+  // identity; there's no separate username/synthetic-email concept for
+  // tenants anymore (admin/owner accounts are unrelated and unaffected).
+  personalEmail: string;
 };
 
 export const createTenantAccount = async (
@@ -43,25 +47,16 @@ export const createTenantAccount = async (
   const {
     firstName,
     lastName,
-    username,
     contactNo,
     stallId,
+    personalEmail,
   } = params;
-  const email = `${username}@rentwise.app`;
+  const email = personalEmail;
+  // Tenant can log in immediately with the shared default (see the
+  // mustChangePassword gate below) instead of being stuck until they
+  // happen to check their email — the welcome email sent further down is
+  // an *additional*, faster path in, not the only way in.
   const password = DEFAULT_TENANT_PASSWORD;
-
-  // Only block on active users — archived/deleted Firestore records do not
-  // reserve the username (Firebase Auth orphans are handled below)
-  const existing = await getDocs(
-    query(
-      collection(db, "users"),
-      where("username", "==", username),
-      where("status", "==", "active"),
-    ),
-  );
-  if (!existing.empty) {
-    throw new Error("Username is already taken.");
-  }
 
   const appName = `tenant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const secondaryApp = initializeApp(firebaseApp.options, appName);
@@ -96,12 +91,15 @@ export const createTenantAccount = async (
       tx.set(doc(db, "users", uid), {
         firstName,
         lastName,
-        username,
         email,
+        personalEmail,
         contactNo,
         role: "tenant",
         stallId,
         status: "active",
+        // Always starts true — every tenant starts on the shared default
+        // password and must change it via the forced-change screen the
+        // moment they first log in with @Tenant123.
         mustChangePassword: true,
         createdAt: serverTimestamp(),
       });
@@ -141,12 +139,23 @@ export const createTenantAccount = async (
     }
     const e = err as { code?: string };
     if (e.code === "auth/email-already-in-use") {
-      throw new Error("Username is unavailable. If this tenant was recently deleted, please choose a different username.");
+      throw new Error("This email is already in use by another account. If this tenant was recently deleted, that account may need to be fully removed first.");
     }
     throw err;
   } finally {
     await deleteApp(secondaryApp);
   }
+};
+
+// Adds/updates the CALLER's own real email — changes their Firebase Auth
+// account's actual sign-in email (so self-service reset can reach them) and
+// stores it on their Firestore doc. Self-service only — no target uid param,
+// the Cloud Function always acts on request.auth.uid.
+export const syncPersonalEmail = async (personalEmail: string): Promise<void> => {
+  const callerUid = auth.currentUser?.uid;
+  if (!callerUid) throw new Error("Not authenticated.");
+  const syncFn = httpsCallable(cloudFunctions, "syncPersonalEmail");
+  await syncFn({ callerUid, personalEmail });
 };
 
 export const resetTenantPasswordToDefault = async (
@@ -211,6 +220,9 @@ export const archiveTenant = async (uid: string): Promise<void> => {
     originalUid: uid,
     firstName: user.firstName ?? "",
     lastName: user.lastName ?? "",
+    // Legacy accounts still have `username`; new Gmail-based tenants don't
+    // — fall back through whichever fields this particular tenant has.
+    email: user.personalEmail ?? user.email ?? "",
     username: user.username ?? "",
     contactNo: user.contactNo ?? "",
     stallId,
@@ -358,6 +370,76 @@ export const restoreTenant = async (uid: string): Promise<void> => {
     buildingNo: (archive.buildingNumber as string) ?? "",
     oldValue: "Archived",
     newValue: stallReassigned ? "Active Tenant" : "Active (No Stall Assigned)",
+    changedBy: auth.currentUser?.uid ?? "",
+    approvalStatus: "pending",
+  });
+};
+
+// Moves a currently ACTIVE (not archived) tenant straight to a different
+// stall — frees up their old stall in the same batch, so admin doesn't have
+// to archive them first just to reassign a space.
+export const relocateActiveTenant = async (
+  uid: string,
+  oldStallId: string,
+  newStallId: string,
+): Promise<void> => {
+  const userSnap = await getDoc(doc(db, "users", uid));
+  if (!userSnap.exists()) throw new Error("User not found.");
+  const user = userSnap.data();
+  const tenantName = `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim();
+
+  const newStallSnap = await getDoc(doc(db, "stalls", newStallId));
+  if (!newStallSnap.exists()) throw new Error("Selected stall not found.");
+  if (newStallSnap.data().status !== "unoccupied") {
+    throw new Error("Selected stall is no longer available.");
+  }
+  const newSpaceNo = String(newStallSnap.data().spaceId ?? newStallId);
+  const newBuildingNo = String(newStallSnap.data().buildingNumber ?? "");
+
+  let oldSpaceNo = "";
+  let oldBuildingNo = "";
+  // Only clear the old stall if it still actually belongs to this tenant —
+  // same safety check as archiveTenant, guards against a stale stallId.
+  let oldStallBelongsToTenant = false;
+  if (oldStallId) {
+    const oldStallSnap = await getDoc(doc(db, "stalls", oldStallId));
+    if (oldStallSnap.exists()) {
+      const od = oldStallSnap.data();
+      oldSpaceNo = String(od.spaceId ?? oldStallId);
+      oldBuildingNo = String(od.buildingNumber ?? "");
+      oldStallBelongsToTenant = od.tenantId === uid;
+    }
+  }
+
+  const batch = writeBatch(db);
+
+  batch.update(doc(db, "users", uid), { stallId: newStallId });
+
+  batch.update(doc(db, "stalls", newStallId), {
+    tenantId: uid,
+    tenantName,
+    status: "occupied",
+  });
+
+  if (oldStallId && oldStallBelongsToTenant) {
+    batch.update(doc(db, "stalls", oldStallId), {
+      status: "unoccupied",
+      tenantId: null,
+      tenantName: null,
+    });
+  }
+
+  await batch.commit();
+
+  void logDetailedUpdate({
+    module: "Manage Account",
+    type: "Tenant Relocated",
+    tenantId: uid,
+    tenantName,
+    spaceNo: newSpaceNo,
+    buildingNo: newBuildingNo,
+    oldValue: oldSpaceNo ? `Building ${oldBuildingNo} · Space ${oldSpaceNo}` : "—",
+    newValue: `Building ${newBuildingNo} · Space ${newSpaceNo}`,
     changedBy: auth.currentUser?.uid ?? "",
     approvalStatus: "pending",
   });

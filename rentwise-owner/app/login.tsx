@@ -14,11 +14,13 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  Image,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useRef, useEffect } from "react";
 import { router } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Mail, Lock, Eye, EyeOff, AlertCircle, Check } from "lucide-react-native";
 
 import { loginUser } from "../shared/services/auth";
 import { getUserByUsername } from "../shared/services/userServices";
@@ -28,6 +30,8 @@ import {
   resetLockout,
   formatLockoutRemaining,
 } from "../shared/services/loginLockout";
+import { setRememberMe } from "../shared/services/rememberMe";
+import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -42,6 +46,7 @@ export default function Login() {
   const [passwordFocused, setPasswordFocused] = useState(false);
   const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
   const [, setLockoutTick] = useState(0);
+  const [rememberMe, setRememberMeChecked] = useState(false);
 
   const pulseScale = useRef(new Animated.Value(0.92)).current;
   const pulseOpacity = useRef(new Animated.Value(0.6)).current;
@@ -176,6 +181,7 @@ export default function Login() {
         return;
       }
       await resetLockout(identifier);
+      await setRememberMe(rememberMe);
       router.replace("/welcome");
     } catch {
       const { lockoutUntil: newLockout, remainingAttempts, lockoutLevel } =
@@ -200,7 +206,7 @@ export default function Login() {
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: "#0C2D6B" }}
+      style={{ flex: 1, backgroundColor: colors.emerald }}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <ScrollView
@@ -212,8 +218,13 @@ export default function Login() {
       >
         <View style={{ flex: 1, minHeight: SCREEN_HEIGHT }}>
 
-          {/* Top navy section */}
-          <View style={[styles.topSection, { paddingTop: insets.top + 24 }]}>
+          {/* Top gradient hero */}
+          <LinearGradient
+            colors={[colors.emerald, colors.ink]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[styles.topSection, { paddingTop: insets.top + 24 }]}
+          >
             <Animated.View style={[styles.logoGroup, slideIn(logoAnim)]}>
               <Animated.View
                 style={[
@@ -221,17 +232,23 @@ export default function Login() {
                   { transform: [{ scale: pulseScale }], opacity: pulseOpacity },
                 ]}
               />
-              <View style={styles.logoCircle}>
-                <Ionicons name="business-outline" size={28} color="#0C2D6B" />
-              </View>
+              <LinearGradient
+                colors={[colors.emerald, colors.ink]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.logoCircle}
+              >
+                <Image
+                  source={require("../assets/rentwise-icon.png")}
+                  style={styles.logoImage}
+                  resizeMode="contain"
+                />
+              </LinearGradient>
             </Animated.View>
             <Animated.Text style={[styles.appName, slideIn(logoAnim)]}>
-              RentWise
-            </Animated.Text>
-            <Animated.Text style={[styles.portalText, slideIn(logoAnim)]}>
               Owner portal
             </Animated.Text>
-          </View>
+          </LinearGradient>
 
           {/* White card */}
           <View style={[styles.card, { paddingBottom: Math.max(insets.bottom, 24) }]}>
@@ -243,17 +260,17 @@ export default function Login() {
             </Animated.View>
 
             {/* Email field */}
-            <Animated.View style={[{ marginTop: 24 }, slideIn(emailAnim)]}>
+            <Animated.View style={[{ marginTop: spacing.xxl }, slideIn(emailAnim)]}>
               <Text style={styles.fieldLabel}>Email</Text>
               <View style={styles.inputWrapper}>
-                <Ionicons name="mail-outline" size={17} color="#2E6FD9" style={styles.leftIcon} />
+                <Mail size={17} color={colors.emeraldBright} style={styles.leftIcon} />
                 <TextInput
                   ref={emailInputRef}
                   style={[styles.textInput, emailFocused && styles.textInputFocused]}
                   value={username}
                   onChangeText={(t) => { setUsername(t); setError(""); }}
                   placeholder="username@rentwise.app"
-                  placeholderTextColor="#B4B2A9"
+                  placeholderTextColor={colors.textMuted}
                   autoCapitalize="none"
                   autoCorrect={false}
                   keyboardType="email-address"
@@ -268,7 +285,7 @@ export default function Login() {
             </Animated.View>
 
             {/* Password field */}
-            <Animated.View style={[{ marginTop: 16 }, slideIn(passwordAnim)]}>
+            <Animated.View style={[{ marginTop: spacing.lg }, slideIn(passwordAnim)]}>
               <View style={styles.labelRow}>
                 <Text style={styles.fieldLabel}>Password</Text>
                 <Pressable onPress={() => router.push("/owner-forgot-password")}>
@@ -276,7 +293,7 @@ export default function Login() {
                 </Pressable>
               </View>
               <View style={styles.inputWrapper}>
-                <Ionicons name="lock-closed-outline" size={17} color="#2E6FD9" style={styles.leftIcon} />
+                <Lock size={17} color={colors.emeraldBright} style={styles.leftIcon} />
                 <TextInput
                   ref={passwordInputRef}
                   style={[styles.textInput, passwordFocused && styles.textInputFocused]}
@@ -284,7 +301,7 @@ export default function Login() {
                   onChangeText={(t) => { setPassword(t); setError(""); }}
                   secureTextEntry={!showPassword}
                   placeholder="Enter your password"
-                  placeholderTextColor="#B4B2A9"
+                  placeholderTextColor={colors.textMuted}
                   editable={!loading && !lockoutUntil}
                   onFocus={() => { setPasswordFocused(true); scrollToRevealForm(); }}
                   onBlur={() => setPasswordFocused(false)}
@@ -294,43 +311,51 @@ export default function Login() {
                   onPress={() => setShowPassword((v) => !v)}
                   activeOpacity={0.7}
                 >
-                  <Ionicons
-                    name={showPassword ? "eye-outline" : "eye-off-outline"}
-                    size={17}
-                    color="#B4B2A9"
-                  />
+                  {showPassword ? <Eye size={17} color={colors.textMuted} /> : <EyeOff size={17} color={colors.textMuted} />}
                 </TouchableOpacity>
               </View>
+
+              {/* Remember me */}
+              <Pressable
+                style={styles.rememberMeRow}
+                onPress={() => setRememberMeChecked((v) => !v)}
+                hitSlop={8}
+              >
+                <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
+                  {rememberMe && <Check size={13} color={colors.white} />}
+                </View>
+                <Text style={styles.rememberMeText}>Remember me</Text>
+              </Pressable>
             </Animated.View>
 
             {/* Lockout / error banner */}
             {lockoutUntil ? (
               <View style={styles.errorBanner}>
-                <Ionicons name="alert-circle-outline" size={16} color="#A32D2D" style={{ marginRight: 8 }} />
+                <AlertCircle size={16} color={colors.error} style={{ marginRight: 8 }} />
                 <Text style={styles.errorText}>
                   Too many failed attempts. Try again in {formatLockoutRemaining(lockoutUntil)}.
                 </Text>
               </View>
             ) : !!error && (
               <View style={styles.errorBanner}>
-                <Ionicons name="alert-circle-outline" size={16} color="#A32D2D" style={{ marginRight: 8 }} />
+                <AlertCircle size={16} color={colors.error} style={{ marginRight: 8 }} />
                 <Text style={styles.errorText}>{error}</Text>
               </View>
             )}
 
             {/* Sign in button */}
-            <Animated.View ref={buttonRef} style={[{ marginTop: 28 }, slideIn(buttonAnim)]}>
+            <Animated.View ref={buttonRef} style={[{ marginTop: spacing.xxl + 4 }, slideIn(buttonAnim)]}>
               <Pressable
                 style={({ pressed }) => [
                   styles.signInBtn,
                   (loading || !!lockoutUntil) && styles.signInBtnDisabled,
-                  pressed && !loading && !lockoutUntil && { backgroundColor: "#091f4a", transform: [{ scale: 0.98 }] },
+                  pressed && !loading && !lockoutUntil && { backgroundColor: colors.ink, transform: [{ scale: 0.98 }] },
                 ]}
                 onPress={handleLogin}
                 disabled={loading || !!lockoutUntil}
               >
                 {loading ? (
-                  <ActivityIndicator color="#fff" size="small" />
+                  <ActivityIndicator color={colors.white} size="small" />
                 ) : (
                   <Text style={styles.signInText}>Sign in</Text>
                 )}
@@ -347,9 +372,6 @@ export default function Login() {
 const styles = StyleSheet.create({
   topSection: {
     height: SCREEN_HEIGHT * 0.38,
-    backgroundColor: "#0C2D6B",
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
     alignItems: "center",
     justifyContent: "center",
     paddingBottom: 32,
@@ -366,56 +388,56 @@ const styles = StyleSheet.create({
     width: 84,
     height: 84,
     borderRadius: 999,
-    backgroundColor: "#7AAEF0",
+    backgroundColor: colors.emeraldBright,
   },
 
   logoCircle: {
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: "#E6F1FB",
+    overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
   },
 
-  appName: {
-    color: "#FFFFFF",
-    fontSize: 26,
-    fontWeight: "500",
+  logoImage: {
+    width: 64,
+    height: 64,
   },
 
-  portalText: {
-    color: "#B5D4F4",
-    fontSize: 13,
-    marginTop: 4,
+  appName: {
+    color: colors.white,
+    fontSize: fontSize.xxl + 2,
+    fontFamily: fontFamily.bold,
   },
 
   card: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    marginTop: -16,
-    paddingHorizontal: 28,
-    paddingTop: 28,
+    backgroundColor: colors.white,
+    borderTopLeftRadius: radius.xl + 4,
+    borderTopRightRadius: radius.xl + 4,
+    marginTop: -(radius.xl + 4),
+    paddingHorizontal: spacing.xxl + 4,
+    paddingTop: spacing.xxl + 4,
   },
 
   heading: {
-    fontSize: 22,
-    fontWeight: "500",
-    color: "#0C2D6B",
+    fontSize: fontSize.xl + 2,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
   },
 
   subheading: {
-    fontSize: 14,
-    color: "#888780",
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
     marginTop: 2,
   },
 
   fieldLabel: {
-    fontSize: 13,
-    fontWeight: "500",
-    color: "#1A4DA0",
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
     marginBottom: 6,
   },
 
@@ -427,8 +449,35 @@ const styles = StyleSheet.create({
   },
 
   forgotText: {
-    fontSize: 12,
-    color: "#2E6FD9",
+    fontSize: fontSize.xs + 1,
+    color: colors.emeraldBright,
+    fontFamily: fontFamily.semibold,
+  },
+
+  rememberMeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: spacing.md,
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: colors.emeraldSoft,
+    backgroundColor: colors.white,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: spacing.sm,
+  },
+  checkboxChecked: {
+    backgroundColor: colors.emerald,
+    borderColor: colors.emerald,
+  },
+  rememberMeText: {
+    fontSize: fontSize.sm,
+    color: colors.ink,
+    fontFamily: fontFamily.medium,
   },
 
   inputWrapper: {
@@ -452,43 +501,47 @@ const styles = StyleSheet.create({
 
   textInput: {
     flex: 1,
-    borderRadius: 12,
+    borderRadius: radius.md,
     borderWidth: 1.5,
-    borderColor: "#B5D4F4",
-    backgroundColor: "#F0F4FA",
+    borderColor: colors.emeraldSoft,
+    backgroundColor: colors.mist,
     paddingVertical: 13,
     paddingLeft: 40,
     paddingRight: 40,
-    color: "#0C2D6B",
-    fontSize: 15,
+    color: colors.ink,
+    fontFamily: fontFamily.medium,
+    fontSize: fontSize.base,
   },
 
   textInputFocused: {
-    borderColor: "#2E6FD9",
+    borderColor: colors.emeraldBright,
+    backgroundColor: colors.white,
   },
 
   errorBanner: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 12,
-    backgroundColor: "#FCEBEB",
-    borderRadius: 8,
+    marginTop: spacing.md,
+    backgroundColor: colors.errorSoft,
+    borderRadius: radius.sm - 2,
     paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingHorizontal: spacing.lg - 2,
   },
 
   errorText: {
-    fontSize: 13,
-    color: "#A32D2D",
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.medium,
+    color: colors.error,
     flex: 1,
   },
 
   signInBtn: {
     width: "100%",
-    borderRadius: 14,
-    backgroundColor: "#0C2D6B",
+    borderRadius: radius.md + 2,
+    backgroundColor: colors.emerald,
     paddingVertical: 15,
     alignItems: "center",
+    ...shadow.button,
   },
 
   signInBtnDisabled: {
@@ -496,9 +549,9 @@ const styles = StyleSheet.create({
   },
 
   signInText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "500",
+    color: colors.white,
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
     textAlign: "center",
   },
 });

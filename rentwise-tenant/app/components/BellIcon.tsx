@@ -2,10 +2,11 @@ import { View, TouchableOpacity, StyleSheet } from "react-native";
 import { useEffect, useState } from "react";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { router } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Bell } from "lucide-react-native";
 
 import { auth } from "../../shared/firebaseConfig";
 import { db } from "../../shared/services/firestore";
+import { colors } from "../../shared/theme";
 
 export default function BellIcon() {
   const [unreadCount, setUnreadCount] = useState(0);
@@ -33,7 +34,7 @@ export default function BellIcon() {
       onPress={() => router.push("/notification")}
       activeOpacity={0.7}
     >
-      <Ionicons name="notifications-outline" size={24} color="#E1F5EE" />
+      <Bell size={24} color={colors.white} />
       {unreadCount > 0 && <View style={styles.dot} />}
     </TouchableOpacity>
   );
@@ -41,15 +42,20 @@ export default function BellIcon() {
 
 const styles = StyleSheet.create({
   btn: {
-    padding: 4,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.16)",
+    alignItems: "center",
+    justifyContent: "center",
   },
   dot: {
     position: "absolute",
-    top: 2,
-    right: 2,
+    top: 9,
+    right: 10,
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#EF9F27",
+    backgroundColor: colors.gold,
   },
 });

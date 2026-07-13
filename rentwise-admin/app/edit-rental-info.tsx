@@ -4,8 +4,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  Pressable,
-  ScrollView,
   Animated,
   Easing,
   ActivityIndicator,
@@ -14,16 +12,22 @@ import {
   StyleSheet,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import { LinearGradient } from "expo-linear-gradient";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { doc, getDoc, onSnapshot, updateDoc } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
+import { ArrowLeft, House, Ruler, CheckCircle2, HelpCircle } from "lucide-react-native";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
 import { logDetailedUpdate } from "../shared/services/updatesService";
+import HelpTour, { HelpStep } from "./components/HelpTour";
+import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
+import { Button } from "../shared/components/ui";
+import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 type Schedule = "daily" | "weekly" | "semi-monthly" | "monthly";
+type MarketCategory = "Wet Market" | "Dry Market" | "Home Essential";
 
 export default function EditRentalInfo() {
   const insets = useSafeAreaInsets();
@@ -38,18 +42,21 @@ export default function EditRentalInfo() {
   // Read-only context display
   const [spaceId, setSpaceId] = useState("");
   const [buildingNumber, setBuildingNumber] = useState("");
+  const [tenantName, setTenantName] = useState("");
 
   // Editable fields (string so TextInput stays controlled)
   const [length, setLength] = useState("");
   const [width, setWidth] = useState("");
   const [rentalRate, setRentalRate] = useState("");
   const [paymentSchedule, setPaymentSchedule] = useState<Schedule>("monthly");
+  const [category, setCategory] = useState<MarketCategory | "">("");
 
   const originalRef = useRef<{
     length: string;
     width: string;
     rentalRate: string;
     paymentSchedule: Schedule;
+    category: MarketCategory | "";
   } | null>(null);
 
   // Per-field validation errors
@@ -57,6 +64,7 @@ export default function EditRentalInfo() {
   const [widthError, setWidthError] = useState("");
   const [rateError, setRateError] = useState("");
   const [scheduleError, setScheduleError] = useState("");
+  const [categoryError, setCategoryError] = useState("");
 
   // Submit state
   const [saving, setSaving] = useState(false);
@@ -68,6 +76,30 @@ export default function EditRentalInfo() {
   const [focusedField, setFocusedField] = useState<string | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(20)).current;
+
+  const isEditingRef = useRef(isEditing);
+  useEffect(() => {
+    isEditingRef.current = isEditing;
+  }, [isEditing]);
+
+  const [tourVisible, setTourVisible] = useState(false);
+  const helpRef = useRef<View>(null);
+  const stallPillRef = useRef<View>(null);
+  const categoryRef = useRef<View>(null);
+  const dimensionsRef = useRef<View>(null);
+  const rateRef = useRef<View>(null);
+  const scheduleRef = useRef<View>(null);
+  const modifyBtnRef = useRef<View>(null);
+
+  const tourSteps: HelpStep[] = [
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", offsetY: 41, round: true },
+    { key: "stall", ref: stallPillRef, title: "Stall", description: "The stall whose rental info you're editing.", offsetY: 41 },
+    { key: "category", ref: categoryRef, title: "Market category", description: "The kind of goods sold at this stall.", offsetY: 41 },
+    { key: "dimensions", ref: dimensionsRef, title: "Length & width", description: "The stall's physical dimensions, in meters.", offsetY: 41 },
+    { key: "rate", ref: rateRef, title: "Rental rate", description: "The stall's charge per billing period.", offsetY: 41 },
+    { key: "schedule", ref: scheduleRef, title: "Payment schedule", description: "How often rent is due — daily, weekly, semi-monthly, or monthly.", offsetY: 41 },
+    { key: "modify", ref: modifyBtnRef, title: "Modify Rental Info", description: "Unlocks the fields above so you can update them, then saves your changes.", offsetY: 41 },
+  ];
 
   useEffect(() => {
     return () => {
@@ -91,6 +123,35 @@ export default function EditRentalInfo() {
     });
     return unsubscribe;
   }, [stallId]);
+
+  // Live-syncs market category with the stall doc — the tenant can change
+  // it from their own profile and it shows up here (and vice versa)
+  // without needing to reopen the page. Skipped while actively editing so
+  // an incoming update can't clobber a selection that hasn't been saved yet.
+  useEffect(() => {
+    if (!stallId) return;
+    const unsub = onSnapshot(doc(db, "stalls", stallId), (snap) => {
+      if (!snap.exists() || isEditingRef.current) return;
+      const liveCategory = ((snap.data().category as string) || "") as MarketCategory | "";
+      setCategory(liveCategory);
+      if (originalRef.current) originalRef.current.category = liveCategory;
+    });
+    return unsub;
+  }, [stallId]);
+
+  // Auto-opens the guided tour the first time the admin ever lands on this
+  // page — never again after that, since it flips a persisted per-device
+  // flag. Can still be replayed anytime via the Help button.
+  useEffect(() => {
+    if (checking) return;
+    (async () => {
+      const seen = await hasSeenPageTour("edit-rental-info");
+      if (!seen) {
+        setTourVisible(true);
+        await markPageTourSeen("edit-rental-info");
+      }
+    })();
+  }, [checking]);
 
   // Trigger toast animation when save succeeds
   useEffect(() => {
@@ -128,12 +189,26 @@ export default function EditRentalInfo() {
       setPaymentSchedule(
         ((data.paymentSchedule as string) || "monthly") as Schedule,
       );
+      const loadedCategory = ((data.category as string) || "") as MarketCategory | "";
+      setCategory(loadedCategory);
       originalRef.current = {
         length: String(data.length ?? ""),
         width: String(data.width ?? ""),
         rentalRate: String(data.price ?? ""),
         paymentSchedule: ((data.paymentSchedule as string) || "monthly") as Schedule,
+        category: loadedCategory,
       };
+
+      const tenantId = (data.tenantId as string) ?? "";
+      if (tenantId) {
+        const tenantSnap = await getDoc(doc(db, "users", tenantId));
+        if (tenantSnap.exists()) {
+          const td = tenantSnap.data();
+          setTenantName(`${td.firstName ?? ""} ${td.lastName ?? ""}`.trim());
+        }
+      } else {
+        setTenantName("");
+      }
     } catch (err) {
       console.error("EDIT RENTAL INFO FETCH ERROR:", err);
       setLoadError("Failed to load stall data. Please try again.");
@@ -176,6 +251,13 @@ export default function EditRentalInfo() {
       setScheduleError("");
     }
 
+    if (!category) {
+      setCategoryError("Please select a market category.");
+      valid = false;
+    } else {
+      setCategoryError("");
+    }
+
     return valid;
   };
 
@@ -190,6 +272,7 @@ export default function EditRentalInfo() {
         width: parseFloat(width),
         price: parseFloat(rentalRate), // field in Firestore is `price`, not `rentalRate`
         paymentSchedule,
+        category,
       });
 
       const orig = originalRef.current;
@@ -211,6 +294,13 @@ export default function EditRentalInfo() {
             field: "Payment Schedule",
             old: cap(orig.paymentSchedule),
             newV: cap(paymentSchedule),
+          });
+        }
+        if (category !== orig.category) {
+          changes.push({
+            field: "Market Category",
+            old: orig.category || "—",
+            newV: category || "—",
           });
         }
         for (const c of changes) {
@@ -246,7 +336,7 @@ export default function EditRentalInfo() {
   if (checking) {
     return (
       <View style={styles.fullCenter}>
-        <ActivityIndicator color="#0C2D6B" size="large" />
+        <ActivityIndicator color={colors.emerald} size="large" />
       </View>
     );
   }
@@ -254,29 +344,36 @@ export default function EditRentalInfo() {
   return (
     <View style={styles.screen}>
       {/* HEADER */}
-      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
-          <Ionicons name="arrow-back" size={22} color="#E6F1FB" />
+      <LinearGradient
+        colors={[colors.emerald, colors.ink]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[styles.header, { paddingTop: insets.top + 14 }]}
+      >
+        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7} hitSlop={8}>
+          <ArrowLeft size={22} color={colors.white} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Edit rental info</Text>
-        <View style={{ width: 22 }} />
-      </View>
+        <View ref={helpRef} collapsable={false}>
+          <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} hitSlop={8}>
+            <HelpCircle size={22} color={colors.white} />
+          </TouchableOpacity>
+        </View>
+      </LinearGradient>
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
-        <ScrollView
-          contentContainerStyle={[
+        <View
+          style={[
             styles.scrollContent,
-            { paddingBottom: insets.bottom + 32 },
+            { flex: 1, paddingBottom: insets.bottom + 32 },
           ]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
         >
           {loading ? (
             <View style={styles.centeredBox}>
-              <ActivityIndicator color="#0C2D6B" size="large" />
+              <ActivityIndicator color={colors.emerald} size="large" />
             </View>
           ) : loadError ? (
             <View style={styles.centeredBox}>
@@ -292,87 +389,129 @@ export default function EditRentalInfo() {
           ) : (
             <>
               {/* STALL ID PILL */}
-              <View style={styles.stallPill}>
-                <Ionicons
-                  name="storefront-outline"
-                  size={16}
-                  color="#0C2D6B"
-                  style={{ marginRight: 10 }}
-                />
+              <View style={styles.stallPill} ref={stallPillRef} collapsable={false}>
+                <House size={16} color={colors.emerald} style={{ marginRight: 10 }} />
                 <Text style={styles.stallPillText}>
                   Building {buildingNumber} {"·"} Space ID: {spaceId}
                 </Text>
               </View>
 
-              {/* LENGTH */}
+              {/* TENANT NAME */}
               <View style={styles.field}>
-                <Text style={styles.fieldLabel}>Length (m)</Text>
-                <TextInput
-                  style={[
-                    styles.input,
-                    !isEditing && styles.inputReadOnly,
-                    focusedField === "length" && styles.inputFocused,
-                    lengthError ? styles.inputError : null,
-                  ]}
-                  keyboardType="numeric"
-                  placeholder="e.g. 3"
-                  placeholderTextColor="#B4B2A9"
-                  value={length}
-                  onChangeText={(t) => {
-                    setLength(t);
-                    if (lengthError) setLengthError("");
-                  }}
-                  onFocus={() => setFocusedField("length")}
-                  onBlur={() => setFocusedField(null)}
-                  editable={isEditing && !saving && !saved}
-                />
-                {lengthError ? <Text style={styles.fieldError}>{lengthError}</Text> : null}
+                <Text style={styles.tenantLabel}>Tenant</Text>
+                <Text style={styles.tenantNameText}>{tenantName || "— No tenant assigned —"}</Text>
               </View>
 
-              {/* WIDTH */}
-              <View style={styles.field}>
-                <Text style={styles.fieldLabel}>Width (m)</Text>
-                <TextInput
-                  style={[
-                    styles.input,
-                    !isEditing && styles.inputReadOnly,
-                    focusedField === "width" && styles.inputFocused,
-                    widthError ? styles.inputError : null,
-                  ]}
-                  keyboardType="numeric"
-                  placeholder="e.g. 2"
-                  placeholderTextColor="#B4B2A9"
-                  value={width}
-                  onChangeText={(t) => {
-                    setWidth(t);
-                    if (widthError) setWidthError("");
-                  }}
-                  onFocus={() => setFocusedField("width")}
-                  onBlur={() => setFocusedField(null)}
-                  editable={isEditing && !saving && !saved}
-                />
-                {widthError ? <Text style={styles.fieldError}>{widthError}</Text> : null}
+              {/* MARKET CATEGORY */}
+              <View style={styles.field} ref={categoryRef} collapsable={false}>
+                <Text style={styles.fieldLabel}>Market category</Text>
+                <View style={[styles.scheduleRow, !isEditing && styles.scheduleRowReadOnly]}>
+                  {(["Wet Market", "Dry Market", "Home Essential"] as const).map((c) => (
+                    <TouchableOpacity
+                      key={c}
+                      style={[
+                        styles.scheduleTab,
+                        category === c && styles.scheduleTabActive,
+                      ]}
+                      onPress={() => {
+                        setCategory(c);
+                        if (categoryError) setCategoryError("");
+                      }}
+                      activeOpacity={0.7}
+                      disabled={!isEditing || saving || saved}
+                    >
+                      <Text
+                        style={[
+                          styles.scheduleTabText,
+                          category === c && styles.scheduleTabTextActive,
+                        ]}
+                      >
+                        {c}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                {categoryError ? <Text style={styles.fieldError}>{categoryError}</Text> : null}
+              </View>
+
+              {/* LENGTH & WIDTH */}
+              <View style={styles.dimensionsRow} ref={dimensionsRef} collapsable={false}>
+                <View style={[styles.field, styles.dimensionField]}>
+                  <Text style={styles.fieldLabel}>Length (m)</Text>
+                  <View
+                    style={[
+                      styles.inputWrapper,
+                      !isEditing && styles.inputWrapperReadOnly,
+                      focusedField === "length" && styles.inputWrapperFocused,
+                      lengthError ? styles.inputWrapperError : null,
+                    ]}
+                  >
+                    <Ruler size={16} color={colors.textSecondary} style={styles.leftIcon} />
+                    <TextInput
+                      style={[styles.textInput, !isEditing && styles.textInputReadOnly]}
+                      keyboardType="numeric"
+                      placeholder="e.g. 3"
+                      placeholderTextColor={colors.textMuted}
+                      value={length}
+                      onChangeText={(t) => {
+                        setLength(t);
+                        if (lengthError) setLengthError("");
+                      }}
+                      onFocus={() => setFocusedField("length")}
+                      onBlur={() => setFocusedField(null)}
+                      editable={isEditing && !saving && !saved}
+                    />
+                  </View>
+                  {lengthError ? <Text style={styles.fieldError}>{lengthError}</Text> : null}
+                </View>
+
+                <View style={[styles.field, styles.dimensionField]}>
+                  <Text style={styles.fieldLabel}>Width (m)</Text>
+                  <View
+                    style={[
+                      styles.inputWrapper,
+                      !isEditing && styles.inputWrapperReadOnly,
+                      focusedField === "width" && styles.inputWrapperFocused,
+                      widthError ? styles.inputWrapperError : null,
+                    ]}
+                  >
+                    <Ruler size={16} color={colors.textSecondary} style={styles.leftIcon} />
+                    <TextInput
+                      style={[styles.textInput, !isEditing && styles.textInputReadOnly]}
+                      keyboardType="numeric"
+                      placeholder="e.g. 2"
+                      placeholderTextColor={colors.textMuted}
+                      value={width}
+                      onChangeText={(t) => {
+                        setWidth(t);
+                        if (widthError) setWidthError("");
+                      }}
+                      onFocus={() => setFocusedField("width")}
+                      onBlur={() => setFocusedField(null)}
+                      editable={isEditing && !saving && !saved}
+                    />
+                  </View>
+                  {widthError ? <Text style={styles.fieldError}>{widthError}</Text> : null}
+                </View>
               </View>
 
               {/* RENTAL RATE */}
-              <View style={styles.field}>
+              <View style={styles.field} ref={rateRef} collapsable={false}>
                 <Text style={styles.fieldLabel}>Rental rate</Text>
                 <View
                   style={[
-                    styles.currencyRow,
-                    !isEditing && styles.currencyRowReadOnly,
-                    focusedField === "rate" && styles.currencyRowFocused,
-                    rateError ? styles.inputError : null,
+                    styles.inputWrapper,
+                    !isEditing && styles.inputWrapperReadOnly,
+                    focusedField === "rate" && styles.inputWrapperFocused,
+                    rateError ? styles.inputWrapperError : null,
                   ]}
                 >
-                  <View style={styles.currencyPrefix}>
-                    <Text style={styles.currencySymbol}>₱</Text>
-                  </View>
+                  <Text style={[styles.leftIcon, styles.currencySymbol]}>₱</Text>
                   <TextInput
-                    style={[styles.currencyInput, !isEditing && styles.inputReadOnly]}
+                    style={[styles.textInput, !isEditing && styles.textInputReadOnly]}
                     keyboardType="numeric"
                     placeholder="0"
-                    placeholderTextColor="#B4B2A9"
+                    placeholderTextColor={colors.textMuted}
                     value={rentalRate}
                     onChangeText={(t) => {
                       setRentalRate(t);
@@ -387,7 +526,7 @@ export default function EditRentalInfo() {
               </View>
 
               {/* PAYMENT SCHEDULE */}
-              <View style={[styles.field, { marginTop: 4, marginBottom: 24 }]}>
+              <View style={[styles.field, { marginTop: 4, marginBottom: 24 }]} ref={scheduleRef} collapsable={false}>
                 <Text style={styles.fieldLabel}>Payment schedule</Text>
                 <View style={[styles.scheduleRow, !isEditing && styles.scheduleRowReadOnly]}>
                   {(["daily", "weekly", "semi-monthly", "monthly"] as const).map((s) => (
@@ -422,37 +561,31 @@ export default function EditRentalInfo() {
               {saveError ? <Text style={styles.saveError}>{saveError}</Text> : null}
 
               {/* EDIT / SAVE BUTTON */}
-              <Pressable
-                style={({ pressed }) => [
-                  styles.saveBtn,
-                  (saving || saved) && styles.saveBtnDisabled,
-                  pressed && !saving && !saved && styles.saveBtnPressed,
-                ]}
-                onPress={isEditing ? handleSave : () => setIsEditing(true)}
-                disabled={saving || saved}
-              >
-                {saving ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <Text style={styles.saveBtnText}>
-                    {isEditing ? "Save changes" : "Modify Rental Info"}
-                  </Text>
-                )}
-              </Pressable>
+              <View ref={modifyBtnRef} collapsable={false}>
+                <Button
+                  label={isEditing ? "Save changes" : "Modify Rental Info"}
+                  onPress={isEditing ? handleSave : () => setIsEditing(true)}
+                  loading={saving}
+                  disabled={saving || saved}
+                  style={styles.modifyBtn}
+                />
+              </View>
             </>
           )}
-        </ScrollView>
+        </View>
       </KeyboardAvoidingView>
 
       {/* SUCCESS TOAST */}
       {saved && (
         <Animated.View style={[styles.overlay, { opacity: fadeAnim }]}>
           <Animated.View style={[styles.toast, { transform: [{ translateY: toastTranslateY }] }]}>
-            <Ionicons name="checkmark-circle" size={22} color="#7AAEF0" />
+            <CheckCircle2 size={22} color={colors.emeraldBright} />
             <Text style={styles.toastText}>Rental Info Updated</Text>
           </Animated.View>
         </Animated.View>
       )}
+
+      <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
     </View>
   );
 }
@@ -460,29 +593,31 @@ export default function EditRentalInfo() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "#F0F4FA",
+    backgroundColor: colors.parchment,
   },
 
   fullCenter: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
+    backgroundColor: colors.parchment,
   },
 
   // ── Header ────────────────────────────────────────────────────────────────────
 
   header: {
-    backgroundColor: "#0C2D6B",
-    paddingHorizontal: 20,
-    paddingBottom: 14,
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.lg - 2,
     flexDirection: "row",
     alignItems: "center",
+    borderBottomLeftRadius: radius.xl + 4,
+    borderBottomRightRadius: radius.xl + 4,
   },
 
   headerTitle: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "500",
+    color: colors.white,
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.semibold,
     flex: 1,
     textAlign: "center",
   },
@@ -490,8 +625,8 @@ const styles = StyleSheet.create({
   // ── Body ─────────────────────────────────────────────────────────────────────
 
   scrollContent: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
   },
 
   centeredBox: {
@@ -500,128 +635,137 @@ const styles = StyleSheet.create({
   },
 
   loadErrorText: {
-    fontSize: 15,
-    color: "#A32D2D",
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.medium,
+    color: colors.error,
     textAlign: "center",
-    marginBottom: 16,
+    marginBottom: spacing.lg,
   },
 
-  backLink: { paddingVertical: 8, paddingHorizontal: 16 },
-  backLinkText: { fontSize: 14, fontWeight: "600", color: "#0C2D6B" },
+  backLink: { paddingVertical: spacing.sm, paddingHorizontal: spacing.lg },
+  backLinkText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.emerald },
 
   // ── Stall ID pill ─────────────────────────────────────────────────────────────
 
   stallPill: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    paddingHorizontal: 18,
-    paddingVertical: 14,
-    borderWidth: 0.5,
-    borderColor: "#B5D4F4",
-    borderLeftWidth: 4,
-    borderLeftColor: "#0C2D6B",
-    marginBottom: 24,
     flexDirection: "row",
     alignItems: "center",
+    alignSelf: "flex-start",
+    backgroundColor: colors.mist,
+    borderRadius: radius.pill,
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.xxl,
   },
 
   stallPillText: {
-    fontSize: 15,
-    fontWeight: "500",
-    color: "#0C2D6B",
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
+    flexShrink: 1,
   },
 
   // ── Fields ────────────────────────────────────────────────────────────────────
 
   field: {
-    marginBottom: 16,
+    marginBottom: spacing.lg,
   },
 
   fieldLabel: {
-    fontSize: 13,
-    fontWeight: "500",
-    color: "#1A4DA0",
-    marginBottom: 6,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
+    marginBottom: spacing.xs + 2,
   },
 
-  input: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
+  tenantLabel: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: spacing.xs + 2,
+  },
+
+  tenantNameText: {
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+  },
+
+  dimensionsRow: {
+    flexDirection: "row",
+    gap: spacing.md,
+  },
+
+  dimensionField: {
+    flex: 1,
+  },
+
+  inputWrapper: {
+    position: "relative",
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    ...shadow.subtle,
+  },
+
+  inputWrapperFocused: {
     borderWidth: 1.5,
-    borderColor: "#B5D4F4",
-    paddingHorizontal: 16,
+    borderColor: colors.emerald,
+  },
+
+  inputWrapperReadOnly: {
+    opacity: 0.65,
+  },
+
+  inputWrapperError: {
+    borderWidth: 1.5,
+    borderColor: colors.error,
+  },
+
+  leftIcon: {
+    position: "absolute",
+    left: spacing.md + 1,
+    zIndex: 1,
+  },
+
+  textInput: {
+    flex: 1,
     paddingVertical: 13,
-    fontSize: 15,
-    color: "#0C2D6B",
+    paddingLeft: 40,
+    paddingRight: spacing.md,
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
   },
 
-  inputFocused: {
-    borderColor: "#2E6FD9",
-  },
-
-  inputReadOnly: {
-    backgroundColor: "#EEF2FA",
-    color: "#6B87B8",
-  },
-
-  inputError: {
-    borderColor: "#A32D2D",
+  textInputReadOnly: {
+    color: colors.textMuted,
   },
 
   fieldError: {
-    fontSize: 12,
-    color: "#A32D2D",
-    marginTop: 4,
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.medium,
+    color: colors.error,
+    marginTop: spacing.xs,
   },
 
   // ── Rental Rate ───────────────────────────────────────────────────────────────
 
-  currencyRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: "#B5D4F4",
-    overflow: "hidden",
-  },
-
-  currencyRowFocused: {
-    borderColor: "#2E6FD9",
-  },
-
-  currencyRowReadOnly: {
-    backgroundColor: "#EEF2FA",
-  },
-
-  currencyPrefix: {
-    backgroundColor: "#E6F1FB",
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    borderRightWidth: 1,
-    borderRightColor: "#B5D4F4",
-  },
-
   currencySymbol: {
-    fontSize: 15,
-    fontWeight: "500",
-    color: "#0C2D6B",
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.semibold,
+    color: colors.textSecondary,
   },
 
-  currencyInput: {
-    flex: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    fontSize: 15,
-    color: "#0C2D6B",
-  },
-
-  // ── Payment schedule tabs ─────────────────────────────────────────────────────
+  // ── Payment schedule / category tabs ──────────────────────────────────────────
 
   scheduleRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 10,
+    gap: spacing.sm + 2,
     marginTop: 2,
   },
 
@@ -632,66 +776,42 @@ const styles = StyleSheet.create({
   scheduleTab: {
     flexBasis: "47%",
     flexGrow: 1,
-    paddingVertical: 11,
-    paddingHorizontal: 6,
-    borderRadius: 10,
+    paddingVertical: spacing.md - 1,
+    paddingHorizontal: spacing.sm - 2,
+    borderRadius: radius.pill,
     alignItems: "center",
-    backgroundColor: "#fff",
-    borderWidth: 1.5,
-    borderColor: "#B5D4F4",
+    backgroundColor: colors.mist,
   },
 
   scheduleTabActive: {
-    backgroundColor: "#0C2D6B",
-    borderColor: "#0C2D6B",
+    backgroundColor: colors.ink,
   },
 
   scheduleTabText: {
-    fontSize: 13,
-    fontWeight: "500",
-    color: "#888780",
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.medium,
+    color: colors.textSecondary,
     textAlign: "center",
   },
 
   scheduleTabTextActive: {
-    color: "#fff",
+    color: colors.white,
+    fontFamily: fontFamily.bold,
   },
 
-  // ── Save button ───────────────────────────────────────────────────────────────
-
-  saveBtn: {
-    width: "100%",
-    backgroundColor: "#0C2D6B",
-    borderRadius: 14,
-    paddingVertical: 15,
-    alignItems: "center",
-    justifyContent: "center",
-    transform: [{ scale: 1 }],
-  },
-
-  saveBtnPressed: {
-    backgroundColor: "#091f4a",
-    transform: [{ scale: 0.97 }],
-  },
-
-  saveBtnDisabled: {
-    backgroundColor: "#B5D4F4",
-  },
-
-  saveBtnText: {
-    fontSize: 16,
-    fontWeight: "500",
-    color: "#fff",
-    textAlign: "center",
+  modifyBtn: {
+    borderRadius: radius.pill,
+    backgroundColor: colors.ink,
   },
 
   // ── Save error ────────────────────────────────────────────────────────────────
 
   saveError: {
-    fontSize: 13,
-    color: "#A32D2D",
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.medium,
+    color: colors.error,
     textAlign: "center",
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
 
   // ── Success toast ─────────────────────────────────────────────────────────────
@@ -702,7 +822,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: "rgba(0,0,0,0.5)",
+    backgroundColor: colors.overlay,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -710,12 +830,17 @@ const styles = StyleSheet.create({
   toast: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: spacing.sm,
+    backgroundColor: colors.white,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xl,
+    borderRadius: radius.lg,
+    ...shadow.raised,
   },
 
   toastText: {
-    color: "#B5D4F4",
-    fontSize: 18,
-    fontWeight: "500",
+    color: colors.ink,
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.semibold,
   },
 });

@@ -1,16 +1,17 @@
 import { useEffect, useRef, useCallback } from "react";
-import { View, Text, Animated, Easing, StyleSheet, StatusBar } from "react-native";
+import { Image, Animated, Easing, StyleSheet, StatusBar } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
 import { onAuthStateChanged } from "firebase/auth";
 import * as SplashScreen from "expo-splash-screen";
 import { auth } from "../shared/firebaseConfig";
+import { getRememberMe } from "../shared/services/rememberMe";
+import { colors } from "../shared/theme";
 
 export default function EntranceScreen() {
   const pulseScale = useRef(new Animated.Value(0.92)).current;
   const pulseOpacity = useRef(new Animated.Value(0.6)).current;
   const logoAnim = useRef(new Animated.Value(0)).current;
-  const textAnim = useRef(new Animated.Value(0)).current;
 
   // Only once this screen's own green background has actually been laid out
   // and painted do we dismiss the native splash — so the swap from native
@@ -53,20 +54,12 @@ export default function EntranceScreen() {
       ]),
     ).start();
 
-    Animated.sequence([
-      Animated.timing(logoAnim, {
-        toValue: 1,
-        duration: 560,
-        easing: Easing.out(Easing.back(1.4)),
-        useNativeDriver: true,
-      }),
-      Animated.timing(textAnim, {
-        toValue: 1,
-        duration: 420,
-        easing: Easing.out(Easing.ease),
-        useNativeDriver: true,
-      }),
-    ]).start();
+    Animated.timing(logoAnim, {
+      toValue: 1,
+      duration: 560,
+      easing: Easing.out(Easing.back(1.4)),
+      useNativeDriver: true,
+    }).start();
 
     // Firebase persists the last signed-in session across app restarts, but
     // resolves it asynchronously — capture whatever it resolves to (or
@@ -78,9 +71,16 @@ export default function EntranceScreen() {
       hasSession = !!user;
     });
 
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       unsub();
-      router.replace(hasSession ? "/quick-unlock" : "/login");
+      if (!hasSession) {
+        router.replace("/login");
+        return;
+      }
+      // "Remember me" (opt-in at login) skips even the password-only
+      // quick-unlock screen — straight to the dashboard on this device.
+      const remembered = await getRememberMe();
+      router.replace(remembered ? "/dashboard" : "/quick-unlock");
     }, 1900);
 
     return () => {
@@ -90,8 +90,14 @@ export default function EntranceScreen() {
   }, []);
 
   return (
-    <View style={styles.root} onLayout={onRootLayout}>
-      <StatusBar barStyle="light-content" backgroundColor="#0F6E56" />
+    <LinearGradient
+      colors={[colors.emerald, colors.ink]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.root}
+      onLayout={onRootLayout}
+    >
+      <StatusBar barStyle="light-content" backgroundColor={colors.emerald} />
 
       <Animated.View
         style={[
@@ -115,34 +121,27 @@ export default function EntranceScreen() {
             { transform: [{ scale: pulseScale }], opacity: pulseOpacity },
           ]}
         />
-        <View style={styles.logoCircle}>
-          <Ionicons name="storefront-outline" size={40} color="#0F6E56" />
-        </View>
+        <LinearGradient
+          colors={[colors.emerald, colors.ink]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.logoCircle}
+        >
+          <Image
+            source={require("../assets/rentwise-icon.png")}
+            style={styles.logoImage}
+            resizeMode="contain"
+          />
+        </LinearGradient>
       </Animated.View>
-
-      <Animated.View
-        style={{
-          opacity: textAnim,
-          transform: [
-            {
-              translateY: textAnim.interpolate({
-                inputRange: [0, 1],
-                outputRange: [12, 0],
-              }),
-            },
-          ],
-        }}
-      >
-        <Text style={styles.appName}>RentWise</Text>
-      </Animated.View>
-    </View>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#0F6E56",
+    backgroundColor: colors.emerald,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -156,20 +155,18 @@ const styles = StyleSheet.create({
     width: 116,
     height: 116,
     borderRadius: 999,
-    backgroundColor: "#1D9E75",
+    backgroundColor: colors.emeraldBright,
   },
   logoCircle: {
     width: 88,
     height: 88,
     borderRadius: 44,
-    backgroundColor: "#E1F5EE",
+    overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
   },
-  appName: {
-    color: "#FFFFFF",
-    fontSize: 30,
-    fontWeight: "500",
-    textAlign: "center",
+  logoImage: {
+    width: 88,
+    height: 88,
   },
 });
