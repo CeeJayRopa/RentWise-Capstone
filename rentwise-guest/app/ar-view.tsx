@@ -12,9 +12,10 @@ import {
 import { router } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 
-import { getARObjects, getModelDownloadUrl } from "../services/modelService";
+import { getARObjects, getModelDownloadUrl, logArPlacement } from "../services/modelService";
 import type { ARObject } from "../shared/types/arObject";
-import { ARSessionScene, PlacedState, ScaleAxis, SurfaceType } from "../features/ar/ARSessionScene";
+import { ARSessionScene, PlacedState, ScaleAxis, SurfaceType, SelectedMeasurement, SurfaceIssue } from "../features/ar/ARSessionScene";
+import ModelViewer from "../features/ar/ModelViewer";
 
 // ─── Theme (AR-specific blue/teal "tech" palette — intentionally distinct
 // from the rest of the guest site's green branding, since this is the
@@ -32,10 +33,47 @@ const TEXT_DARK = "#171A19";
 const TEXT_MUTED = "#5B6560";
 const DANGER = "#B3261E";
 
+// Translates WebXR's raw DOMException names (thrown by navigator.xr.requestSession) into
+// plain-English causes, instead of surfacing something like "NotAllowedError" directly.
+function translateSessionStartError(e: any): string {
+  const name = e?.name;
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return "Camera access was denied — please allow camera permissions and try again.";
+  }
+  if (name === "NotSupportedError") {
+    return "Your browser or device doesn't support AR.";
+  }
+  return e?.message ?? "Could not start AR. Make sure you're on Chrome for Android over HTTPS.";
+}
+
 const AXIS_LABELS: { axis: ScaleAxis; label: string }[] = [
   { axis: "x", label: "Width" },
   { axis: "y", label: "Height" },
   { axis: "z", label: "Depth" },
+];
+
+// AR's UI doesn't fit the ref/spotlight-based HelpTour used in admin/owner/tenant — there's
+// no fixed layout to spotlight here, just a live camera feed — so this is a lighter
+// step-by-step card overlay instead, following the same "auto-opens once per device,
+// replayable via Help" philosophy as the rest of the app.
+const AR_TOUR_STORAGE_KEY = "rentwise-guest:ar-tour-seen";
+const AR_TOUR_STEPS = [
+  {
+    title: "Point & Scan",
+    text: "Tap \"Start AR,\" then slowly move your phone around to find a flat floor, tabletop, or wall.",
+  },
+  {
+    title: "Place an Item",
+    text: "Once a surface is found, tap it to place the highlighted item from the tray below.",
+  },
+  {
+    title: "Adjust It",
+    text: "Tap a placed item to select it, then rotate, resize, move, or delete it using the panel that appears.",
+  },
+  {
+    title: "Save Your Look",
+    text: "Happy with your arrangement? Tap Share up top to save or send a photo of it.",
+  },
 ];
 
 // Reached directly from market-map.tsx's "AR Viewing" button — this IS the AR session
@@ -49,7 +87,9 @@ export default function ARView() {
   const [sessionActive, setSessionActive] = useState(false);
   const [reticleVisible, setReticleVisible] = useState(false);
   const [surfaceType, setSurfaceType] = useState<SurfaceType | null>(null);
-  const [placedState, setPlacedState] = useState<PlacedState>({ placed: [], selectedId: null });
+  const [placedState, setPlacedState] = useState<PlacedState>({ placed: [], selectedId: null, canUndo: false });
+  const [measurement, setMeasurement] = useState<SelectedMeasurement | null>(null);
+  const [surfaceIssue, setSurfaceIssue] = useState<SurfaceIssue>(null);
   const [error, setError] = useState<string | null>(null);
 
   // null = still checking, so we never flash the "Start AR" button on a device that's
@@ -58,6 +98,27 @@ export default function ARView() {
   // device without ARCore, or on iPhone where navigator.xr doesn't exist at all.
   const [arSupported, setArSupported] = useState<boolean | null>(null);
   const [showUnsupportedModal, setShowUnsupportedModal] = useState(false);
+  // Non-AR fallback: the 3D spin-and-inspect preview shown instead of AR placement on
+  // devices/browsers where WebXR isn't available at all (all iPhones, older Android, desktop).
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  const [tourVisible, setTourVisible] = useState(false);
+  const [tourStep, setTourStep] = useState(0);
+
+  // Auto-opens the guided tour the first time this device ever lands on this page — never
+  // again after that (localStorage, not AsyncStorage, since rentwise-guest is web-only).
+  // Replayable anytime via the header's "?" button.
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    try {
+      if (!localStorage.getItem(AR_TOUR_STORAGE_KEY)) {
+        setTourVisible(true);
+        localStorage.setItem(AR_TOUR_STORAGE_KEY, "true");
+      }
+    } catch {
+      // Non-fatal — worst case the tour just opens again next visit.
+    }
+  }, []);
 
   const canvasContainerRef = useRef<View>(null);
   const overlayRef = useRef<View>(null);
@@ -130,6 +191,8 @@ export default function ARView() {
       setReticleVisible(visible);
       setSurfaceType(type);
     });
+    scene.setMeasurementCallback(setMeasurement);
+    scene.setSurfaceIssueCallback(setSurfaceIssue);
     scene.mount(canvas);
     sceneRef.current = scene;
 
@@ -149,9 +212,7 @@ export default function ARView() {
       await sceneRef.current.startSession(overlay);
       setSessionActive(true);
     } catch (e: any) {
-      setError(
-        e?.message ?? "Could not start AR. Make sure you're on Chrome for Android over HTTPS."
-      );
+      setError(translateSessionStartError(e));
     }
   };
 
@@ -164,6 +225,45 @@ export default function ARView() {
     }
   };
 
+  const [sharing, setSharing] = useState(false);
+
+  const shareArrangement = async () => {
+    if (!sceneRef.current || sharing) return;
+    setSharing(true);
+    setError(null);
+    try {
+      const dataUrl = await sceneRef.current.capturePhoto();
+      if (!dataUrl) {
+        setError("Couldn't capture a photo. Please try again.");
+        return;
+      }
+
+      const blob = await (await fetch(dataUrl)).blob();
+      const file = new File([blob], "rentwise-ar-arrangement.jpg", { type: "image/jpeg" });
+      const nav = navigator as any;
+
+      if (nav.share && nav.canShare?.({ files: [file] })) {
+        try {
+          await nav.share({ files: [file], title: "My RentWise AR arrangement" });
+        } catch (shareErr: any) {
+          // AbortError just means the user closed the share sheet — not a real error.
+          if (shareErr?.name !== "AbortError") throw shareErr;
+        }
+      } else {
+        // No Web Share API (or no file-sharing support) — fall back to a direct download.
+        const link = document.createElement("a");
+        link.href = dataUrl;
+        link.download = "rentwise-ar-arrangement.jpg";
+        link.click();
+      }
+    } catch (e: any) {
+      console.error("[AR] share failed:", e);
+      setError("Couldn't share the photo. Please try again.");
+    } finally {
+      setSharing(false);
+    }
+  };
+
   // Wired to onPressIn/onPressOut on every control-panel and catalog-rail button, so
   // pressing rotate/scale/move/delete/arm doesn't also place or select something in the
   // scene underneath the button (see ARSessionScene.beginUIInteraction — must start on
@@ -173,12 +273,18 @@ export default function ARView() {
   const suppressPressOut = () => sceneRef.current?.endUIInteraction();
 
   const arm = async (o: ARObject) => {
-    if (!sceneRef.current) return;
     setArming(true);
     setError(null);
     try {
       const modelUrl = await getModelDownloadUrl(o.modelStoragePath);
-      await sceneRef.current.armObject(o.id, modelUrl);
+      if (arSupported && sceneRef.current) {
+        await sceneRef.current.armObject(o.id, modelUrl);
+      } else {
+        // No AR support on this device/browser — fall back to the 3D spin-and-inspect
+        // preview instead of silently doing nothing (the tray used to promise you could
+        // "still browse the items below," but nothing actually happened on tap).
+        setPreviewUrl(modelUrl);
+      }
       setArmedId(o.id);
     } catch (e: any) {
       setError(`Couldn't load "${o.name}": ${e?.message ?? "unknown error"}`);
@@ -197,6 +303,15 @@ export default function ARView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionActive, objects]);
 
+  // Same idea for the non-AR fallback: preview the first item automatically once we know
+  // AR isn't available, instead of showing an empty spin-viewer until a thumbnail is tapped.
+  useEffect(() => {
+    if (arSupported === false && !armedId && !arming && objects.length > 0) {
+      arm(objects[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arSupported, objects]);
+
   // The engine consumes the armed item once it's placed (so a tap on/near an existing
   // object places the new one instead of ambiguously selecting the old one — see
   // ARSessionScene.placeArmedAtReticle). Mirror that here: once a new object shows up in
@@ -207,23 +322,44 @@ export default function ARView() {
   useEffect(() => {
     if (placedState.placed.length > prevPlacedCountRef.current) {
       setArmedId(null);
+
+      // Log the newest placement as an interest signal — see logArPlacement's own comment
+      // for why. `placed` preserves insertion order (deleteSelected only filters, never
+      // reorders), so the last entry is always the one that was just placed.
+      const newest = placedState.placed[placedState.placed.length - 1];
+      const placedObject = objects.find((o) => o.id === newest?.objectId);
+      if (placedObject) {
+        void logArPlacement(placedObject.id, placedObject.name, placedObject.category);
+      }
     }
     prevPlacedCountRef.current = placedState.placed.length;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placedState.placed.length]);
 
   const armedObject = objects.find((o) => o.id === armedId) ?? null;
 
-  // If no surface has been found for a while, add a more actionable tip on top of the
-  // basic "move your phone" hint — flat, textured, well-lit surfaces detect fastest.
+  // If nothing's been found for a while (and tracking is otherwise fine — "no-results" is
+  // the only cause this delay applies to), add a more actionable tip on top of the basic
+  // "move your phone" hint. The other two causes (tracking-lost, bad-angle) are shown
+  // immediately below since they're unambiguous, real information as soon as they're known.
   const [showSurfaceTip, setShowSurfaceTip] = useState(false);
   useEffect(() => {
-    if (!sessionActive || reticleVisible) {
+    if (!sessionActive || surfaceIssue !== "no-results") {
       setShowSurfaceTip(false);
       return;
     }
     const timer = setTimeout(() => setShowSurfaceTip(true), 6000);
     return () => clearTimeout(timer);
-  }, [sessionActive, reticleVisible]);
+  }, [sessionActive, surfaceIssue]);
+
+  const surfaceHintText =
+    surfaceIssue === "tracking-lost"
+      ? "Lost tracking — hold your phone steady and slowly look around"
+      : surfaceIssue === "bad-angle"
+      ? "Surface found, but it's at an odd angle — try a flatter spot"
+      : showSurfaceTip
+      ? "Still looking… try a flat, well-lit, textured floor, tabletop, or wall (avoid glossy or plain white surfaces)"
+      : "Move your phone slowly to find a surface…";
 
   const selectedPlacedObjectId = placedState.selectedId
     ? placedState.placed.find((p) => p.id === placedState.selectedId)?.objectId
@@ -249,6 +385,12 @@ export default function ARView() {
       {/* Canvas layer (the actual AR/WebGL surface) */}
       <View ref={canvasContainerRef} style={StyleSheet.absoluteFill} />
 
+      {/* Non-AR fallback layer — 3D spin-and-inspect preview for devices/browsers that
+          can't do AR placement at all (all iPhones, older Android, desktop). */}
+      {arSupported === false && previewUrl && (
+        <ModelViewer src={previewUrl} poster={armedId ? thumbnailUrls[armedId] : undefined} />
+      )}
+
       {/*
         DOM overlay layer, passed to WebXR as domOverlay.root. pointerEvents="box-none" so
         taps on empty space fall through to the canvas below and register as WebXR "select"
@@ -262,7 +404,42 @@ export default function ARView() {
             <Text style={styles.doneBtnText}>{sessionActive ? "Done" : "◀"}</Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Arrange in AR</Text>
-          <View style={styles.doneBtn} />
+          <View style={styles.headerRightGroup}>
+            {sessionActive && placedState.canUndo && (
+              <TouchableOpacity
+                style={styles.doneBtn}
+                onPress={() => sceneRef.current?.undo()}
+                onPressIn={suppressPressIn}
+                onPressOut={suppressPressOut}
+              >
+                <Text style={styles.doneBtnText}>↶</Text>
+              </TouchableOpacity>
+            )}
+            {sessionActive && placedState.placed.length > 0 && (
+              <TouchableOpacity
+                style={styles.doneBtn}
+                onPress={shareArrangement}
+                disabled={sharing}
+                onPressIn={suppressPressIn}
+                onPressOut={suppressPressOut}
+              >
+                {sharing ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.doneBtnText}>Share</Text>
+                )}
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={styles.doneBtn}
+              onPress={() => {
+                setTourStep(0);
+                setTourVisible(true);
+              }}
+            >
+              <Text style={styles.doneBtnText}>?</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {!sessionActive && (
@@ -270,10 +447,15 @@ export default function ARView() {
             {loading || arSupported === null ? (
               <ActivityIndicator size="large" color="#fff" />
             ) : arSupported === false ? (
-              <Text style={styles.promptText}>
-                AR isn't supported on this device. You can still browse the items in the tray
-                below.
-              </Text>
+              objects.length === 0 ? (
+                <Text style={styles.promptText}>No items available to preview yet.</Text>
+              ) : (
+                <Text style={styles.promptText}>
+                  AR placement isn't supported on this device, but you can still rotate and
+                  inspect items in 3D — drag to spin, pinch to zoom. Pick a different item from
+                  the tray below anytime.
+                </Text>
+              )
             ) : objects.length === 0 ? (
               <Text style={styles.promptText}>No items available to arrange yet.</Text>
             ) : (
@@ -300,8 +482,8 @@ export default function ARView() {
                   {Platform.OS === "web" &&
                   typeof navigator !== "undefined" &&
                   /iPhone|iPad|iPod/i.test(navigator.userAgent)
-                    ? "AR arrangement isn't available on iPhone yet. You can still browse the items below."
-                    : "Your device or browser doesn't support AR. You can still browse the items below."}
+                    ? "AR placement isn't available on iPhone yet, but you can still rotate and inspect items in 3D below."
+                    : "Your device or browser doesn't support AR placement, but you can still rotate and inspect items in 3D below."}
                 </Text>
                 <TouchableOpacity
                   style={styles.modalBtn}
@@ -314,15 +496,50 @@ export default function ARView() {
           </Modal>
         )}
 
+        {tourVisible && (
+          <Modal transparent animationType="fade" onRequestClose={() => setTourVisible(false)}>
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalCard}>
+                <View style={styles.tourDotsRow}>
+                  {AR_TOUR_STEPS.map((_, i) => (
+                    <View key={i} style={[styles.tourDot, i === tourStep && styles.tourDotActive]} />
+                  ))}
+                </View>
+                <Text style={styles.modalTitle}>{AR_TOUR_STEPS[tourStep].title}</Text>
+                <Text style={styles.modalMessage}>{AR_TOUR_STEPS[tourStep].text}</Text>
+                <View style={styles.tourButtonRow}>
+                  {tourStep < AR_TOUR_STEPS.length - 1 && (
+                    <TouchableOpacity style={styles.tourSkipBtn} onPress={() => setTourVisible(false)}>
+                      <Text style={styles.tourSkipBtnText}>Skip</Text>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity
+                    style={styles.modalBtn}
+                    onPress={() => {
+                      if (tourStep < AR_TOUR_STEPS.length - 1) {
+                        setTourStep((s) => s + 1);
+                      } else {
+                        setTourVisible(false);
+                      }
+                    }}
+                  >
+                    <Text style={styles.modalBtnText}>
+                      {tourStep < AR_TOUR_STEPS.length - 1 ? "Next" : "Got it"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
+        )}
+
         {sessionActive && (
           <View style={styles.hintBanner} pointerEvents="none">
             <Text style={styles.hintText}>
               {arming
                 ? `Loading ${armedObject?.name ?? "item"}…`
                 : !reticleVisible
-                ? showSurfaceTip
-                  ? "Still looking… try a flat, well-lit, textured floor, tabletop, or wall (avoid glossy or plain white surfaces)"
-                  : "Move your phone slowly to find a surface…"
+                ? surfaceHintText
                 : armedObject
                 ? `Tap the ${surfaceType === "wall" ? "wall" : "surface"} to place: ${armedObject.name}`
                 : "Tap an item below to place it"}
@@ -330,6 +547,21 @@ export default function ARView() {
             {error && (
               <Text style={[styles.hintText, styles.hintErrorText]}>{error}</Text>
             )}
+          </View>
+        )}
+
+        {measurement && measurement.visible && (
+          <View
+            style={[
+              styles.measurementLabel,
+              { left: measurement.screenX, top: measurement.screenY },
+            ]}
+            pointerEvents="none"
+          >
+            <Text style={styles.measurementLabelText}>
+              {measurement.widthM.toFixed(2)}m × {measurement.heightM.toFixed(2)}m ×{" "}
+              {measurement.depthM.toFixed(2)}m
+            </Text>
           </View>
         )}
 
@@ -494,6 +726,7 @@ const styles = StyleSheet.create({
     paddingTop: 48,
     paddingBottom: 12,
   },
+  headerRightGroup: { flexDirection: "row", alignItems: "center", gap: 4 },
   doneBtn: { width: 48, alignItems: "center" },
   doneBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
   headerTitle: { color: "#fff", fontSize: 16, fontWeight: "bold" },
@@ -550,6 +783,13 @@ const styles = StyleSheet.create({
   },
   modalBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
 
+  tourDotsRow: { flexDirection: "row", gap: 6, marginBottom: 4 },
+  tourDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#D8D8D3" },
+  tourDotActive: { backgroundColor: PRIMARY, width: 16 },
+  tourButtonRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 4 },
+  tourSkipBtn: { paddingVertical: 12, paddingHorizontal: 8 },
+  tourSkipBtnText: { color: TEXT_MUTED, fontSize: 14, fontWeight: "600" },
+
   hintBanner: {
     position: "absolute",
     top: 100,
@@ -571,6 +811,19 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(179,38,30,0.88)",
     color: "#fff",
   },
+
+  measurementLabel: {
+    position: "absolute",
+    transform: [{ translateX: "-50%" }, { translateY: "-100%" }],
+    backgroundColor: "rgba(8,28,38,0.85)",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.25)",
+    marginTop: -8,
+  },
+  measurementLabelText: { color: "#fff", fontSize: 12, fontWeight: "700" },
 
   controlPanel: {
     position: "absolute",

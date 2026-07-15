@@ -6,7 +6,6 @@ import {
   Image,
   StyleSheet,
   Platform,
-  useWindowDimensions,
   TextInput,
   Linking,
 } from "react-native";
@@ -15,6 +14,7 @@ import React, { useRef, useState } from "react";
 import NavigableMap from "../shared/components/NavigableMap";
 import MarketMapEmbed from "../shared/components/MarketMapEmbed";
 import CategoryCarousel from "../shared/components/CategoryCarousel";
+import { useBreakpoints } from "../shared/hooks/useBreakpoints";
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const PRIMARY = "#0E7C5A";
@@ -88,10 +88,7 @@ const STATS = [
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function GuestLanding() {
-  const { width, height } = useWindowDimensions();
-  const isMobile = width <= 480;
-  const isTablet = width > 480 && width <= 1024;
-  const isDesktop = width > 1024;
+  const { width, height, isMobile, isTablet, isDesktop } = useBreakpoints();
 
   // Responsive helpers
   const hPad = isMobile ? 16 : isTablet ? 32 : 80;
@@ -313,8 +310,6 @@ export default function GuestLanding() {
   // per row cleanly, it's a percentage so it scales fine at tablet widths too.
   const cardPct = isMobile ? "100%" : "30%";
   const heroFontSize = isMobile ? 30 : isTablet ? 32 : 42;
-  const heroImgWidth = Math.min(width * 0.8, 1180);
-  const heroImgHeight = heroImgWidth / 1.7;
   // ~75-80% of the previous 260px mobile cap, per the hero-section mobile spec.
   const mobileCircleSize = Math.min(width * 0.7, isMobile ? 200 : 340);
   // Hero-only override — increases side padding on mobile without touching
@@ -326,6 +321,34 @@ export default function GuestLanding() {
   // available hero content width) instead of inheriting the mobile stack.
   const heroContentWidth = width - heroPadH * 2;
   const tabletCircleSize = Math.min(heroContentWidth * 0.42, 320);
+
+  // Desktop's produce circle is absolutely positioned (bleeding off the right edge via
+  // `right: -60` — see heroProduceImg), and the text column next to it has its own
+  // `marginLeft: 48`. These two used to be computed completely independently (image sized
+  // from raw viewport width, text sized from a fixed 44%), so they only happened to clear
+  // each other at very wide screens (1920px+) — at narrower "just barely desktop" widths
+  // (~1024-1300px), the circle's left edge actually lands underneath the text column.
+  // Fixed by deriving the image's max width FROM the space left over after the text column
+  // (instead of the other way around), guaranteeing a real gap between them at any width.
+  const HERO_IMG_RIGHT_BLEED = 60;
+  const HERO_TEXT_MARGIN_LEFT = 48;
+  const HERO_TEXT_IMAGE_GAP = 48;
+  // Unchanged from the original 44% — the fix only needed to make the image aware of
+  // this value, not to shrink the text column itself.
+  const desktopTextWidth = heroContentWidth * 0.44;
+  const heroImgWidth = Math.min(
+    width * 0.8, // don't get absurdly huge relative to the viewport
+    1180, // absolute cap, regardless of viewport width
+    // space actually left over after padding, the text column, and both gaps — the
+    // constraint that matters on narrower desktop widths, where the other two don't bind
+    width +
+      HERO_IMG_RIGHT_BLEED -
+      heroPadH -
+      HERO_TEXT_MARGIN_LEFT -
+      desktopTextWidth -
+      HERO_TEXT_IMAGE_GAP
+  );
+  const heroImgHeight = heroImgWidth / 1.7;
 
   return (
     <View style={styles.screen}>
@@ -362,14 +385,17 @@ export default function GuestLanding() {
             ]}
           />
 
-          {/* Produce bag photo — bleeds off the right edge like the reference */}
+          {/* Produce bag photo — bleeds off the right edge like the reference.
+              Vertically centered via top:0/bottom:0 (see heroProduceImg) rather than a
+              fixed pixel offset, so it stays correctly positioned at any monitor height —
+              a fixed `bottom` value tuned against a tall screen clipped the top of the
+              circle off on shorter common laptop resolutions like 1366x768. */}
           {isDesktop && (
             <View
               style={[
                 styles.heroProduceImg,
                 {
                   width: heroImgWidth,
-                  height: heroImgHeight,
                   alignItems: "center",
                   justifyContent: "center",
                 },
@@ -409,7 +435,7 @@ export default function GuestLanding() {
           >
             <View
               style={{
-                maxWidth: isDesktop ? "44%" : isTablet ? "52%" : "100%",
+                maxWidth: isDesktop ? desktopTextWidth : isTablet ? "52%" : "100%",
                 gap: isMobile ? 0 : 16,
                 width: isTablet ? "52%" : "100%",
                 marginLeft: isDesktop ? 48 : 0,
@@ -826,7 +852,8 @@ const styles = StyleSheet.create({
   heroProduceImg: {
     position: "absolute",
     right: -60,
-    bottom: 160,
+    top: 0,
+    bottom: 0,
   },
   heroEyebrow: {
     color: PRIMARY,

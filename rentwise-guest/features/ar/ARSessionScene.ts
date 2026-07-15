@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { XREstimatedLight } from "three/examples/jsm/webxr/XREstimatedLight.js";
 
 // The WebXR Device API (XRSession, XRFrame, XRHitTestSource, navigator.xr, ...) is not
 // part of TypeScript's built-in DOM lib, so these are treated as `any` throughout.
@@ -12,10 +13,27 @@ export interface PlacedObjectInfo {
 export interface PlacedState {
   placed: PlacedObjectInfo[];
   selectedId: string | null;
+  canUndo: boolean;
 }
 
 export type ScaleAxis = "x" | "y" | "z";
 export type SurfaceType = "floor" | "wall";
+
+// Distinguishes *why* no reticle is currently showing, since the underlying causes need
+// completely different guidance: "tracking-lost" means the phone doesn't know where it is
+// at all (hold steady); "no-results" means tracking is fine but nothing plane-shaped has
+// been found yet (keep scanning); "bad-angle" means something WAS found but rejected for
+// being neither floor- nor wall-like (try a flatter spot).
+export type SurfaceIssue = "tracking-lost" | "no-results" | "bad-angle" | null;
+
+export interface SelectedMeasurement {
+  widthM: number;
+  heightM: number;
+  depthM: number;
+  screenX: number;
+  screenY: number;
+  visible: boolean;
+}
 
 interface AxisScale {
   x: number;
@@ -117,13 +135,45 @@ export class ARSessionScene {
   // repositioned every frame.
   private selectionOutline: THREE.LineSegments;
 
+  // Shared radial-gradient "blob" texture used for every placed object's contact shadow —
+  // a cheap approximation (no real shadow-mapping/lighting cost) that still makes objects
+  // read as resting on the floor instead of floating.
+  private groundShadowTexture: THREE.Texture;
+
+  // Fixed fallback lighting, used until (and unless) real WebXR light estimation kicks in —
+  // see mount()'s xrLight wiring, which swaps to/from these on estimationstart/estimationend.
+  private fallbackHemisphereLight: THREE.HemisphereLight;
+  private fallbackDirectionalLight: THREE.DirectionalLight;
+  private xrLight: XREstimatedLight | null = null;
+
   private placed: PlacedObject[] = [];
   private selected: PlacedObject | null = null;
   private nextInstanceId = 1;
 
+  // Undo history — deliberately scoped to just place/delete (the two truly destructive,
+  // easy-to-regret actions), not rotate/resize/move, which are already trivially reversible
+  // by pressing the opposite control.
+  private history: Array<
+    | { type: "place"; object: PlacedObject }
+    | { type: "delete"; object: PlacedObject; index: number }
+  > = [];
+
+  // Resolved from inside onFrame, right after that frame's render() call — see mount()'s
+  // preserveDrawingBuffer comment for why it can't just be read synchronously from outside
+  // the render loop.
+  private pendingCapture: ((dataUrl: string | null) => void) | null = null;
+
   private onPlacedChange: (state: PlacedState) => void = () => {};
   private onReticleVisible: (visible: boolean, surfaceType: SurfaceType | null) => void = () => {};
+  private onMeasurementChange: (measurement: SelectedMeasurement | null) => void = () => {};
+  private onSurfaceIssue: (issue: SurfaceIssue) => void = () => {};
+  private lastSurfaceIssue: SurfaceIssue = null;
   private resizeHandler = () => this.handleResize();
+
+  // Scratch space for the per-frame selected-object measurement/label projection, reused to
+  // avoid GC churn (same convention as the reticle scratch fields above).
+  private scratchMeasureSize = new THREE.Vector3();
+  private scratchMeasurePos = new THREE.Vector3();
 
   constructor() {
     const geometry = new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2);
@@ -134,10 +184,13 @@ export class ARSessionScene {
     this.scene.add(this.reticle);
     this.scene.add(this.placedGroup);
 
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2));
-    const directional = new THREE.DirectionalLight(0xffffff, 0.8);
-    directional.position.set(0.5, 1, 0.25);
-    this.scene.add(directional);
+    this.fallbackHemisphereLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.2);
+    this.scene.add(this.fallbackHemisphereLight);
+    this.fallbackDirectionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    this.fallbackDirectionalLight.position.set(0.5, 1, 0.25);
+    this.scene.add(this.fallbackDirectionalLight);
+
+    this.groundShadowTexture = this.createGroundShadowTexture();
 
     const outlineGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
     this.selectionOutline = new THREE.LineSegments(
@@ -159,8 +212,34 @@ export class ARSessionScene {
     this.onReticleVisible = onReticleVisible;
   }
 
+  setMeasurementCallback(onMeasurementChange: (measurement: SelectedMeasurement | null) => void) {
+    this.onMeasurementChange = onMeasurementChange;
+  }
+
+  setSurfaceIssueCallback(onSurfaceIssue: (issue: SurfaceIssue) => void) {
+    this.onSurfaceIssue = onSurfaceIssue;
+  }
+
+  // Only fires the callback when the cause actually changes, so the UI layer's own
+  // time-based escalation (e.g. "still searching after 5s") isn't reset every single frame.
+  private reportSurfaceIssue(issue: SurfaceIssue) {
+    if (issue === this.lastSurfaceIssue) return;
+    this.lastSurfaceIssue = issue;
+    this.onSurfaceIssue(issue);
+  }
+
   mount(canvas: HTMLCanvasElement) {
-    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    // preserveDrawingBuffer: true is required for capturePhoto() below — during an XR
+    // session, the framebuffer is otherwise cleared/swapped immediately after each frame's
+    // render call, before a canvas.toDataURL() read from outside the render loop could ever
+    // see it. This keeps the just-rendered frame (camera passthrough + placed objects,
+    // exactly as composited by the XR layer) readable for one extra tick.
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      alpha: true,
+      antialias: true,
+      preserveDrawingBuffer: true,
+    });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(canvas.clientWidth, canvas.clientHeight);
     (renderer.xr as any).enabled = true;
@@ -169,6 +248,25 @@ export class ARSessionScene {
 
     this.renderer = renderer;
     window.addEventListener("resize", this.resizeHandler);
+
+    // Self-manages via renderer.xr's own sessionstart/sessionend events (requests a light
+    // probe automatically whenever "light-estimation" was granted — see startSession's
+    // optionalFeatures below). Swaps the scene from the fixed fallback lights to the room's
+    // actual estimated lighting once real values start arriving, and back on session end.
+    const xrLight = new XREstimatedLight(renderer);
+    xrLight.addEventListener("estimationstart", () => {
+      this.scene.add(xrLight);
+      this.scene.remove(this.fallbackHemisphereLight);
+      this.scene.remove(this.fallbackDirectionalLight);
+      if (xrLight.environment) this.scene.environment = xrLight.environment;
+    });
+    xrLight.addEventListener("estimationend", () => {
+      this.scene.remove(xrLight);
+      this.scene.add(this.fallbackHemisphereLight);
+      this.scene.add(this.fallbackDirectionalLight);
+      this.scene.environment = null;
+    });
+    this.xrLight = xrLight;
   }
 
   private handleResize() {
@@ -185,7 +283,7 @@ export class ARSessionScene {
 
     const session = await nav.xr.requestSession("immersive-ar", {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay"],
+      optionalFeatures: ["dom-overlay", "light-estimation"],
       domOverlay: { root: overlayRoot },
     });
 
@@ -208,6 +306,22 @@ export class ARSessionScene {
     }
   }
 
+  // Captures exactly what's currently on screen (real camera passthrough + placed 3D
+  // objects, already composited by the XR layer) as a JPEG data URL. Resolves null if
+  // nothing renders within one second (e.g. session already ended).
+  capturePhoto(): Promise<string | null> {
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingCapture = null;
+        resolve(null);
+      }, 1000);
+      this.pendingCapture = (dataUrl) => {
+        clearTimeout(timeout);
+        resolve(dataUrl);
+      };
+    });
+  }
+
   private onSessionEnd() {
     this.session = null;
     this.hitTestSource = null;
@@ -220,8 +334,11 @@ export class ARSessionScene {
     this.placed = [];
     this.selected = null;
     this.updateSelectionOutline();
-    this.onPlacedChange({ placed: [], selectedId: null });
+    this.history = [];
+    this.onPlacedChange({ placed: [], selectedId: null, canUndo: false });
     this.onReticleVisible(false, null);
+    this.onMeasurementChange(null);
+    this.reportSurfaceIssue(null);
   }
 
   // Active for the full duration of any DOM overlay button press (touch-down through
@@ -284,6 +401,7 @@ export class ARSessionScene {
     this.onPlacedChange({
       placed: this.placed.map(({ id, objectId }) => ({ id, objectId })),
       selectedId: this.selected?.id ?? null,
+      canUndo: this.history.length > 0,
     });
   }
 
@@ -319,6 +437,47 @@ export class ARSessionScene {
     this.selectionOutline.visible = true;
   }
 
+  // Draws a soft radial-gradient "blob" once, shared by every placed object's contact
+  // shadow — cheaper than real shadow-mapping and doesn't need any scene lights configured
+  // to cast/receive shadows.
+  private createGroundShadowTexture(): THREE.Texture {
+    const size = 128;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d")!;
+    const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    gradient.addColorStop(0, "rgba(0,0,0,0.35)");
+    gradient.addColorStop(0.7, "rgba(0,0,0,0.16)");
+    gradient.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
+    return new THREE.CanvasTexture(canvas);
+  }
+
+  // Sized to the model's own local footprint so bigger objects get bigger shadows, and
+  // positioned at the model's own local bottom (not just local Y=0) so it sits flush under
+  // the model regardless of where the source .glb's own origin happens to be.
+  private createGroundShadowMesh(cached: { boundingBox: THREE.Box3 }): THREE.Mesh {
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    cached.boundingBox.getSize(size);
+    cached.boundingBox.getCenter(center);
+
+    const footprint = Math.max(size.x, size.z) * 1.4;
+    const geometry = new THREE.PlaneGeometry(footprint, footprint).rotateX(-Math.PI / 2);
+    const material = new THREE.MeshBasicMaterial({
+      map: this.groundShadowTexture,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(center.x, cached.boundingBox.min.y + 0.001, center.z);
+    mesh.renderOrder = -1;
+    return mesh;
+  }
+
   private placeArmedAtReticle() {
     if (!this.armedModel || !this.armedObjectId) return;
 
@@ -333,6 +492,10 @@ export class ARSessionScene {
     } else {
       this.orientTowardCamera(group);
       group.translateY(this.armedGroundOffset);
+
+      // Wall-mounted items don't rest on a floor, so a ground blob doesn't make sense there.
+      const cached = this.modelCache.get(this.armedObjectId);
+      if (cached) group.add(this.createGroundShadowMesh(cached));
     }
 
     group.scale.setScalar(0.001); // spawn-animated up to full size in onFrame
@@ -352,6 +515,7 @@ export class ARSessionScene {
     this.placed.push(placedObject);
     this.selected = placedObject;
     this.updateSelectionOutline();
+    this.history.push({ type: "place", object: placedObject });
 
     // Consume the armed item: without this, it stays armed forever, meaning every future
     // tap keeps placing new copies instead of ever falling through to tap-to-select an
@@ -480,10 +644,36 @@ export class ARSessionScene {
   deleteSelected() {
     if (!this.selected) return;
     const toRemove = this.selected;
+    const index = this.placed.findIndex((p) => p.id === toRemove.id);
     this.selected = null;
     this.updateSelectionOutline(); // detaches the outline from toRemove.group before it's removed
     this.placedGroup.remove(toRemove.group);
     this.placed = this.placed.filter((p) => p.id !== toRemove.id);
+    this.history.push({ type: "delete", object: toRemove, index });
+    this.notifyPlacedChange();
+  }
+
+  // Reverses the most recent place or delete action. Deliberately not a general redo/undo
+  // stack beyond that — see the `history` field's own comment for why rotate/resize/move
+  // aren't included.
+  undo() {
+    const last = this.history.pop();
+    if (!last) return;
+
+    if (last.type === "place") {
+      this.placedGroup.remove(last.object.group);
+      this.placed = this.placed.filter((p) => p.id !== last.object.id);
+      if (this.selected?.id === last.object.id) {
+        this.selected = null;
+        this.updateSelectionOutline();
+      }
+    } else {
+      this.placedGroup.add(last.object.group);
+      this.placed.splice(Math.min(last.index, this.placed.length), 0, last.object);
+      this.selected = last.object;
+      this.updateSelectionOutline();
+    }
+
     this.notifyPlacedChange();
   }
 
@@ -500,6 +690,42 @@ export class ARSessionScene {
         Math.max(0.001, p.scale.z * t)
       );
     }
+  }
+
+  // Projects the currently-selected object's true physical size (its cached local bounding
+  // box × its current per-axis scale — deliberately NOT a world-space AABB, since rotating
+  // an object around Y doesn't change its actual physical dimensions, only its facing) into
+  // a screen-space label position above it. Runs every frame the camera/object might have
+  // moved, not just on selection change.
+  private updateMeasurementLabel() {
+    if (!this.selected || !this.renderer) {
+      this.onMeasurementChange(null);
+      return;
+    }
+    const cached = this.modelCache.get(this.selected.objectId);
+    if (!cached) {
+      this.onMeasurementChange(null);
+      return;
+    }
+
+    cached.boundingBox.getSize(this.scratchMeasureSize);
+    const widthM = this.scratchMeasureSize.x * this.selected.scale.x;
+    const heightM = this.scratchMeasureSize.y * this.selected.scale.y;
+    const depthM = this.scratchMeasureSize.z * this.selected.scale.z;
+
+    // Label floats above the object's actual top point in world space.
+    this.selected.group.getWorldPosition(this.scratchMeasurePos);
+    this.scratchMeasurePos.y += heightM;
+    this.scratchMeasurePos.project(this.camera);
+
+    const canvas = this.renderer.domElement;
+    const screenX = (this.scratchMeasurePos.x * 0.5 + 0.5) * canvas.clientWidth;
+    const screenY = (-this.scratchMeasurePos.y * 0.5 + 0.5) * canvas.clientHeight;
+    // z > 1 in NDC means the point is behind the camera — hide the label rather than let it
+    // jump to a nonsensical on-screen position.
+    const visible = this.scratchMeasurePos.z < 1;
+
+    this.onMeasurementChange({ widthM, heightM, depthM, screenX, screenY, visible });
   }
 
   private onFrame(frame: any) {
@@ -521,8 +747,13 @@ export class ARSessionScene {
     }
 
     if (this.hitTestSource && referenceSpace) {
-      const hitTestResults = frame.getHitTestResults(this.hitTestSource);
-      const hit = this.findValidHit(hitTestResults, referenceSpace);
+      // getViewerPose returns null when the device has lost track of where it is in space
+      // entirely (fast motion, a blank/textureless view, etc.) — a fundamentally different
+      // problem from "tracking is fine, just no surface found yet", so it's checked and
+      // reported separately before even looking at hit-test results.
+      const viewerPose = frame.getViewerPose(referenceSpace);
+      const hitTestResults = viewerPose ? frame.getHitTestResults(this.hitTestSource) : [];
+      const hit = viewerPose ? this.findValidHit(hitTestResults, referenceSpace) : null;
 
       if (hit) {
         const typeChanged = this.currentSurfaceType !== hit.surfaceType;
@@ -553,16 +784,36 @@ export class ARSessionScene {
         this.reticle.matrix.compose(this.reticlePosition, this.reticleQuaternion, ARSessionScene.UNIT_SCALE);
         if (!this.reticle.visible || typeChanged) this.onReticleVisible(true, hit.surfaceType);
         this.reticle.visible = true;
+        this.reportSurfaceIssue(null);
       } else {
         this.reticleHasTarget = false;
         this.currentSurfaceType = null;
         if (this.reticle.visible) this.onReticleVisible(false, null);
         this.reticle.visible = false;
+
+        if (!viewerPose) {
+          this.reportSurfaceIssue("tracking-lost");
+        } else if (hitTestResults.length === 0) {
+          this.reportSurfaceIssue("no-results");
+        } else {
+          this.reportSurfaceIssue("bad-angle");
+        }
       }
     }
 
     this.updateSpawnAnimations();
+    this.updateMeasurementLabel();
     this.renderer.render(this.scene, this.camera);
+
+    if (this.pendingCapture) {
+      const resolve = this.pendingCapture;
+      this.pendingCapture = null;
+      try {
+        resolve(this.renderer.domElement.toDataURL("image/jpeg", 0.92));
+      } catch {
+        resolve(null);
+      }
+    }
   }
 
   // Returns whichever valid hit-test result (floor/tabletop/desk OR wall, per the surface
@@ -612,6 +863,8 @@ export class ARSessionScene {
     if (this.session) {
       this.session.end().catch(() => {});
     }
+    (this.xrLight as any)?.dispose();
+    this.xrLight = null;
     this.renderer?.setAnimationLoop(null);
     this.renderer?.dispose();
     this.renderer = null;
