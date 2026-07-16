@@ -93,6 +93,7 @@ export default function ARView() {
   const [measurement, setMeasurement] = useState<SelectedMeasurement | null>(null);
   const [surfaceIssue, setSurfaceIssue] = useState<SurfaceIssue>(null);
   const [isDim, setIsDim] = useState(false);
+  const [isPointingWrong, setIsPointingWrong] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const wasReticleVisibleRef = useRef(false);
   const scanPulseAnim = useRef(new Animated.Value(0)).current;
@@ -229,6 +230,7 @@ export default function ARView() {
     scene.setMeasurementCallback(setMeasurement);
     scene.setSurfaceIssueCallback(setSurfaceIssue);
     scene.setLightLevelCallback(setIsDim);
+    scene.setCameraAngleCallback(setIsPointingWrong);
     scene.mount(canvas);
     sceneRef.current = scene;
 
@@ -393,11 +395,34 @@ export default function ARView() {
       ? "Lost tracking — hold your phone steady and slowly look around"
       : surfaceIssue === "bad-angle"
       ? "Surface found, but it's at an odd angle — try a flatter spot"
+      : surfaceIssue === "no-results" && isPointingWrong
+      ? "Point your camera down toward the floor"
       : surfaceIssue === "no-results" && isDim
       ? "It's quite dark — try a brighter area"
       : showSurfaceTip
       ? "Still looking… try a flat, well-lit, textured floor, tabletop, or wall (avoid glass, mirrors, or glossy/plain white surfaces)"
       : "Move your phone slowly to find a surface…";
+
+  // AR Status checklist — a persistent, glanceable readout of everything the diagnostics
+  // above already know, all at once, instead of one message at a time.
+  const statusRows: { label: string; ok: boolean; text: string }[] = [
+    {
+      label: "Tracking",
+      ok: surfaceIssue !== "tracking-lost",
+      text: surfaceIssue === "tracking-lost" ? "Lost" : "Stable",
+    },
+    { label: "Lighting", ok: !isDim, text: isDim ? "Too dark" : "Good" },
+    {
+      label: "Surface",
+      ok: reticleVisible,
+      text: reticleVisible ? "Found" : surfaceIssue === "bad-angle" ? "Odd angle" : "Searching",
+    },
+    {
+      label: "Camera angle",
+      ok: reticleVisible || !isPointingWrong,
+      text: reticleVisible || !isPointingWrong ? "Good" : "Point down more",
+    },
+  ];
 
   const selectedPlacedObjectId = placedState.selectedId
     ? placedState.placed.find((p) => p.id === placedState.selectedId)?.objectId
@@ -592,6 +617,18 @@ export default function ARView() {
         )}
 
         {sessionActive && (
+          <View style={styles.statusPanel} pointerEvents="none">
+            {statusRows.map((row) => (
+              <View key={row.label} style={styles.statusRow}>
+                <View style={[styles.statusDot, row.ok ? styles.statusDotOk : styles.statusDotBad]} />
+                <Text style={styles.statusLabel}>{row.label}</Text>
+                <Text style={[styles.statusValue, !row.ok && styles.statusValueBad]}>{row.text}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {sessionActive && (
           <View style={styles.hintBanner} pointerEvents="none">
             <Text style={styles.hintText}>
               {arming
@@ -640,11 +677,14 @@ export default function ARView() {
               <View style={styles.carouselItem}>
                 <Text style={styles.carouselItemLabel}>Rotate</Text>
                 <View style={styles.controlBtnPair}>
+                  {/* THREE.js's rotateY(positive angle) spins the object counterclockwise as
+                      seen from a normal standing viewpoint, not clockwise — so the ↻/↺ icons
+                      are matched to -15/15 here (not 15/-15) to actually match their labels. */}
                   <TouchableOpacity
                     style={styles.controlBtn}
                     onPressIn={suppressPressIn}
                     onPressOut={suppressPressOut}
-                    onPress={() => sceneRef.current?.rotateSelected(15)}
+                    onPress={() => sceneRef.current?.rotateSelected(-15)}
                   >
                     <Text style={styles.controlBtnText}>↻</Text>
                   </TouchableOpacity>
@@ -652,7 +692,7 @@ export default function ARView() {
                     style={styles.controlBtn}
                     onPressIn={suppressPressIn}
                     onPressOut={suppressPressOut}
-                    onPress={() => sceneRef.current?.rotateSelected(-15)}
+                    onPress={() => sceneRef.current?.rotateSelected(15)}
                   >
                     <Text style={styles.controlBtnText}>↺</Text>
                   </TouchableOpacity>
@@ -847,6 +887,24 @@ const styles = StyleSheet.create({
   tourButtonRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 4 },
   tourSkipBtn: { paddingVertical: 12, paddingHorizontal: 8 },
   tourSkipBtnText: { color: TEXT_MUTED, fontSize: 14, fontWeight: "600" },
+
+  statusPanel: {
+    position: "absolute",
+    top: 90,
+    left: 16,
+    backgroundColor: "rgba(8,28,38,0.82)",
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    gap: 4,
+  },
+  statusRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  statusDot: { width: 6, height: 6, borderRadius: 3 },
+  statusDotOk: { backgroundColor: "#4CAF50" },
+  statusDotBad: { backgroundColor: "#FFAA00" },
+  statusLabel: { color: "rgba(255,255,255,0.7)", fontSize: 10, fontWeight: "600", width: 78 },
+  statusValue: { color: "#fff", fontSize: 10, fontWeight: "700" },
+  statusValueBad: { color: "#FFD27A" },
 
   scanPulseWrap: {
     position: "absolute",

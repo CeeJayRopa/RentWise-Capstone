@@ -82,6 +82,13 @@ const RETICLE_COLOR_CONFIDENT = 0x4caf50;
 // trustworthy immediately instead of re-ramping from zero.
 const RECOVERY_SNAP_RADIUS = 0.3;
 
+// Camera-angle guidance: the camera's forward direction's Y-component is negative when
+// looking down, ~0 when level, positive when looking up. A phone genuinely being swept
+// across the floor is usually well past this threshold; a phone held level/up (a common
+// beginner mistake — pointing straight ahead instead of down at the ground) isn't, and
+// won't find a floor no matter how long it searches.
+const CAMERA_DOWNWARD_THRESHOLD = -0.15;
+
 // Surface classification, by angle between the hit-test surface normal and world-up:
 // near 0° = floor/tabletop/desk, near 90° = wall. Anything in between (slanted surfaces,
 // ramps) is ambiguous and rejected outright.
@@ -207,6 +214,9 @@ export class ARSessionScene {
   private lastSurfaceIssue: SurfaceIssue = null;
   private onLightLevelChange: (isDim: boolean) => void = () => {};
   private lastReportedDim: boolean | null = null;
+  private onCameraAngleChange: (isPointingWrong: boolean) => void = () => {};
+  private lastReportedPointingWrong: boolean | null = null;
+  private scratchCameraForward = new THREE.Vector3();
   private resizeHandler = () => this.handleResize();
 
   // Scratch space for the per-frame selected-object measurement/label projection, reused to
@@ -263,6 +273,10 @@ export class ARSessionScene {
     this.onLightLevelChange = onLightLevelChange;
   }
 
+  setCameraAngleCallback(onCameraAngleChange: (isPointingWrong: boolean) => void) {
+    this.onCameraAngleChange = onCameraAngleChange;
+  }
+
   // Only fires the callback when the cause actually changes, so the UI layer's own
   // time-based escalation (e.g. "still searching after 5s") isn't reset every single frame.
   private reportSurfaceIssue(issue: SurfaceIssue) {
@@ -272,11 +286,6 @@ export class ARSessionScene {
   }
 
   mount(canvas: HTMLCanvasElement) {
-    // preserveDrawingBuffer: true is required for capturePhoto() below — during an XR
-    // session, the framebuffer is otherwise cleared/swapped immediately after each frame's
-    // render call, before a canvas.toDataURL() read from outside the render loop could ever
-    // see it. This keeps the just-rendered frame (camera passthrough + placed objects,
-    // exactly as composited by the XR layer) readable for one extra tick.
     const renderer = new THREE.WebGLRenderer({
       canvas,
       alpha: true,
@@ -326,7 +335,11 @@ export class ARSessionScene {
 
     const session = await nav.xr.requestSession("immersive-ar", {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay", "light-estimation", "plane-detection"],
+      optionalFeatures: ["dom-overlay", "light-estimation", "plane-detection", "depth-sensing"],
+      depthSensing: {
+        usagePreference: ["cpu-optimized"],
+        dataFormatPreference: ["luminance-alpha"],
+      },
       domOverlay: { root: overlayRoot },
     });
 
@@ -365,6 +378,47 @@ export class ARSessionScene {
     });
   }
 
+  // canvas.toDataURL() does NOT work during an active WebXR session: once the session
+  // starts, rendering targets the XR compositor's own framebuffer
+  // (session.renderState.baseLayer.framebuffer), not the canvas element's default
+  // backbuffer — so the canvas itself stays blank from the page's own perspective even
+  // though the real composited frame (camera passthrough + placed objects) is visibly on
+  // screen. The fix is reading pixels directly from whichever framebuffer is actually bound
+  // at render time, via gl.readPixels(), then hand-building an ordinary 2D image from that
+  // raw pixel data (which toDataURL() *does* work on, since it's a normal, non-XR canvas).
+  private readXRFramePixels(): string | null {
+    if (!this.renderer || !this.session) return null;
+    try {
+      const gl = this.renderer.getContext() as WebGLRenderingContext;
+      const layer = this.session.renderState.baseLayer;
+      const width: number = layer.framebufferWidth;
+      const height: number = layer.framebufferHeight;
+
+      const pixels = new Uint8Array(width * height * 4);
+      gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+      // readPixels' origin is bottom-left (OpenGL convention); canvas/image formats expect
+      // top-left, so each row is flipped into a fresh, correctly-oriented buffer.
+      const flipped = new Uint8ClampedArray(width * height * 4);
+      const rowBytes = width * 4;
+      for (let y = 0; y < height; y++) {
+        const srcStart = y * rowBytes;
+        const dstStart = (height - y - 1) * rowBytes;
+        flipped.set(pixels.subarray(srcStart, srcStart + rowBytes), dstStart);
+      }
+
+      const outCanvas = document.createElement("canvas");
+      outCanvas.width = width;
+      outCanvas.height = height;
+      const ctx = outCanvas.getContext("2d")!;
+      ctx.putImageData(new ImageData(flipped, width, height), 0, 0);
+      return outCanvas.toDataURL("image/jpeg", 0.92);
+    } catch (err) {
+      console.error("[AR] photo capture failed:", err);
+      return null;
+    }
+  }
+
   private onSessionEnd() {
     this.session = null;
     this.hitTestSource = null;
@@ -387,6 +441,8 @@ export class ARSessionScene {
     this.reportSurfaceIssue(null);
     this.lastReportedDim = null;
     this.onLightLevelChange(false);
+    this.lastReportedPointingWrong = null;
+    this.onCameraAngleChange(false);
 
     for (const mesh of this.detectedPlaneMeshes.values()) {
       this.scene.remove(mesh);
@@ -834,6 +890,38 @@ export class ARSessionScene {
     }
   }
 
+  // Progressive upgrade: on devices with a real depth sensor (LiDAR on iPhone Pro models,
+  // time-of-flight on some higher-end Android phones), the sensor measures distance
+  // directly instead of piecing it together from camera-motion parallax like standard
+  // hit-testing does. Rather than inventing placement geometry from that reading alone
+  // (a single depth sample tells you distance, not a surface's true orientation — using it
+  // to place an object could put it at a wrong angle), it's used as a second, independent
+  // confirmation: if the depth sensor's straight-ahead distance reading roughly agrees with
+  // how far the current hit-test reticle already is, that's real hardware corroboration
+  // this is a genuine surface, so confidence can jump ahead instead of waiting out the full
+  // frame count. No-ops entirely on devices without the sensor (frame.getDepthInformation
+  // is simply absent there) — every device keeps exactly what it already had.
+  private tryDepthConfidenceBoost(frame: any, viewerPose: any) {
+    if (!this.reticleHasTarget || !viewerPose?.views?.length) return;
+    if (typeof frame.getDepthInformation !== "function") return;
+
+    let depthInfo: any;
+    try {
+      depthInfo = frame.getDepthInformation(viewerPose.views[0]);
+    } catch {
+      return;
+    }
+    if (!depthInfo) return;
+
+    const depthMeters = depthInfo.getDepthInMeters(0.5, 0.5);
+    if (!Number.isFinite(depthMeters)) return;
+
+    const reticleDistance = this.camera.position.distanceTo(this.reticlePosition);
+    if (Math.abs(reticleDistance - depthMeters) < 0.15) {
+      this.reticleStableFrames = Math.max(this.reticleStableFrames, RETICLE_STABLE_FRAMES_THRESHOLD);
+    }
+  }
+
   private onFrame(frame: any) {
     if (!frame || !this.renderer || !this.session) return;
 
@@ -848,6 +936,16 @@ export class ARSessionScene {
         this.lastReportedDim = isDim;
         this.onLightLevelChange(isDim);
       }
+    }
+
+    // Camera-angle guidance: computed every frame regardless of search state (cheap), so
+    // it's already known the instant the UI layer wants to show it — same pattern as the
+    // lighting check above.
+    this.camera.getWorldDirection(this.scratchCameraForward);
+    const isPointingWrong = this.scratchCameraForward.y > CAMERA_DOWNWARD_THRESHOLD;
+    if (isPointingWrong !== this.lastReportedPointingWrong) {
+      this.lastReportedPointingWrong = isPointingWrong;
+      this.onCameraAngleChange(isPointingWrong);
     }
 
     const referenceSpace = this.renderer.xr.getReferenceSpace();
@@ -924,6 +1022,8 @@ export class ARSessionScene {
           this.reticleQuaternion.slerp(this.reticleTargetQuaternion, RETICLE_SMOOTHING);
         }
 
+        this.tryDepthConfidenceBoost(frame, viewerPose);
+
         this.reticle.matrix.compose(this.reticlePosition, this.reticleQuaternion, ARSessionScene.UNIT_SCALE);
         const isConfident = this.reticleStableFrames >= RETICLE_STABLE_FRAMES_THRESHOLD;
         if (isConfident) {
@@ -961,11 +1061,7 @@ export class ARSessionScene {
     if (this.pendingCapture) {
       const resolve = this.pendingCapture;
       this.pendingCapture = null;
-      try {
-        resolve(this.renderer.domElement.toDataURL("image/jpeg", 0.92));
-      } catch {
-        resolve(null);
-      }
+      resolve(this.readXRFramePixels());
     }
   }
 
