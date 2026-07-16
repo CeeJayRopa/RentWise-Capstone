@@ -65,6 +65,23 @@ const RETICLE_SMOOTHING = 0.5;
 const RETICLE_POSITION_DEADZONE = 0.004;
 const RETICLE_ROTATION_DEADZONE_DEG = 1.5;
 
+// Confidence indicator: the WebXR spec doesn't expose whether a given hit came from a
+// fully-classified plane or a rawer point-hit (see the "point" entityType comment in
+// onFrame), so this approximates confidence from our own observed stability instead — a
+// hit that hasn't moved beyond the deadzone for this many consecutive frames is treated as
+// "locked in" (green); anything still settling is "searching" (amber).
+const RETICLE_STABLE_FRAMES_THRESHOLD = 10;
+const RETICLE_COLOR_SEARCHING = 0xffaa00;
+const RETICLE_COLOR_CONFIDENT = 0x4caf50;
+
+// Lightweight surface memory: position already snaps instantly on any reacquisition (see
+// the `!reticleHasTarget` branch below), so the real gap after recovering from a brief
+// tracking-loss is confidence, not position — it still ramps back up from amber even when
+// it's clearly the same spot as before. If a hit recovered right after tracking loss lands
+// within this radius (meters) of where we were last confident, it's treated as still
+// trustworthy immediately instead of re-ramping from zero.
+const RECOVERY_SNAP_RADIUS = 0.3;
+
 // Surface classification, by angle between the hit-test surface normal and world-up:
 // near 0° = floor/tabletop/desk, near 90° = wall. Anything in between (slanted surfaces,
 // ramps) is ambiguous and rejected outright.
@@ -112,6 +129,10 @@ export class ARSessionScene {
   private reticleTargetPosition = new THREE.Vector3();
   private reticleTargetQuaternion = new THREE.Quaternion();
   private reticleHasTarget = false;
+  private reticleStableFrames = 0;
+  private lastKnownGoodPosition = new THREE.Vector3();
+  private hasLastKnownGood = false;
+  private wasTrackingLost = false;
   private candidatePosition = new THREE.Vector3();
   private candidateQuaternion = new THREE.Quaternion();
   private hitCheckMatrix = new THREE.Matrix4();
@@ -148,6 +169,20 @@ export class ARSessionScene {
   private fallbackDirectionalLight: THREE.DirectionalLight;
   private xrLight: XREstimatedLight | null = null;
 
+  // Detected-surface extent visualization (separate WebXR feature from hit-testing — see
+  // "plane-detection" in startSession's optionalFeatures). Degrades safely to "nothing
+  // shown" on browsers that don't support it, since frame.detectedPlanes is just undefined
+  // there. Keyed by the browser's own XRPlane objects so each gets one persistent mesh
+  // instead of being recreated every frame.
+  private detectedPlaneMeshes = new Map<any, THREE.Mesh>();
+  private planeVisualizationMaterial = new THREE.MeshBasicMaterial({
+    color: 0x4caf50,
+    transparent: true,
+    opacity: 0.15,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+
   private placed: PlacedObject[] = [];
   private selected: PlacedObject | null = null;
   private nextInstanceId = 1;
@@ -170,6 +205,8 @@ export class ARSessionScene {
   private onMeasurementChange: (measurement: SelectedMeasurement | null) => void = () => {};
   private onSurfaceIssue: (issue: SurfaceIssue) => void = () => {};
   private lastSurfaceIssue: SurfaceIssue = null;
+  private onLightLevelChange: (isDim: boolean) => void = () => {};
+  private lastReportedDim: boolean | null = null;
   private resizeHandler = () => this.handleResize();
 
   // Scratch space for the per-frame selected-object measurement/label projection, reused to
@@ -179,7 +216,7 @@ export class ARSessionScene {
 
   constructor() {
     const geometry = new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2);
-    const material = new THREE.MeshBasicMaterial({ color: 0x8b7355 });
+    const material = new THREE.MeshBasicMaterial({ color: RETICLE_COLOR_SEARCHING });
     this.reticle = new THREE.Mesh(geometry, material);
     this.reticle.matrixAutoUpdate = false;
     this.reticle.visible = false;
@@ -220,6 +257,10 @@ export class ARSessionScene {
 
   setSurfaceIssueCallback(onSurfaceIssue: (issue: SurfaceIssue) => void) {
     this.onSurfaceIssue = onSurfaceIssue;
+  }
+
+  setLightLevelCallback(onLightLevelChange: (isDim: boolean) => void) {
+    this.onLightLevelChange = onLightLevelChange;
   }
 
   // Only fires the callback when the cause actually changes, so the UI layer's own
@@ -285,7 +326,7 @@ export class ARSessionScene {
 
     const session = await nav.xr.requestSession("immersive-ar", {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay", "light-estimation"],
+      optionalFeatures: ["dom-overlay", "light-estimation", "plane-detection"],
       domOverlay: { root: overlayRoot },
     });
 
@@ -329,6 +370,9 @@ export class ARSessionScene {
     this.hitTestSource = null;
     this.hitTestSourceRequested = false;
     this.reticleHasTarget = false;
+    this.reticleStableFrames = 0;
+    this.hasLastKnownGood = false;
+    this.wasTrackingLost = false;
     this.currentSurfaceType = null;
     this.reticle.visible = false;
 
@@ -341,6 +385,14 @@ export class ARSessionScene {
     this.onReticleVisible(false, null);
     this.onMeasurementChange(null);
     this.reportSurfaceIssue(null);
+    this.lastReportedDim = null;
+    this.onLightLevelChange(false);
+
+    for (const mesh of this.detectedPlaneMeshes.values()) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+    }
+    this.detectedPlaneMeshes.clear();
   }
 
   // Active for the full duration of any DOM overlay button press (touch-down through
@@ -730,10 +782,77 @@ export class ARSessionScene {
     this.onMeasurementChange({ widthM, heightM, depthM, screenX, screenY, visible });
   }
 
+  // Renders each currently-tracked plane's real boundary as a translucent green overlay, so
+  // the user can see how big the detected floor/table/wall actually is, not just a small
+  // fixed-size ring at the raycast point. Meshes are reused across frames (only rebuilt when
+  // a plane's polygon actually changes, per its lastChangedTime) since recreating geometry
+  // every frame for every tracked plane would be wasteful.
+  private updatePlaneVisualizations(frame: any, referenceSpace: any) {
+    const detectedPlanes: Set<any> | undefined = frame.detectedPlanes;
+    if (!detectedPlanes) return; // Browser doesn't support/grant plane-detection — no-op.
+
+    for (const [plane, mesh] of this.detectedPlaneMeshes) {
+      if (!detectedPlanes.has(plane)) {
+        this.scene.remove(mesh);
+        mesh.geometry.dispose();
+        this.detectedPlaneMeshes.delete(plane);
+      }
+    }
+
+    for (const plane of detectedPlanes) {
+      const pose = frame.getPose(plane.planeSpace, referenceSpace);
+      if (!pose) continue;
+
+      let mesh = this.detectedPlaneMeshes.get(plane);
+      const changed = !mesh || mesh.userData.lastChangedTime !== plane.lastChangedTime;
+      if (changed) {
+        const polygon = plane.polygon as { x: number; y: number; z: number }[];
+        if (polygon.length >= 3) {
+          const shape = new THREE.Shape();
+          shape.moveTo(polygon[0].x, polygon[0].z);
+          for (let i = 1; i < polygon.length; i++) shape.lineTo(polygon[i].x, polygon[i].z);
+          shape.closePath();
+          // Shapes build flat in local XY by default — rotated to XZ (same convention as
+          // the reticle's own RingGeometry) to match the plane's local coordinate frame,
+          // where WebXR defines the plane's normal as its local Y-axis.
+          const geometry = new THREE.ShapeGeometry(shape).rotateX(-Math.PI / 2);
+
+          if (mesh) {
+            mesh.geometry.dispose();
+            mesh.geometry = geometry;
+          } else {
+            mesh = new THREE.Mesh(geometry, this.planeVisualizationMaterial);
+            mesh.matrixAutoUpdate = false;
+            this.detectedPlaneMeshes.set(plane, mesh);
+            this.scene.add(mesh);
+          }
+          mesh.userData.lastChangedTime = plane.lastChangedTime;
+        }
+      }
+
+      if (mesh) mesh.matrix.fromArray(pose.transform.matrix);
+    }
+  }
+
   private onFrame(frame: any) {
     if (!frame || !this.renderer || !this.session) return;
 
+    // xrLight.directionalLight.intensity is a WebXR light-estimation scalar clamped to a
+    // floor of 1.0 (see XREstimatedLight's own source) — meaning it sits at exactly that
+    // floor whenever the room is genuinely dim, and rises above it in brighter rooms. Only
+    // meaningful once estimation has actually started (xrLight.parent === this.scene, set
+    // by the estimationstart listener in mount()) — before that there's no real reading yet.
+    if (this.xrLight && this.xrLight.parent === this.scene) {
+      const isDim = this.xrLight.directionalLight.intensity <= 1.05;
+      if (isDim !== this.lastReportedDim) {
+        this.lastReportedDim = isDim;
+        this.onLightLevelChange(isDim);
+      }
+    }
+
     const referenceSpace = this.renderer.xr.getReferenceSpace();
+
+    if (referenceSpace) this.updatePlaneVisualizations(frame, referenceSpace);
 
     // Kick off hit-test-source setup once, without awaiting: an XRFrame is only valid
     // synchronously during this callback, so any `await` here would leave later lines
@@ -778,6 +897,17 @@ export class ARSessionScene {
           this.reticlePosition.copy(this.candidatePosition);
           this.reticleQuaternion.copy(this.candidateQuaternion);
           this.reticleHasTarget = true;
+
+          // Recovered right after tracking loss, near where we were last confident? Trust
+          // it immediately instead of re-ramping confidence from zero — see
+          // RECOVERY_SNAP_RADIUS's own comment.
+          this.reticleStableFrames =
+            this.wasTrackingLost &&
+            this.hasLastKnownGood &&
+            this.candidatePosition.distanceTo(this.lastKnownGoodPosition) < RECOVERY_SNAP_RADIUS
+              ? RETICLE_STABLE_FRAMES_THRESHOLD
+              : 0;
+          this.wasTrackingLost = false;
         } else {
           // Deadzone: ignore movement below the noise floor so the smoothing filter isn't
           // perpetually chasing tiny fluctuations even while the phone is essentially still.
@@ -786,23 +916,36 @@ export class ARSessionScene {
           if (movedDist > RETICLE_POSITION_DEADZONE || movedDeg > RETICLE_ROTATION_DEADZONE_DEG) {
             this.reticleTargetPosition.copy(this.candidatePosition);
             this.reticleTargetQuaternion.copy(this.candidateQuaternion);
+            this.reticleStableFrames = 0;
+          } else {
+            this.reticleStableFrames++;
           }
           this.reticlePosition.lerp(this.reticleTargetPosition, RETICLE_SMOOTHING);
           this.reticleQuaternion.slerp(this.reticleTargetQuaternion, RETICLE_SMOOTHING);
         }
 
         this.reticle.matrix.compose(this.reticlePosition, this.reticleQuaternion, ARSessionScene.UNIT_SCALE);
+        const isConfident = this.reticleStableFrames >= RETICLE_STABLE_FRAMES_THRESHOLD;
+        if (isConfident) {
+          this.lastKnownGoodPosition.copy(this.reticlePosition);
+          this.hasLastKnownGood = true;
+        }
+        (this.reticle.material as THREE.MeshBasicMaterial).color.setHex(
+          isConfident ? RETICLE_COLOR_CONFIDENT : RETICLE_COLOR_SEARCHING
+        );
         if (!this.reticle.visible || typeChanged) this.onReticleVisible(true, hit.surfaceType);
         this.reticle.visible = true;
         this.reportSurfaceIssue(null);
       } else {
         this.reticleHasTarget = false;
+        this.reticleStableFrames = 0;
         this.currentSurfaceType = null;
         if (this.reticle.visible) this.onReticleVisible(false, null);
         this.reticle.visible = false;
 
         if (!viewerPose) {
           this.reportSurfaceIssue("tracking-lost");
+          this.wasTrackingLost = true;
         } else if (hitTestResults.length === 0) {
           this.reportSurfaceIssue("no-results");
         } else {

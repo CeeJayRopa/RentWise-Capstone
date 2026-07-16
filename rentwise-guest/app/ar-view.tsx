@@ -8,6 +8,8 @@ import {
   ActivityIndicator,
   Platform,
   Modal,
+  Animated,
+  Easing,
 } from "react-native";
 import { router } from "expo-router";
 import { useEffect, useRef, useState } from "react";
@@ -90,7 +92,29 @@ export default function ARView() {
   const [placedState, setPlacedState] = useState<PlacedState>({ placed: [], selectedId: null, canUndo: false });
   const [measurement, setMeasurement] = useState<SelectedMeasurement | null>(null);
   const [surfaceIssue, setSurfaceIssue] = useState<SurfaceIssue>(null);
+  const [isDim, setIsDim] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const wasReticleVisibleRef = useRef(false);
+  const scanPulseAnim = useRef(new Animated.Value(0)).current;
+
+  // Loops for the entire time AR is active — the "actively scanning" pulse ring is only
+  // actually rendered while !reticleVisible (see JSX below), but keeping the loop itself
+  // running continuously (rather than starting/stopping it per reticle-visibility change)
+  // means it's always mid-cycle and ready the instant it needs to reappear.
+  useEffect(() => {
+    if (!sessionActive) return;
+    scanPulseAnim.setValue(0);
+    const loop = Animated.loop(
+      Animated.timing(scanPulseAnim, {
+        toValue: 1,
+        duration: 1400,
+        easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [sessionActive]);
 
   // null = still checking, so we never flash the "Start AR" button on a device that's
   // about to turn out unsupported. Checked proactively via isSessionSupported so we never
@@ -188,11 +212,23 @@ export default function ARView() {
 
     const scene = new ARSessionScene();
     scene.setCallbacks(setPlacedState, (visible, type) => {
+      // Rising edge only (not every visible frame) — a quick vibration the instant a
+      // surface is first found, so there's a physical confirmation cue even if you're not
+      // staring at exactly the right spot on screen to notice the reticle pop in.
+      if (visible && !wasReticleVisibleRef.current) {
+        try {
+          (navigator as any).vibrate?.(50);
+        } catch {
+          // Non-fatal — not every device/browser supports vibration.
+        }
+      }
+      wasReticleVisibleRef.current = visible;
       setReticleVisible(visible);
       setSurfaceType(type);
     });
     scene.setMeasurementCallback(setMeasurement);
     scene.setSurfaceIssueCallback(setSurfaceIssue);
+    scene.setLightLevelCallback(setIsDim);
     scene.mount(canvas);
     sceneRef.current = scene;
 
@@ -357,8 +393,10 @@ export default function ARView() {
       ? "Lost tracking — hold your phone steady and slowly look around"
       : surfaceIssue === "bad-angle"
       ? "Surface found, but it's at an odd angle — try a flatter spot"
+      : surfaceIssue === "no-results" && isDim
+      ? "It's quite dark — try a brighter area"
       : showSurfaceTip
-      ? "Still looking… try a flat, well-lit, textured floor, tabletop, or wall (avoid glossy or plain white surfaces)"
+      ? "Still looking… try a flat, well-lit, textured floor, tabletop, or wall (avoid glass, mirrors, or glossy/plain white surfaces)"
       : "Move your phone slowly to find a surface…";
 
   const selectedPlacedObjectId = placedState.selectedId
@@ -389,6 +427,26 @@ export default function ARView() {
           can't do AR placement at all (all iPhones, older Android, desktop). */}
       {arSupported === false && previewUrl && (
         <ModelViewer src={previewUrl} poster={armedId ? thumbnailUrls[armedId] : undefined} />
+      )}
+
+      {/* Actively-scanning pulse — visible feedback that the phone is doing something while
+          searching for a surface, since real detection latency can't be eliminated (see
+          surfaceHintText's own comments) but the *perceived* responsiveness still matters. */}
+      {sessionActive && !reticleVisible && (
+        <View style={styles.scanPulseWrap} pointerEvents="none">
+          <Animated.View
+            style={[
+              styles.scanPulseRing,
+              {
+                opacity: scanPulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.7, 0] }),
+                transform: [
+                  { scale: scanPulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1.8] }) },
+                ],
+              },
+            ]}
+          />
+          <View style={styles.scanPulseDot} />
+        </View>
       )}
 
       {/*
@@ -789,6 +847,32 @@ const styles = StyleSheet.create({
   tourButtonRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 4 },
   tourSkipBtn: { paddingVertical: 12, paddingHorizontal: 8 },
   tourSkipBtnText: { color: TEXT_MUTED, fontSize: 14, fontWeight: "600" },
+
+  scanPulseWrap: {
+    position: "absolute",
+    top: "50%",
+    left: "50%",
+    marginLeft: -20,
+    marginTop: -20,
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  scanPulseRing: {
+    position: "absolute",
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: PRIMARY,
+  },
+  scanPulseDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: PRIMARY,
+  },
 
   hintBanner: {
     position: "absolute",
