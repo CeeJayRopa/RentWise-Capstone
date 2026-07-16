@@ -54,8 +54,10 @@ const MIN_SCALE = 0.3;
 const MAX_SCALE = 3;
 
 // How much of each frame's reticle movement to apply (0-1): lower = smoother but laggier,
-// higher = snappier but jitterier. Damps out ARCore's frame-to-frame tracking noise.
-const RETICLE_SMOOTHING = 0.35;
+// higher = snappier but jitterier. Damps out ARCore's frame-to-frame tracking noise. Note
+// first acquisition always snaps instantly regardless of this value (see onFrame) — this
+// only affects how quickly the reticle keeps up with movement after that.
+const RETICLE_SMOOTHING = 0.5;
 
 // Ignore hit-test movement smaller than this (meters) when updating the reticle's target —
 // freezes residual sensor noise at the source instead of letting the smoothing filter chase
@@ -740,7 +742,15 @@ export class ARSessionScene {
       this.hitTestSourceRequested = true;
       const session = this.session;
       session.requestReferenceSpace("viewer").then((viewerSpace: any) => {
-        session.requestHitTestSource({ space: viewerSpace, entityTypes: ["plane"] }).then((source: any) => {
+        // "plane" alone only returns results once ARCore/ARKit has fully classified a
+        // surface, which takes a few frames of camera motion. Adding "point" (raw
+        // feature-point hits) lets a result come back sooner, before classification
+        // finishes — the standard technique for faster time-to-first-detection. Trade-off:
+        // the WebXR spec doesn't expose which entityType produced a given result, so
+        // findValidHit's tilt-angle filter below has to treat all results the same way —
+        // a point hit's orientation is occasionally less reliable than a classified
+        // plane's, which is an accepted cost for detecting noticeably faster in practice.
+        session.requestHitTestSource({ space: viewerSpace, entityTypes: ["plane", "point"] }).then((source: any) => {
           this.hitTestSource = source;
         });
       });

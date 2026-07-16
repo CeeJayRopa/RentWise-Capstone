@@ -1,0 +1,14 @@
+# This is a monorepo (npm workspaces) - EAS Build archives from this repo
+# root when building any of the 4 apps, not just that app's own folder. Each
+# app's own .easignore (android/, ios/) only covers its own directory, so
+# without these root-level rules, building e.g. rentwise-tenant still scans
+# and uploads rentwise-admin/rentwise-owner's local Gradle caches and build
+# outputs too - bloating the upload and occasionally failing outright with
+# EBUSY errors on locked Gradle cache/lock files left behind by local builds.
+node_modules/
+**/android/.gradle/
+**/android/build/
+**/android/app/build/
+**/ios/Pods/
+**/ios/build/
+**/.expo/
