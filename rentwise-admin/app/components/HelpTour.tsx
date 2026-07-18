@@ -5,7 +5,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   Modal,
-  Dimensions,
+  useWindowDimensions,
   findNodeHandle,
   UIManager,
 } from "react-native";
@@ -41,7 +41,6 @@ export type HelpStep = {
 
 type Rect = { x: number; y: number; width: number; height: number };
 
-const SCREEN = Dimensions.get("window");
 const PADDING = 6;
 
 function measure(ref: React.RefObject<View | null>): Promise<Rect | null> {
@@ -109,6 +108,13 @@ export default function HelpTour({
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
+  // Live window height, not a one-time Dimensions.get() snapshot — a module-level constant
+  // was captured once at whatever moment this file first loaded (often before the window
+  // has settled to its real size on some devices), so tooltip placement math built on it
+  // could end up using the wrong screen height for that specific device, making the
+  // tooltip overlap page content instead of clearing it.
+  const { height: screenHeight } = useWindowDimensions();
+
   // Always holds the latest `steps` array without being a dependency of the
   // measurement effect below — every screen recreates its tourSteps array
   // on every render (it isn't memoized), so depending on it directly would
@@ -154,7 +160,7 @@ export default function HelpTour({
     ? (() => {
         const y = rect.y - PADDING + (step.offsetY ?? 0);
         const rawHeight = rect.height + PADDING * 2;
-        const maxHeight = step.clipBottom != null ? SCREEN.height - step.clipBottom - y : rawHeight;
+        const maxHeight = step.clipBottom != null ? screenHeight - step.clipBottom - y : rawHeight;
         return {
           x: rect.x - PADDING,
           y,
@@ -164,13 +170,13 @@ export default function HelpTour({
       })()
     : { x: 0, y: 0, width: 0, height: 0 };
 
-  const spaceBelow = SCREEN.height - (spot.y + spot.height);
+  const spaceBelow = screenHeight - (spot.y + spot.height);
   const showBelow = !rect || spaceBelow > 140;
   const tooltipTop = rect
     ? showBelow
       ? spot.y + spot.height + 14
       : Math.max(60, spot.y - 20 - 150)
-    : SCREEN.height / 2 - 80;
+    : screenHeight / 2 - 80;
 
   return (
     <Modal

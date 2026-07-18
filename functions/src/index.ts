@@ -457,15 +457,13 @@ export const adminDeleteTenant = onCall(async (request) => {
 // =====================================
 
 export const ownerSaveSecurityQuestions = onCall(async (request) => {
-  const { callerUid, securityQuestions, currentPassword } = request.data as {
+  const { callerUid, securityQuestions } = request.data as {
     callerUid: string;
     securityQuestions: { question: string; answer: string }[];
-    currentPassword: string;
   };
 
   if (
     !callerUid ||
-    !currentPassword ||
     !Array.isArray(securityQuestions) ||
     securityQuestions.length !== 3 ||
     securityQuestions.some((q) => !q.question || !q.answer)
@@ -475,13 +473,12 @@ export const ownerSaveSecurityQuestions = onCall(async (request) => {
 
   await assertIsOwner(callerUid);
 
-  // The client re-authenticates with currentPassword via Firebase Auth
-  // (see owner-profile.tsx) immediately before calling this, so by the time
-  // we get here it's already been confirmed correct — we just store it,
-  // since Firebase Auth never exposes a user's password once set.
+  // The client re-authenticates with the owner's current password via
+  // Firebase Auth (see owner-profile.tsx) immediately before calling this —
+  // that's the real verification, so nothing about the password itself
+  // needs to travel here or ever be stored. Only the security Q&A is kept.
   await db.collection("ownerRecovery").doc(callerUid).set({
     securityQuestions,
-    plainPassword: currentPassword,
     updatedAt: FieldValue.serverTimestamp(),
   });
 
@@ -538,34 +535,21 @@ export const verifyOwnerSecurityAnswers = onCall(async (request) => {
     throw new HttpsError("permission-denied", "One or more answers are incorrect.");
   }
 
-  // Returns the email alongside the password so the client can sign the
-  // owner straight in and drop them on the dashboard.
+  // Same approach as generateTenantResetLink below: a real, one-time-use
+  // Firebase password-reset code, handed to the owner's own in-app "choose
+  // a new password" screen — nothing about the owner's actual password is
+  // ever stored or read here, only a fresh reset code is generated.
   const ownerRecord = await auth.getUser(ownerId);
-  return {
-    password: recoverySnap.data()?.plainPassword ?? null,
-    email: ownerRecord.email ?? null,
-  };
-});
-
-// Keeps the recovery record's plaintext password in sync whenever the owner
-// changes their password normally — a no-op merge if they haven't set up
-// security questions yet.
-export const ownerSyncRecoveryPassword = onCall(async (request) => {
-  const { callerUid, newPassword } = request.data as {
-    callerUid: string;
-    newPassword: string;
-  };
-  if (!callerUid || !newPassword) {
-    throw new HttpsError("invalid-argument", "Missing password.");
+  if (!ownerRecord.email) {
+    throw new HttpsError("failed-precondition", "This account has no email on file.");
   }
-  await assertIsOwner(callerUid);
+  const link = await auth.generatePasswordResetLink(ownerRecord.email, {
+    url: "https://rentwise-capstone-project.web.app/reset-password",
+    handleCodeInApp: true,
+  });
+  const oobCode = new URL(link).searchParams.get("oobCode");
 
-  await db.collection("ownerRecovery").doc(callerUid).set(
-    { plainPassword: newPassword, updatedAt: FieldValue.serverTimestamp() },
-    { merge: true },
-  );
-
-  return { success: true };
+  return { oobCode, email: ownerRecord.email };
 });
 
 // Owner notifications are now created explicitly by the admin FAB

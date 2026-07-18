@@ -166,7 +166,7 @@ export default function PaymentHistoryScreen() {
   const searching = searchQuery.trim().length > 0;
 
   const history = payments
-    .filter((p) => p.status === "approved")
+    .filter((p) => p.status === "approved" || p.status === "pending")
     .filter((p) => {
       // Search looks across every month/year for this tenant; otherwise the
       // list stays scoped to whichever month + year is picked above.
@@ -190,7 +190,12 @@ export default function PaymentHistoryScreen() {
         new Date(a.date?.toDate ? a.date.toDate() : a.date).getTime(),
     );
 
-  const totalAmount = history.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  // Only confirmed payments count toward "Total paid" and the progress bar —
+  // a pending payment isn't actually money received yet from the admin's
+  // perspective, even though it already shows up in the list below.
+  const totalAmount = history
+    .filter((p) => p.status === "approved")
+    .reduce((sum, p) => sum + Number(p.amount || 0), 0);
 
   // "of ₱X" reference figure for the progress bar — the selected month's
   // full charge at the stall's current daily rate (pricing isn't tracked
@@ -409,8 +414,20 @@ export default function PaymentHistoryScreen() {
                     </View>
 
                     <View style={styles.rowRight}>
-                      <View style={[styles.statusBadge, styles.badgeApproved]}>
-                        <Text style={[styles.statusBadgeText, styles.textApproved]}>PAID</Text>
+                      <View
+                        style={[
+                          styles.statusBadge,
+                          item.status === "pending" ? styles.badgePending : styles.badgeApproved,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.statusBadgeText,
+                            item.status === "pending" ? styles.textPending : styles.textApproved,
+                          ]}
+                        >
+                          {item.status === "pending" ? "PENDING" : "PAID"}
+                        </Text>
                       </View>
                       <Text style={styles.rowMethod}>via {methodLabel(item)}</Text>
                     </View>
@@ -775,6 +792,7 @@ const styles = StyleSheet.create({
   },
 
   badgeApproved: { backgroundColor: colors.successSoft },
+  badgePending: { backgroundColor: colors.warningSoft },
 
   statusBadgeText: {
     fontSize: fontSize.xs,
@@ -782,6 +800,7 @@ const styles = StyleSheet.create({
   },
 
   textApproved: { color: colors.emerald },
+  textPending: { color: colors.warning },
 
   rowMethod: {
     fontSize: fontSize.xs,

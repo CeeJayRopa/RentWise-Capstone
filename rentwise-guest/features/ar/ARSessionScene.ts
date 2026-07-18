@@ -48,6 +48,11 @@ interface PlacedObject extends PlacedObjectInfo {
   wallOffset: number;
   surfaceType: SurfaceType;
   spawnStartTime: number;
+  // Cumulative manual rotation (degrees) applied via rotateSelected, on top of whatever
+  // base facing orientTowardCamera/orientTowardWall computes. Tracked separately because
+  // moveSelectedToReticle recomputes that base facing from scratch on every move, which
+  // would otherwise silently wipe out any rotation the user dialed in beforehand.
+  userYawDeg: number;
 }
 
 const MIN_SCALE = 0.3;
@@ -619,6 +624,7 @@ export class ARSessionScene {
       wallOffset: this.armedWallOffset,
       surfaceType,
       spawnStartTime: performance.now(),
+      userYawDeg: 0,
     };
 
     this.placedGroup.add(group);
@@ -704,6 +710,7 @@ export class ARSessionScene {
   rotateSelected(deltaDeg: number) {
     if (!this.selected) return;
     this.selected.group.rotateY(THREE.MathUtils.degToRad(deltaDeg));
+    this.selected.userYawDeg += deltaDeg;
   }
 
   // Scales a single axis independently — "width" (x), "height" (y), or "depth" (z) — so an
@@ -748,6 +755,14 @@ export class ARSessionScene {
     } else {
       this.orientTowardCamera(this.selected.group);
       this.selected.group.translateY(this.selected.groundOffset * this.selected.scale.y);
+    }
+
+    // orientTowardWall/orientTowardCamera above just reset the group's facing to a fresh
+    // base orientation for the new spot — reapply whatever manual rotation the user had
+    // already dialed in so the object keeps facing the way they left it, instead of
+    // snapping back to that default facing on every move.
+    if (this.selected.userYawDeg !== 0) {
+      this.selected.group.rotateY(THREE.MathUtils.degToRad(this.selected.userYawDeg));
     }
   }
 

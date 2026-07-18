@@ -269,14 +269,6 @@ export default function OwnerProfile() {
     setChangingPw(true);
     try {
       await updatePassword(user, newPassword);
-      try {
-        const syncFn = httpsCallable(cloudFunctions, "ownerSyncRecoveryPassword");
-        await syncFn({ callerUid: user.uid, newPassword });
-      } catch (syncErr) {
-        // Non-fatal: the Auth password change already succeeded. Recovery
-        // will just show the old password until the owner re-syncs it.
-        console.error("Failed to sync recovery password:", syncErr);
-      }
       setNewPassword("");
       setConfirmPassword("");
       showToast("Password updated!");
@@ -313,8 +305,8 @@ export default function OwnerProfile() {
     if (!user || !user.email) return;
     setSavingSecQ(true);
     try {
-      // Confirms secCurrentPassword is actually correct before it's ever
-      // stored/returned as the "recovered" password later.
+      // This re-authentication is the real verification that secCurrentPassword
+      // is correct — the Cloud Function itself never receives or stores it.
       await reauthenticateWithCredential(
         user,
         EmailAuthProvider.credential(user.email, secCurrentPassword),
@@ -323,7 +315,6 @@ export default function OwnerProfile() {
       await saveFn({
         callerUid: user.uid,
         securityQuestions: secQuestions.map((q, i) => ({ question: q, answer: secAnswers[i] })),
-        currentPassword: secCurrentPassword,
       });
       setSecCurrentPassword("");
       showToast("Security questions saved!");

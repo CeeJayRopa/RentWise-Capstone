@@ -16,14 +16,21 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { ArrowLeft, KeyRound, Lock, Eye, EyeOff, AlertCircle, CheckCircle2 } from "lucide-react-native";
 import { getFunctions, httpsCallable } from "firebase/functions";
+import { confirmPasswordReset } from "firebase/auth";
 
 import { firebaseApp } from "../shared/firebaseConfig";
-import { loginUser } from "../shared/services/auth";
+import { auth, loginUser } from "../shared/services/auth";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 const cloudFunctions = getFunctions(firebaseApp);
 
-type Step = "loading" | "answer" | "reveal" | "unavailable";
+// Owner's own password policy, matching owner-profile.tsx's handleChangePassword exactly —
+// this is the same new-password form, just reached via security questions instead of
+// already being logged in.
+const PASSWORD_REGEX =
+  /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
+
+type Step = "loading" | "answer" | "reset" | "unavailable";
 
 export default function OwnerForgotPassword() {
   const insets = useSafeAreaInsets();
@@ -36,8 +43,14 @@ export default function OwnerForgotPassword() {
   const [questions, setQuestions] = useState<string[]>([]);
   const [answers, setAnswers] = useState<string[]>(["", "", ""]);
   const [revealedEmail, setRevealedEmail] = useState("");
-  const [revealedPassword, setRevealedPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
+  const [oobCode, setOobCode] = useState("");
+
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [pwError, setPwError] = useState("");
+  const [confirmError, setConfirmError] = useState("");
 
   const scrollRef = useRef<ScrollView>(null);
   const submitBtnRef = useRef<View>(null);
@@ -93,9 +106,9 @@ export default function OwnerForgotPassword() {
     try {
       const verifyFn = httpsCallable(cloudFunctions, "verifyOwnerSecurityAnswers");
       const result: any = await verifyFn({ ownerId, answers });
-      setRevealedPassword(result.data.password ?? "");
+      setOobCode(result.data.oobCode ?? "");
       setRevealedEmail(result.data.email ?? "");
-      setStep("reveal");
+      setStep("reset");
     } catch {
       setError("One or more answers are incorrect.");
     } finally {
@@ -103,17 +116,35 @@ export default function OwnerForgotPassword() {
     }
   }
 
-  async function handleProceed() {
-    if (!revealedEmail || !revealedPassword) {
-      router.replace("/login");
-      return;
+  async function handleResetPassword() {
+    let valid = true;
+
+    if (!PASSWORD_REGEX.test(newPassword)) {
+      setPwError("8–12 characters with at least 1 uppercase letter, number & special character.");
+      valid = false;
+    } else {
+      setPwError("");
     }
+
+    if (!confirmPassword) {
+      setConfirmError("Please confirm your password.");
+      valid = false;
+    } else if (newPassword !== confirmPassword) {
+      setConfirmError("Passwords do not match.");
+      valid = false;
+    } else {
+      setConfirmError("");
+    }
+
+    if (!valid || !oobCode) return;
+
     setProceeding(true);
     try {
-      await loginUser(revealedEmail, revealedPassword);
+      await confirmPasswordReset(auth, oobCode, newPassword);
+      await loginUser(revealedEmail, newPassword);
       router.replace("/welcome");
     } catch {
-      router.replace("/login");
+      setPwError("This code has expired or was already used. Please start over.");
     } finally {
       setProceeding(false);
     }
@@ -202,26 +233,70 @@ export default function OwnerForgotPassword() {
             </>
           )}
 
-          {step === "reveal" && (
+          {step === "reset" && (
             <>
               <View style={styles.successIconCircle}>
                 <CheckCircle2 size={40} color={colors.emerald} />
               </View>
               <Text style={styles.heading}>Verified!</Text>
-              <Text style={styles.subheading}>Here is your current password.</Text>
-              <View style={[styles.inputWrapper, { marginTop: spacing.xl }]}>
-                <Lock size={17} color={colors.emeraldBright} style={styles.leftIcon} />
-                <TextInput
-                  style={[styles.textInput, { paddingLeft: 40, paddingRight: 40 }]}
-                  value={revealedPassword}
-                  editable={false}
-                  secureTextEntry={!showPassword}
-                />
-                <Pressable style={styles.rightIcon} onPress={() => setShowPassword((v) => !v)}>
-                  {showPassword ? <Eye size={17} color={colors.textMuted} /> : <EyeOff size={17} color={colors.textMuted} />}
-                </Pressable>
+              <Text style={styles.subheading}>Choose a new password for {revealedEmail}.</Text>
+
+              <View style={{ marginTop: spacing.xl }}>
+                <Text style={styles.fieldLabel}>New Password</Text>
+                <View style={[styles.inputWrapper, !!pwError && { borderColor: colors.error }]}>
+                  <Lock size={17} color={colors.emeraldBright} style={styles.leftIcon} />
+                  <TextInput
+                    style={[styles.textInput, { paddingLeft: 40, paddingRight: 40 }]}
+                    value={newPassword}
+                    onChangeText={(t) => {
+                      setNewPassword(t);
+                      setPwError("");
+                      if (confirmPassword && confirmPassword === t) setConfirmError("");
+                    }}
+                    secureTextEntry={!showNewPassword}
+                    placeholder="New password"
+                    placeholderTextColor={colors.textMuted}
+                    autoCapitalize="none"
+                    maxLength={12}
+                    editable={!proceeding}
+                    onFocus={scrollToRevealForm}
+                  />
+                  <Pressable style={styles.rightIcon} onPress={() => setShowNewPassword((v) => !v)}>
+                    {showNewPassword ? <Eye size={17} color={colors.textMuted} /> : <EyeOff size={17} color={colors.textMuted} />}
+                  </Pressable>
+                </View>
+                {!!pwError && <Text style={styles.fieldError}>{pwError}</Text>}
               </View>
-              <SubmitButton label="Proceed" loading={proceeding} onPress={handleProceed} />
+
+              <View style={{ marginTop: spacing.lg }}>
+                <Text style={styles.fieldLabel}>Confirm Password</Text>
+                <View style={[styles.inputWrapper, !!confirmError && { borderColor: colors.error }]}>
+                  <Lock size={17} color={colors.emeraldBright} style={styles.leftIcon} />
+                  <TextInput
+                    style={[styles.textInput, { paddingLeft: 40, paddingRight: 40 }]}
+                    value={confirmPassword}
+                    onChangeText={(t) => {
+                      setConfirmPassword(t);
+                      setConfirmError(t && t !== newPassword ? "Passwords do not match." : "");
+                    }}
+                    secureTextEntry={!showConfirmPassword}
+                    placeholder="Confirm new password"
+                    placeholderTextColor={colors.textMuted}
+                    autoCapitalize="none"
+                    maxLength={12}
+                    editable={!proceeding}
+                    onFocus={scrollToRevealForm}
+                  />
+                  <Pressable style={styles.rightIcon} onPress={() => setShowConfirmPassword((v) => !v)}>
+                    {showConfirmPassword ? <Eye size={17} color={colors.textMuted} /> : <EyeOff size={17} color={colors.textMuted} />}
+                  </Pressable>
+                </View>
+                {!!confirmError && <Text style={styles.fieldError}>{confirmError}</Text>}
+              </View>
+
+              <View ref={submitBtnRef}>
+                <SubmitButton label="Save New Password" loading={proceeding} onPress={handleResetPassword} />
+              </View>
             </>
           )}
         </View>
@@ -295,6 +370,7 @@ const styles = StyleSheet.create({
   successIconCircle: { alignItems: "center", marginBottom: spacing.md },
 
   fieldLabel: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.emerald, marginBottom: 6 },
+  fieldError: { fontSize: fontSize.xs, color: colors.error, fontFamily: fontFamily.medium, marginTop: 4 },
 
   inputWrapper: { position: "relative", flexDirection: "row", alignItems: "center" },
   leftIcon: { position: "absolute", left: 13, zIndex: 1 },

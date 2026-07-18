@@ -1,0 +1,128 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Role checks. Costs a document read internally, but Firestore doesn't
+    // charge/rate-limit rule-internal get()s against the caller the way a
+    // client read would be.
+    function myRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+    function isAdmin() { return isSignedIn() && myRole() == "admin"; }
+    function isOwner() { return isSignedIn() && myRole() == "owner"; }
+    function isTenant() { return isSignedIn() && myRole() == "tenant"; }
+    function isStaff() { return isAdmin() || isOwner(); }
+
+    // ── users ──────────────────────────────────────────────────────────
+    // Owner/admin/tenant login screens all look a user up by
+    // username/email BEFORE Firebase Auth sign-in succeeds (there's no
+    // Cloud Function fronting this today), so `users` has to stay
+    // readable pre-auth or every login/forgot-password flow breaks.
+    // This is a known, bounded trade-off (profile fields only -- no
+    // payments, no recovery data, no auth secrets) vs. today's fully
+    // open database; tightening it further means moving those lookups
+    // into a callable function, which is a follow-up, not tonight's fix.
+    match /users/{userId} {
+      allow get, list: if true;
+
+      // Admin's client-side tenant-creation flow (accountServices.ts)
+      // writes the new tenant's user doc directly with a fresh Auth uid.
+      allow create: if isAdmin()
+        && request.resource.data.role == "tenant";
+
+      // Self-updates (profile edits, mustChangePassword flag, push token)
+      // may never change their own role/status -- otherwise a tenant could
+      // simply write role:"admin" on their own doc. Staff can update any
+      // tenant doc (archive/restore/relocate) without that restriction.
+      allow update: if isStaff()
+        || (isSignedIn() && request.auth.uid == userId
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.status == resource.data.status);
+
+      allow delete: if isStaff();
+    }
+
+    // ── stalls ─────────────────────────────────────────────────────────
+    // Public read: the guest site (no auth) shows stall/vendor listings.
+    match /stalls/{stallId} {
+      allow read: if true;
+      allow write: if isStaff()
+        || (isTenant()
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.stallId == stallId);
+    }
+
+    // ── payments ───────────────────────────────────────────────────────
+    match /payments/{paymentId} {
+      allow read: if isStaff()
+        || (isTenant() && resource.data.userId == request.auth.uid);
+
+      // Tenant creates their own (pending) online payment; staff record
+      // cash payments (already-approved) on a tenant's behalf.
+      allow create: if isStaff()
+        || (isTenant() && request.resource.data.userId == request.auth.uid);
+
+      // Staff confirm/approve any payment. A tenant may only attach their
+      // own receipt image to a payment they already own -- never touch
+      // amount/status/userId.
+      allow update: if isStaff()
+        || (isTenant() && resource.data.userId == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(["receipt"]));
+    }
+
+    // ── updates (audit log / tenant reports) ──────────────────────────
+    match /updates/{updateId} {
+      allow read: if isStaff();
+      allow create: if isAdmin();
+      allow update: if isOwner();
+    }
+
+    // ── notifications ──────────────────────────────────────────────────
+    match /notifications/{notifId} {
+      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      // Staff fan notifications out to other users (tenant<->owner<->admin).
+      allow create: if isStaff() || (isSignedIn() && request.resource.data.userId == request.auth.uid);
+    }
+
+    // ── ownerRecovery ──────────────────────────────────────────────────
+    // Cloud Functions only (Admin SDK bypasses rules entirely) -- no
+    // client, including a signed-in owner, ever needs direct access.
+    match /ownerRecovery/{ownerId} {
+      allow read, write: if false;
+    }
+
+    // ── passwordResetRequests ──────────────────────────────────────────
+    // Every app's forgot-password flow files this before the user is
+    // signed in, so create must stay open. Reading/managing the queue is
+    // staff-only.
+    match /passwordResetRequests/{requestId} {
+      allow create: if true;
+      allow read, update: if isStaff();
+      allow delete: if isStaff();
+    }
+
+    // ── AR (guest site, public, unauthenticated) ───────────────────────
+    match /arObjects/{objectId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /arPlacementEvents/{eventId} {
+      allow create: if true;
+      allow read, update, delete: if false;
+    }
+
+    // ── archives / dailyReports (owner + admin only) ───────────────────
+    match /archives/{archiveId} {
+      allow read, write: if isStaff();
+    }
+    match /dailyReports/{reportId} {
+      allow read, create: if isStaff();
+      allow update, delete: if false;
+    }
+  }
+}
