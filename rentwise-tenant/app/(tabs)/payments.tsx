@@ -76,6 +76,11 @@ export default function PaymentsScreen() {
   const [refreshing, setRefreshing] = useState(false);
 
   const [payAmount, setPayAmount] = useState("");
+  // Tracks whether the tenant has ever typed in the amount field -- before
+  // that, the field shows the live computed default; after, it shows
+  // exactly what they typed (including empty while erasing), so nothing
+  // fights their keystrokes. See the TextInput below.
+  const [hasEditedAmount, setHasEditedAmount] = useState(false);
   const [selectedMethod, setSelectedMethod] = useState<"gcash" | "paymaya" | null>(null);
   const [redirecting, setRedirecting] = useState(false);
 
@@ -438,6 +443,7 @@ export default function PaymentsScreen() {
         style={styles.headerGradient}
       >
         <View style={[styles.header, { paddingTop: topInset + 14 }]}>
+          <View style={{ width: 86 }} />
           <Text style={styles.headerTitle}>Payment Center</Text>
           <View style={styles.headerActions}>
             <View ref={historyRef} collapsable={false}>
@@ -503,8 +509,11 @@ export default function PaymentsScreen() {
                   placeholder="0"
                   placeholderTextColor={colors.textMuted}
                   keyboardType="numeric"
-                  value={payAmount || (paymentDue > 0 ? String(Math.round(paymentDue)) : "")}
-                  onChangeText={setPayAmount}
+                  value={hasEditedAmount ? payAmount : (paymentDue > 0 ? String(Math.round(paymentDue)) : "")}
+                  onChangeText={(text) => {
+                    if (!hasEditedAmount) setHasEditedAmount(true);
+                    setPayAmount(text);
+                  }}
                 />
               </View>
             </View>
@@ -568,7 +577,7 @@ export default function PaymentsScreen() {
               onPress={handlePayNow}
             >
               <Zap size={16} color={colors.white} />
-              <Text style={styles.payNowInlineText}>
+              <Text style={styles.payNowInlineText} numberOfLines={1}>
                 {redirecting
                   ? "Opening payment..."
                   : `Pay ₱${(Number(payAmount) || Math.round(paymentDue)).toLocaleString()}${
@@ -700,6 +709,8 @@ const styles = StyleSheet.create({
   },
 
   headerTitle: {
+    flex: 1,
+    textAlign: "center",
     color: colors.white,
     fontSize: fontSize.xl,
     fontFamily: fontFamily.extrabold,
@@ -955,6 +966,7 @@ const styles = StyleSheet.create({
   },
 
   payNowInlineText: {
+    flexShrink: 1,
     color: colors.white,
     fontSize: fontSize.base,
     fontFamily: fontFamily.bold,

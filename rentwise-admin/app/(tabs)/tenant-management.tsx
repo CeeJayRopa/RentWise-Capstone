@@ -21,7 +21,7 @@ import { House, HelpCircle, Users, Archive, AlertCircle } from "lucide-react-nat
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
 import { archiveTenant } from "../../shared/services/accountServices";
-import UpdatesReportFAB from "../components/UpdatesReportFAB";
+import UpdatesReportFAB, { FAB_CLEARANCE } from "../components/UpdatesReportFAB";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { EmptyState } from "../../shared/components/ui";
@@ -222,7 +222,7 @@ export default function TenantManagement() {
         ) : (
           <ScrollView
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + -20 }]}
+            contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + FAB_CLEARANCE }]}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.emerald} />
             }

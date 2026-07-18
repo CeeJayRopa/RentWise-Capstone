@@ -351,7 +351,7 @@ export default function Building() {
             <ScrollView
               style={styles.listScroll}
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ paddingBottom: insets.bottom + 120 }}
+              contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xl }}
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
               }

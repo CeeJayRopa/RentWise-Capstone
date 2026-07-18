@@ -33,7 +33,7 @@ import { House, HelpCircle, Users, Wallet, Receipt as ReceiptIcon, CheckCircle2,
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
 import { logDetailedUpdate } from "../../shared/services/updatesService";
-import UpdatesReportFAB from "../components/UpdatesReportFAB";
+import UpdatesReportFAB, { FAB_CLEARANCE } from "../components/UpdatesReportFAB";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { Badge } from "../../shared/components/ui";
@@ -658,7 +658,7 @@ export default function Financials() {
             ) : (
               <ScrollView
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingBottom: insets.bottom + -30 }}
+                contentContainerStyle={{ paddingBottom: insets.bottom + FAB_CLEARANCE }}
                 refreshControl={
                   <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.emerald} />
                 }

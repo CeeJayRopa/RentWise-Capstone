@@ -288,11 +288,13 @@ export default function Dashboard() {
               <User size={24} color={colors.emeraldSoft} />
             </TouchableOpacity>
           </View>
-          <Image
-            source={require("../../assets/rentwise-icon.png")}
-            style={styles.headerLogo}
-            resizeMode="contain"
-          />
+          <View style={styles.headerLogoWrap}>
+            <Image
+              source={require("../../assets/rentwise-icon.png")}
+              style={styles.headerLogo}
+              resizeMode="contain"
+            />
+          </View>
           <View style={styles.headerRight}>
             <View ref={bellRef} collapsable={false}>
               <OwnerBellIcon />
@@ -315,7 +317,6 @@ export default function Dashboard() {
         style={styles.scroll}
         contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 20 }]}
         showsVerticalScrollIndicator={false}
-        scrollEnabled={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.emerald} />
         }
@@ -511,7 +512,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-  headerLogo: { width: 112, height: 51, marginLeft: -70 },
+  headerLogoWrap: { flex: 1, alignItems: "center" },
+  headerLogo: { width: 112, height: 51 },
   headerRight: { flexDirection: "row", alignItems: "center", gap: spacing.md + 2 },
   headerIconBtn: {
     width: 40,

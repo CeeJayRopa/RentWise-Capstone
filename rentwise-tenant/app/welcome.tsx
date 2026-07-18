@@ -103,7 +103,7 @@ export default function Welcome() {
           ]}
         />
         {photoURL ? (
-          <Image source={{ uri: photoURL }} style={styles.avatarCircle} />
+          <Image source={{ uri: photoURL }} style={styles.avatarCircle} resizeMode="cover" />
         ) : (
           <View style={styles.avatarCircle}>
             <User size={32} color={colors.emerald} />

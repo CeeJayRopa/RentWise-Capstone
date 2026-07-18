@@ -245,9 +245,11 @@ export default function PaymentHistoryScreen() {
         style={styles.headerGradient}
       >
         <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-          <TouchableOpacity style={styles.headerIconBtn} onPress={() => router.back()} hitSlop={8}>
-            <ArrowLeft size={20} color={colors.white} />
-          </TouchableOpacity>
+          <View style={styles.headerLeftAnchor}>
+            <TouchableOpacity style={styles.headerIconBtn} onPress={() => router.back()} hitSlop={8}>
+              <ArrowLeft size={20} color={colors.white} />
+            </TouchableOpacity>
+          </View>
           <Text style={styles.headerTitle}>Payment History</Text>
           <View style={styles.headerActions}>
             <TouchableOpacity
@@ -314,7 +316,7 @@ export default function PaymentHistoryScreen() {
                   <Text style={[styles.progressLabelText, styles.progressLabelCenter]}>
                     {Math.round(targetPercent)}%
                   </Text>
-                  <Text style={[styles.progressLabelText, styles.progressLabelRight]}>
+                  <Text style={[styles.progressLabelText, styles.progressLabelRight]} numberOfLines={1}>
                     ₱{monthTotalCharge.toLocaleString()}
                   </Text>
                 </View>
@@ -548,6 +550,13 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
 
+  // Matches headerActions' rendered width (2 headerIconBtn + gap) so the
+  // centered headerTitle balances against two equal-width anchors instead
+  // of drifting toward whichever side is narrower.
+  headerLeftAnchor: {
+    width: 84,
+  },
+
   headerIconBtn: {
     width: 38,
     height: 38,
@@ -558,6 +567,8 @@ const styles = StyleSheet.create({
   },
 
   headerTitle: {
+    flex: 1,
+    textAlign: "center",
     color: colors.white,
     fontSize: fontSize.lg,
     fontFamily: fontFamily.bold,

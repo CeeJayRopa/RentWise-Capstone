@@ -6,7 +6,7 @@ import {
   Animated,
   Easing,
   Pressable,
-  Dimensions,
+  useWindowDimensions,
   KeyboardAvoidingView,
   Keyboard,
   Platform,
@@ -36,10 +36,12 @@ import {
 import { setRememberMe } from "../shared/services/rememberMe";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
-const { height: SCREEN_HEIGHT } = Dimensions.get("window");
-
 export default function Login() {
   const insets = useSafeAreaInsets();
+  // Live window height, not a one-time Dimensions.get() snapshot -- see
+  // HelpTour.tsx for why a module-level constant can be stale on some
+  // devices (e.g. split-screen, foldables, resizable windows).
+  const { height: screenHeight } = useWindowDimensions();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -69,7 +71,7 @@ export default function Login() {
   const emailInputRef = useRef<TextInput>(null);
   const passwordInputRef = useRef<TextInput>(null);
   const buttonRef = useRef<View>(null);
-  const scrollViewHeightRef = useRef(SCREEN_HEIGHT);
+  const scrollViewHeightRef = useRef(screenHeight);
 
   // Always scrolls to the SAME fixed target — the sign-in button — no matter
   // which of the two fields was tapped. Measuring each field individually
@@ -284,14 +286,14 @@ export default function Login() {
         showsVerticalScrollIndicator={false}
         onLayout={(e) => { scrollViewHeightRef.current = e.nativeEvent.layout.height; }}
       >
-        <View style={{ flex: 1, minHeight: SCREEN_HEIGHT }}>
+        <View style={{ flex: 1, minHeight: screenHeight }}>
 
           {/* Top gradient hero */}
           <LinearGradient
             colors={[colors.emerald, colors.ink]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
-            style={[styles.topSection, { paddingTop: insets.top + 24 }]}
+            style={[styles.topSection, { paddingTop: insets.top + spacing.xxxl }]}
           >
             <Animated.View style={[styles.logoGroup, slideIn(logoAnim)]}>
               <Animated.View
@@ -511,7 +513,6 @@ export default function Login() {
 
 const styles = StyleSheet.create({
   topSection: {
-    height: SCREEN_HEIGHT * 0.38,
     alignItems: "center",
     justifyContent: "center",
     paddingBottom: 32,
@@ -699,10 +700,8 @@ const fp = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.overlay,
     alignItems: "center",
-    justifyContent: "flex-start",
-    paddingTop: 220,
+    justifyContent: "center",
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
   },
   card: {
     backgroundColor: colors.white,

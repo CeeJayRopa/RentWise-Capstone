@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useState } from "react";
 import {
   View,
   Text,
@@ -9,10 +9,6 @@ import {
   LayoutAnimation,
   Alert,
   StyleSheet,
-  Animated,
-  PanResponder,
-  Dimensions,
-  LayoutChangeEvent,
 } from "react-native";
 import {
   collection,
@@ -32,6 +28,11 @@ import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../sha
 
 const FAB_SIZE = 56;
 const FAB_MARGIN = 20;
+
+// Reserve this much bottom padding (on top of insets.bottom) in any
+// scrollable content sharing a screen with this FAB, so its fixed
+// bottom-right position never overlaps the last item.
+export const FAB_CLEARANCE = FAB_SIZE + FAB_MARGIN + spacing.sm; // 56 + 20 + 8 = 84
 
 function notifLocation(u: any): string {
   const module: string = u.module ?? "";
@@ -59,12 +60,10 @@ type UpdatesReportFABProps = {
   disabled?: boolean;
   color?: string;
   icon?: React.ReactNode;
-  // Extra clearance above the safe-area bottom inset, for screens that now
-  // dock a BottomNav bar — keeps the draggable FAB from resting under it.
+  // Extra clearance above the safe-area bottom inset, for screens that dock
+  // a BottomNav bar — keeps the fixed FAB from resting under it.
   bottomOffset?: number;
-  // Lets a HelpTour target the FAB's actual current (draggable) position —
-  // a wrapping ref won't work since the FAB moves itself via Animated.ValueXY
-  // rather than through parent layout.
+  // Lets a HelpTour target the FAB directly.
   fabRef?: React.RefObject<View | null>;
 };
 
@@ -85,107 +84,15 @@ export default function UpdatesReportFAB({
   const [financeOpen, setFinanceOpen] = useState(true);
   const [archiveOpen, setArchiveOpen] = useState(true);
 
-  // ── Draggable FAB position ─────────────────────────────────────────────────
-  // Measured from the FAB's own wrapping container rather than
-  // Dimensions.get("window") — under a real Tabs layout, the tab bar
-  // reserves genuine space as a sibling of this screen, so the screen's own
-  // container is shorter than the full window. Resting/clamping against the
-  // full window height would place the FAB partly (or fully) behind the tab
-  // bar, since that space no longer belongs to this screen at all.
-  const initialWindow = Dimensions.get("window");
-  const [containerSize, setContainerSize] = useState({
-    width: initialWindow.width,
-    height: initialWindow.height,
-  });
-  const { width: SCREEN_W, height: SCREEN_H } = containerSize;
+  // Fixed in the bottom-right corner (previously draggable — now static per
+  // design decision, so pages can reserve a predictable, constant footprint
+  // for it via the exported FAB_CLEARANCE, instead of it being movable out
+  // of the way of their content).
+  //
   // Once a BottomNav is present, bottomOffset alone reserves the space for
-  // it — stacking FAB_MARGIN on top too would leave a dead zone the FAB
-  // can't be dragged into, above the nav bar.
+  // it — stacking FAB_MARGIN on top too would leave a needless gap above
+  // the nav bar.
   const bottomClearance = bottomOffset > 0 ? bottomOffset : FAB_MARGIN;
-  const posRef = useRef({
-    x: SCREEN_W - FAB_SIZE - FAB_MARGIN,
-    y: SCREEN_H - FAB_SIZE - insets.bottom - bottomClearance,
-  });
-  const pan = useRef(new Animated.ValueXY(posRef.current)).current;
-  const dragStart = useRef({ x: 0, y: 0 });
-  const dragged = useRef(false);
-  const everMoved = useRef(false);
-
-  const clamp = (val: number, min: number, max: number) =>
-    Math.min(Math.max(val, min), max);
-
-  const onContainerLayout = (e: LayoutChangeEvent) => {
-    const { width, height } = e.nativeEvent.layout;
-    setContainerSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
-  };
-
-  // Android's useSafeAreaInsets() can report insets.bottom as 0 on the very
-  // first render, before correcting itself a moment later — and the real
-  // container size isn't known until the first onLayout fires. Since the
-  // resting position above was computed once at mount from whatever those
-  // were then, re-snap it once real values land — but only if the user
-  // hasn't manually repositioned the FAB yet.
-  useEffect(() => {
-    if (everMoved.current) return;
-    const correctedY = SCREEN_H - FAB_SIZE - insets.bottom - bottomClearance;
-    posRef.current = { ...posRef.current, y: correctedY };
-    pan.setValue(posRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [insets.bottom, bottomClearance, SCREEN_H]);
-
-  // Rebuilt whenever these change (NOT useRef-once) — a PanResponder whose
-  // callbacks close over stale insets/bottomClearance/container size from
-  // the first render would silently keep using those forever, which is
-  // exactly what made the drag clamp stop short of (or overshoot into) the
-  // bottom nav on some devices, since Android's useSafeAreaInsets() can
-  // report 0 on the very first render before correcting itself.
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-      onStartShouldSetPanResponder: () => !disabled,
-      onPanResponderGrant: () => {
-        dragged.current = false;
-        dragStart.current = { x: posRef.current.x, y: posRef.current.y };
-      },
-      onPanResponderMove: (_evt, gestureState) => {
-        if (Math.abs(gestureState.dx) > 4 || Math.abs(gestureState.dy) > 4) {
-          dragged.current = true;
-          everMoved.current = true;
-        }
-        const nextX = clamp(
-          dragStart.current.x + gestureState.dx,
-          FAB_MARGIN,
-          SCREEN_W - FAB_SIZE - FAB_MARGIN,
-        );
-        const nextY = clamp(
-          dragStart.current.y + gestureState.dy,
-          insets.top + FAB_MARGIN,
-          SCREEN_H - FAB_SIZE - insets.bottom - bottomClearance,
-        );
-        posRef.current = { x: nextX, y: nextY };
-        pan.setValue({ x: nextX, y: nextY });
-      },
-      onPanResponderRelease: () => {
-        if (!dragged.current) {
-          if (!disabled) openModal();
-          return;
-        }
-        // Snap to whichever side the finger was closest to, like Messenger's
-        // chat heads — stays on the same row (y), just settles to the edge.
-        const targetX =
-          posRef.current.x + FAB_SIZE / 2 < SCREEN_W / 2
-            ? FAB_MARGIN
-            : SCREEN_W - FAB_SIZE - FAB_MARGIN;
-        posRef.current = { x: targetX, y: posRef.current.y };
-        Animated.spring(pan, {
-          toValue: { x: targetX, y: posRef.current.y },
-          friction: 6,
-          useNativeDriver: false,
-        }).start();
-      },
-      }),
-    [disabled, insets.top, insets.bottom, bottomClearance, SCREEN_W, SCREEN_H],
-  );
 
   const openModal = async () => {
     setVisible(true);
@@ -300,18 +207,18 @@ export default function UpdatesReportFAB({
   );
 
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="box-none" onLayout={onContainerLayout}>
-      {/* FAB — draggable anywhere on screen, tap (without dragging) opens the modal */}
-      <Animated.View
+    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      {/* FAB — fixed bottom-right, tap opens the modal */}
+      <TouchableOpacity
         ref={fabRef}
-        collapsable={false}
+        activeOpacity={0.85}
+        onPress={openModal}
+        disabled={disabled}
         style={[
           styles.fab,
-          { backgroundColor: color },
+          { backgroundColor: color, right: FAB_MARGIN, bottom: insets.bottom + bottomClearance },
           disabled && styles.fabDisabled,
-          { transform: pan.getTranslateTransform() },
         ]}
-        {...panResponder.panHandlers}
       >
         {icon ?? (
           <Pencil
@@ -319,7 +226,7 @@ export default function UpdatesReportFAB({
             color={disabled ? colors.emeraldSoft : colors.white}
           />
         )}
-      </Animated.View>
+      </TouchableOpacity>
 
       {/* Updates Report Modal */}
       <Modal
@@ -508,8 +415,6 @@ function AccordionSection({
 const styles = StyleSheet.create({
   fab: {
     position: "absolute",
-    left: 0,
-    top: 0,
     width: FAB_SIZE,
     height: FAB_SIZE,
     borderRadius: FAB_SIZE / 2,

@@ -19,7 +19,7 @@ import { House, HelpCircle, ChevronDown, Building2 } from "lucide-react-native";
 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
-import UpdatesReportFAB from "../components/UpdatesReportFAB";
+import UpdatesReportFAB, { FAB_CLEARANCE } from "../components/UpdatesReportFAB";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { Badge, EmptyState } from "../../shared/components/ui";
@@ -415,7 +415,7 @@ export default function Building() {
               ref={listScrollRef}
               style={styles.listScroll}
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ paddingBottom: insets.bottom + -30 }}
+              contentContainerStyle={{ paddingBottom: insets.bottom + FAB_CLEARANCE }}
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
               }
@@ -663,7 +663,8 @@ const styles = StyleSheet.create({
 
   dropdownWrapper: {
     position: "relative",
-    width: 116,
+    flex: 1,
+    maxWidth: 160,
   },
 
   dropdownTrigger: {
@@ -730,7 +731,8 @@ const styles = StyleSheet.create({
 
   filterDropdownWrapper: {
     position: "relative",
-    width: 126,
+    flex: 1,
+    maxWidth: 160,
   },
 
   // ── Stall list card ──────────────────────────────────────────────────────────

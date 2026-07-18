@@ -507,9 +507,11 @@ export default function TenantPreview() {
         style={styles.headerGradient}
       >
         <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-          <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7} hitSlop={8}>
-            <ArrowLeft size={22} color={colors.emeraldSoft} />
-          </TouchableOpacity>
+          <View style={styles.headerLeftAnchor}>
+            <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7} hitSlop={8}>
+              <ArrowLeft size={22} color={colors.emeraldSoft} />
+            </TouchableOpacity>
+          </View>
 
           <Text style={styles.headerTitle}>Tenant Preview</Text>
 
@@ -871,6 +873,15 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
+  },
+
+  // Matches headerIconBtn's width so the centered headerTitle has a
+  // consistent left anchor -- the right side's Notify pill is inherently
+  // variable-width (text vs. loading spinner), so this narrows but doesn't
+  // eliminate the residual optical drift; matches the same tradeoff already
+  // accepted elsewhere in this codebase (e.g. tenant payment-history.tsx).
+  headerLeftAnchor: {
+    width: 40,
   },
 
   headerIconBtn: {

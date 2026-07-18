@@ -38,7 +38,7 @@ import { db } from "../../shared/services/firestore";
 import { isTenantPaidThisMonth } from "../../shared/services/financeServices";
 import { hasSeenAdminDashboardTour, markAdminDashboardTourSeen } from "../../shared/services/onboardingTour";
 import NotificationBell from "../components/NotificationBell";
-import UpdatesReportFAB from "../components/UpdatesReportFAB";
+import UpdatesReportFAB, { FAB_CLEARANCE } from "../components/UpdatesReportFAB";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { bottomNavRefs } from "../components/bottomNavRefs";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
@@ -288,13 +288,13 @@ export default function Dashboard() {
         style={styles.headerGradient}
       >
         <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-          <View style={styles.headerLeft}>
-            <View ref={profileRef} collapsable={false}>
-              <TouchableOpacity onPress={() => router.push("/admin-profile")} activeOpacity={0.7} style={styles.headerIconBtn}>
-                <User size={24} color={colors.emeraldSoft} />
-              </TouchableOpacity>
-            </View>
+          <View ref={profileRef} collapsable={false}>
+            <TouchableOpacity onPress={() => router.push("/admin-profile")} activeOpacity={0.7} style={styles.headerIconBtn}>
+              <User size={24} color={colors.emeraldSoft} />
+            </TouchableOpacity>
+          </View>
 
+          <View style={styles.headerLogoWrap}>
             <Image
               source={require("../../assets/rentwise-icon.png")}
               style={styles.headerLogo}
@@ -321,7 +321,7 @@ export default function Dashboard() {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 20 }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + FAB_CLEARANCE }]}
         showsVerticalScrollIndicator={false}
         scrollEnabled={false}
         refreshControl={
@@ -521,12 +521,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-  headerLeft: {
-    flexDirection: "row",
+  headerLogoWrap: {
+    flex: 1,
     alignItems: "center",
-    gap: spacing.md,
   },
-  headerLogo: { width: 130, height: 60, marginLeft: -12 },
+  headerLogo: { width: 130, height: 60 },
   headerRight: {
     flexDirection: "row",
     alignItems: "center",

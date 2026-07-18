@@ -10,6 +10,7 @@ import {
   Platform,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useEffect, useRef, useState } from "react";
 import { router } from "expo-router";
 import { User, Lock, Eye, EyeOff } from "lucide-react-native";
@@ -27,6 +28,7 @@ import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared
 const MAX_ATTEMPTS = 5;
 
 export default function QuickUnlock() {
+  const insets = useSafeAreaInsets();
   const [tenantName, setTenantName] = useState("");
   const [checkingSession, setCheckingSession] = useState(true);
   const [password, setPassword] = useState("");
@@ -120,7 +122,7 @@ export default function QuickUnlock() {
         colors={[colors.emerald, colors.ink]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={styles.topSection}
+        style={[styles.topSection, { paddingTop: insets.top + spacing.xxl }]}
       >
         <View style={styles.avatarCircle}>
           <User size={30} color={colors.emerald} />
@@ -192,7 +194,6 @@ const styles = StyleSheet.create({
   },
   topSection: {
     alignItems: "center",
-    paddingTop: 80,
     paddingBottom: spacing.xxxl + 16,
   },
   avatarCircle: {

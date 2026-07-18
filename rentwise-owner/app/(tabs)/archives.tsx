@@ -279,7 +279,7 @@ export default function Archives() {
         <FlatList
           data={filteredArchives}
           keyExtractor={(item) => item.uid}
-          contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + -30 }]}
+          contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + spacing.xl }]}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.emerald} />

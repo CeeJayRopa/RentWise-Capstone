@@ -25,7 +25,7 @@ import {
   restoreTenant,
   deleteArchivedTenant,
 } from "../../shared/services/accountServices";
-import UpdatesReportFAB from "../components/UpdatesReportFAB";
+import UpdatesReportFAB, { FAB_CLEARANCE } from "../components/UpdatesReportFAB";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
@@ -287,7 +287,7 @@ export default function Archives() {
         <FlatList
           data={filteredArchives}
           keyExtractor={(item) => item.uid}
-          contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 20 }]}
+          contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + FAB_CLEARANCE }]}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.emerald} />

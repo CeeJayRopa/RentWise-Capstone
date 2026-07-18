@@ -476,7 +476,7 @@ export default function Financials() {
             ref={listRef}
             data={filtered}
             keyExtractor={(item) => item.id}
-            contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + -30 }]}
+            contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + spacing.xl }]}
             showsVerticalScrollIndicator={false}
             onScrollToIndexFailed={(info) => {
               setTimeout(() => {

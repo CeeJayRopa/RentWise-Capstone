@@ -6,7 +6,7 @@ import {
   Animated,
   Easing,
   Pressable,
-  Dimensions,
+  useWindowDimensions,
   KeyboardAvoidingView,
   Keyboard,
   Platform,
@@ -21,7 +21,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useRef, useEffect } from "react";
 import { router } from "expo-router";
 import { Mail, Lock, Eye, EyeOff, Check, X, Info } from "lucide-react-native";
-import { loginUser } from "../services/authService";
+import { loginUser, logoutUser } from "../services/authService";
 import { collection, query, where, getDocs, addDoc, serverTimestamp } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { db, firebaseApp } from "../shared/firebaseConfig";
@@ -31,15 +31,18 @@ import {
   resetLockout,
   formatLockoutRemaining,
 } from "../shared/services/loginLockout";
+import { getUserRole } from "../shared/services/userServices";
 import { setRememberMe } from "../shared/services/rememberMe";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
-
-const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 const cloudFunctions = getFunctions(firebaseApp);
 
 export default function Login() {
   const insets = useSafeAreaInsets();
+  // Live window height, not a one-time Dimensions.get() snapshot -- see
+  // HelpTour.tsx for why a module-level constant can be stale on some
+  // devices (e.g. split-screen, foldables, resizable windows).
+  const { height: screenHeight } = useWindowDimensions();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -68,7 +71,7 @@ export default function Login() {
   const emailInputRef = useRef<TextInput>(null);
   const passwordInputRef = useRef<TextInput>(null);
   const buttonRef = useRef<View>(null);
-  const scrollViewHeightRef = useRef(SCREEN_HEIGHT);
+  const scrollViewHeightRef = useRef(screenHeight);
 
   // Always scrolls to the SAME fixed target — the sign-in button — no matter
   // which of the two fields was tapped. Measuring each field individually
@@ -257,7 +260,15 @@ export default function Login() {
     }
 
     try {
-      await loginUser(identifier, password);
+      const user = await loginUser(identifier, password);
+
+      const role = await getUserRole(user.uid);
+      if (role !== "tenant") {
+        await logoutUser();
+        setErrorMsg("Access denied. Tenant account required.");
+        return;
+      }
+
       await resetLockout(identifier);
       await setRememberMe(rememberMe);
       router.replace({ pathname: "/welcome" });
@@ -292,13 +303,13 @@ export default function Login() {
         showsVerticalScrollIndicator={false}
         onLayout={(e) => { scrollViewHeightRef.current = e.nativeEvent.layout.height; }}
       >
-        <View style={{ flex: 1, minHeight: SCREEN_HEIGHT }}>
+        <View style={{ flex: 1, minHeight: screenHeight }}>
           {/* Top gradient hero */}
           <LinearGradient
             colors={[colors.emerald, colors.ink]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
-            style={[styles.topSection, { paddingTop: insets.top + 24 }]}
+            style={[styles.topSection, { paddingTop: insets.top + spacing.xxxl }]}
           >
             <Animated.View style={[styles.logoGroup, slideIn(logoAnim)]}>
               <Animated.View
@@ -519,7 +530,6 @@ export default function Login() {
 
 const styles = StyleSheet.create({
   topSection: {
-    height: SCREEN_HEIGHT * 0.4,
     alignItems: "center",
     justifyContent: "center",
     paddingBottom: 32,

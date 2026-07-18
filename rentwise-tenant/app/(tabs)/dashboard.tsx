@@ -290,16 +290,35 @@ export default function Dashboard() {
 
   // "Upcoming Schedule" — the next few billing periods after whatever's
   // currently due, so a tenant can see what's coming without it duplicating
-  // the "Remaining Bill" figure above.
+  // the "Remaining Bill" figure above. Periods already covered by an advance
+  // payment are skipped rather than shown as still due.
+  //
+  // How far ahead the tenant has already paid, in money -- reuses the same
+  // chargedToDate baseline as the "Payment" figure above, but compares it
+  // against total PAID (approved + pending; a tenant's own just-submitted
+  // advance payment should count immediately here, even before an admin
+  // confirms it) to find the surplus. That surplus is then walked forward
+  // period-by-period below, using the same nextPeriodStart/computePeriodCharge
+  // helpers already used to build this list, to skip any period it fully
+  // covers.
+  const totalPaidForCoverage = payments
+    .filter((p) => p.status === "approved" || p.status === "pending")
+    .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  let coverageSurplus = totalPaidForCoverage - chargedToDate;
+
   const UPCOMING_COUNT = 4;
   const upcomingSchedule: { date: Date; amount: number }[] = [];
   {
     let cursor = nextPeriodStart(paymentSchedule, today);
-    for (let i = 0; i < UPCOMING_COUNT; i++) {
-      upcomingSchedule.push({
-        date: new Date(cursor),
-        amount: computePeriodCharge(periodRate, paymentSchedule, cursor),
-      });
+    let guard = 0;
+    while (upcomingSchedule.length < UPCOMING_COUNT && guard < 200) {
+      guard++;
+      const charge = computePeriodCharge(periodRate, paymentSchedule, cursor);
+      if (charge > 0 && coverageSurplus >= charge) {
+        coverageSurplus -= charge;
+      } else {
+        upcomingSchedule.push({ date: new Date(cursor), amount: charge });
+      }
       cursor = nextPeriodStart(paymentSchedule, cursor);
     }
   }

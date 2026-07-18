@@ -353,7 +353,7 @@ export default function DailyReports() {
         <FlatList
           data={groups}
           keyExtractor={(item) => item.date}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + spacing.xl }]}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.emerald} />
@@ -406,6 +406,7 @@ export default function DailyReports() {
           style={[
             styles.toast,
             {
+              bottom: insets.bottom + spacing.xxl,
               opacity: toastAnim,
               transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }],
             },
@@ -490,7 +491,7 @@ const styles = StyleSheet.create({
   emptyBox: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60 },
   emptyText: { fontSize: fontSize.base, color: colors.textSecondary, fontFamily: fontFamily.regular, textAlign: "center" },
 
-  list: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, paddingBottom: 20 },
+  list: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg },
 
   groupDateRow: {
     flexDirection: "row",
@@ -546,7 +547,6 @@ const styles = StyleSheet.create({
 
   toast: {
     position: "absolute",
-    bottom: 104,
     left: spacing.xl,
     right: spacing.xl,
     backgroundColor: colors.ink,

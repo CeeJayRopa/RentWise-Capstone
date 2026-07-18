@@ -10,6 +10,7 @@ import {
   UIManager,
 } from "react-native";
 import { ArrowRight } from "lucide-react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Defs, Mask, Rect as SvgRect, Circle as SvgCircle } from "react-native-svg";
 import { colors, fontFamily, fontSize, radius, spacing } from "../../shared/theme";
 
@@ -42,6 +43,14 @@ export type HelpStep = {
 type Rect = { x: number; y: number; width: number; height: number };
 
 const PADDING = 6;
+
+// First-paint fallback only: real placement switches to the tooltip card's
+// own measured height (via onLayout, see tooltipHeight state below) almost
+// immediately -- well before measureStable resolves a spotlight rect, which
+// waits >=120ms. The trailing safe-area clamp on tooltipTop protects
+// placement even on the rare frame this estimate is wrong for a step's
+// actual content.
+const DEFAULT_TOOLTIP_HEIGHT = 150;
 
 function measure(ref: React.RefObject<View | null>): Promise<Rect | null> {
   return new Promise((resolve) => {
@@ -114,6 +123,14 @@ export default function HelpTour({
   // could end up using the wrong screen height for that specific device, making the
   // tooltip overlap page content instead of clearing it.
   const { height: screenHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+
+  // Real rendered height of the tooltip card, captured via onLayout below.
+  // Deliberately NOT reset to null on step change -- a stale-but-real height
+  // from the previous step is a better estimate than a blind constant, and
+  // onLayout corrects it to the new step's real height on the next layout
+  // pass (imperceptible in practice).
+  const [tooltipHeight, setTooltipHeight] = useState<number | null>(null);
 
   // Always holds the latest `steps` array without being a dependency of the
   // measurement effect below — every screen recreates its tourSteps array
@@ -170,13 +187,31 @@ export default function HelpTour({
       })()
     : { x: 0, y: 0, width: 0, height: 0 };
 
-  const spaceBelow = screenHeight - (spot.y + spot.height);
-  const showBelow = !rect || spaceBelow > 140;
-  const tooltipTop = rect
+  const measuredTooltipHeight = tooltipHeight ?? DEFAULT_TOOLTIP_HEIGHT;
+
+  // screenHeight is the full raw window height (Modal is statusBarTranslucent
+  // and useWindowDimensions doesn't subtract system bars), so insets.bottom
+  // is what actually distinguishes usable space from a reserved 3-button nav
+  // bar, and insets.top is what distinguishes it from under the status bar.
+  const spaceBelow = screenHeight - insets.bottom - (spot.y + spot.height);
+  const showBelow = !rect || spaceBelow > measuredTooltipHeight + 14;
+  const idealTooltipTop = rect
     ? showBelow
       ? spot.y + spot.height + 14
-      : Math.max(60, spot.y - 20 - 150)
+      : spot.y - 20 - measuredTooltipHeight
     : screenHeight / 2 - 80;
+
+  // Final clamp: whichever branch above fired, the card itself can never
+  // render under the status bar (top) or the reserved system nav bar
+  // (bottom). Top wins if the card is taller than the remaining safe area on
+  // a very short screen (a genuine physical constraint, not a regression --
+  // today's Math.max(60, ...) has no bottom protection at all in that case).
+  const safeTop = insets.top + 8;
+  const safeBottom = screenHeight - insets.bottom - 8;
+  const tooltipTop = Math.min(
+    Math.max(idealTooltipTop, safeTop),
+    Math.max(safeTop, safeBottom - measuredTooltipHeight),
+  );
 
   return (
     <Modal
@@ -242,7 +277,10 @@ export default function HelpTour({
         <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
 
         <View style={[styles.tooltip, { top: tooltipTop }]} pointerEvents="box-none">
-          <View style={styles.tooltipCard}>
+          <View
+            style={styles.tooltipCard}
+            onLayout={(e) => setTooltipHeight(e.nativeEvent.layout.height)}
+          >
             <Text style={styles.stepCount}>
               Step {stepIndex + 1} of {steps.length}
             </Text>

@@ -160,7 +160,7 @@ export default function TenantRelocation() {
       {/* SCROLLABLE BODY */}
       <ScrollView
         style={styles.body}
-        contentContainerStyle={styles.bodyContent}
+        contentContainerStyle={[styles.bodyContent, { paddingBottom: insets.bottom + 100 }]}
         showsVerticalScrollIndicator={false}
       >
         {/* ARCHIVED TENANT CARD */}
@@ -290,7 +290,6 @@ const styles = StyleSheet.create({
   bodyContent: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.lg,
-    paddingBottom: 100,
   },
 
   // ── Archived tenant card ──────────────────────────────────────────────────────

@@ -608,6 +608,7 @@ const styles = StyleSheet.create({
   categoryTab: {
     flexBasis: "47%",
     flexGrow: 1,
+    maxWidth: "47%",
     paddingVertical: spacing.md - 1,
     paddingHorizontal: spacing.sm - 2,
     borderRadius: radius.pill,
