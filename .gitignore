@@ -23,6 +23,11 @@ web-build/
 firebase-debug.log
 firestore-debug.log
 ui-debug.log
+google-services.json
+GoogleService-Info.plist
+*serviceAccount*.json
+*.keystore
+*.jks
 
 # Build outputs
 functions/lib/

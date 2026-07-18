@@ -79,12 +79,24 @@ service cloud.firestore {
     match /updates/{updateId} {
       allow read: if isStaff();
       allow create: if isAdmin();
-      allow update: if isOwner();
+      // Owner flips approvalStatus when reviewing; admin stamps notifiedAt
+      // on its own previously-created updates once it's reported them to
+      // the owner (UpdatesReportFAB's "Apply Changes").
+      allow update: if isStaff();
     }
 
     // ── notifications ──────────────────────────────────────────────────
     match /notifications/{notifId} {
-      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      // Staff need read on top of self-scoped read: some staff queries
+      // (e.g. owner looking up notifications by updateId when acknowledging
+      // an admin's report) filter on a field other than userId, and
+      // Firestore rejects a list query outright unless its own `where`
+      // clause matches what the rule checks -- the self-scoped branch alone
+      // can't cover that, but isStaff() doesn't depend on resource.data at
+      // all, so it satisfies Firestore's list-query proof regardless of
+      // how the query is filtered.
+      allow read: if isStaff() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
       // Staff fan notifications out to other users (tenant<->owner<->admin).
       allow create: if isStaff() || (isSignedIn() && request.resource.data.userId == request.auth.uid);
     }
