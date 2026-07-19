@@ -217,18 +217,22 @@ export default function HelpTour({
 
   const spot: Rect = rect
     ? (() => {
-        // Confirmed via on-device debug readout (not guessed) for both
-        // cases: measureInWindow under-reports Y for top-anchored spots by
-        // ~insets.top, and (also confirmed on-device) bottom-anchored spots
-        // need ~insets.bottom added too -- the bottom nav bar's own
-        // reserved gesture-nav padding isn't reflected in the raw
-        // measurement either.
+        // The Modal is statusBarTranslucent, so measureInWindow's coordinate
+        // space is shifted from the real screen by ~insets.top -- confirmed
+        // on-device for top-anchored spots. That shift comes from the top
+        // status bar and applies uniformly across the whole window, so it's
+        // the correct fix for bottom-anchored spots too. The previous
+        // formula instead added insets.bottom (plus a flat -8 fudge tuned on
+        // one device) on the theory that the bottom nav's own reserved
+        // gesture-nav padding needed separate compensation -- re-tested
+        // across 3 more resolutions (720x1544, 2316x1080, 1220x2712) and
+        // that theory was wrong: insets.bottom varies a lot by device
+        // (gesture vs 3-button nav) while the real coordinate shift doesn't
+        // track it at all, which consistently left the spotlight sitting
+        // too high.
         const EDGE_MARGIN = 0;
-        const BOTTOM_NUDGE = -8;
         const y =
-          (step.edgeInset === "bottom"
-            ? rect.y - PADDING + insets.bottom + EDGE_MARGIN + BOTTOM_NUDGE
-            : rect.y - PADDING + insets.top + EDGE_MARGIN) +
+          rect.y - PADDING + insets.top + EDGE_MARGIN +
           (step.nudgeY ?? 0) +
           screenHeight * (step.nudgeYPercent ?? 0);
         // When endRef is set and measured, the box's bottom tracks that
