@@ -23,6 +23,7 @@ import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
 import { firebaseApp } from "../../shared/firebaseConfig";
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import OwnerBellIcon from "../components/OwnerBellIcon";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { Avatar, Card } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
@@ -74,6 +75,7 @@ export default function ManageAdmin() {
   const [toastMsg, setToastMsg] = useState("");
   const [tourVisible, setTourVisible] = useState(false);
   const homeRef = useRef<View>(null);
+  const bellRef = useRef<View>(null);
   const profileFieldsRef = useRef<View>(null);
   const saveBtnRef = useRef<View>(null);
   const pwFieldsRef = useRef<View>(null);
@@ -106,6 +108,7 @@ export default function ManageAdmin() {
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
+    { key: "bell", ref: bellRef, title: "Notifications", description: "Shows admin updates waiting for your review, like payments and building changes.", edgeInset: "top", round: true },
     { key: "profile", ref: profileFieldsRef, title: "Admin profile", description: "The market admin's name, login username, and contact number. This is the account that manages tenants day-to-day.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(profileFieldsRef) },
     { key: "save", ref: saveBtnRef, title: "Save", description: "Saves any changes to the admin's profile details.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(saveBtnRef) },
     { key: "password", ref: pwFieldsRef, title: "Change password", description: "Set a new login password for the admin account. Must be 8-12 characters with an uppercase letter, a number, and a special character.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(pwFieldsRef) },
@@ -298,9 +301,14 @@ export default function ManageAdmin() {
             </TouchableOpacity>
           </View>
           <Text style={styles.headerTitle}>Manage Admin</Text>
-          <TouchableOpacity style={styles.headerBtn} onPress={() => setTourVisible(true)} activeOpacity={0.7}>
-            <HelpCircle size={22} color={colors.emeraldSoft} />
-          </TouchableOpacity>
+          <View style={styles.headerRight}>
+            <View ref={bellRef} collapsable={false}>
+              <OwnerBellIcon />
+            </View>
+            <TouchableOpacity style={styles.headerBtn} onPress={() => setTourVisible(true)} activeOpacity={0.7}>
+              <HelpCircle size={22} color={colors.emeraldSoft} />
+            </TouchableOpacity>
+          </View>
         </View>
       </LinearGradient>
 
@@ -539,6 +547,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: spacing.md + 2 },
   headerBtn: {
     width: 40,
     height: 40,

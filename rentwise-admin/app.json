@@ -46,7 +46,14 @@
           "backgroundColor": "#0E6B54"
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-navigation-bar",
+        {
+          "style": "dark",
+          "enforceContrast": false
+        }
+      ]
     ],
     "extra": {
       "router": {},

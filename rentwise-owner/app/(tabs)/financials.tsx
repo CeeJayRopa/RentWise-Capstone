@@ -28,6 +28,7 @@ import { House, HelpCircle, Search, ChevronDown, FileText } from "lucide-react-n
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import OwnerBellIcon from "../components/OwnerBellIcon";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { Badge, Button } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
@@ -123,6 +124,7 @@ export default function Financials() {
   const [viewingReceipt, setViewingReceipt] = useState<ReceiptInfo | null>(null);
   const [tourVisible, setTourVisible] = useState(false);
   const homeRef = useRef<View>(null);
+  const bellRef = useRef<View>(null);
   const summaryRef = useRef<View>(null);
   const searchRef = useRef<View>(null);
   const filterRef = useRef<View>(null);
@@ -322,6 +324,7 @@ export default function Financials() {
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
+    { key: "bell", ref: bellRef, title: "Notifications", description: "Shows admin updates waiting for your review, like payments and building changes.", edgeInset: "top", round: true },
     { key: "summary", ref: summaryRef, title: "Spaces / Paid / Unpaid", description: "Total stalls tracked here, and how many tenants have paid vs. are still unpaid this period.", edgeInset: "top" },
     { key: "search", ref: searchRef, title: "Search", description: "Find a tenant fast by typing their name or building/space number.", edgeInset: "top" },
     { key: "filter", ref: filterRef, title: "Period & status filters", description: "Narrow the list by payment schedule (daily, weekly, etc.) or by paid/unpaid status.", edgeInset: "top" },
@@ -373,9 +376,14 @@ export default function Financials() {
             </TouchableOpacity>
           </View>
           <Text style={styles.headerTitle}>RentWise</Text>
-          <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
-            <HelpCircle size={22} color={colors.emeraldSoft} />
-          </TouchableOpacity>
+          <View style={styles.headerRight}>
+            <View ref={bellRef} collapsable={false}>
+              <OwnerBellIcon />
+            </View>
+            <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
+              <HelpCircle size={22} color={colors.emeraldSoft} />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Sub-header */}
@@ -621,6 +629,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: spacing.md + 2 },
   headerIconBtn: {
     width: 40,
     height: 40,

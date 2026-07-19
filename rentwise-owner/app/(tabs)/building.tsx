@@ -18,6 +18,7 @@ import { House, HelpCircle, ChevronDown, Building2 } from "lucide-react-native";
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import OwnerBellIcon from "../components/OwnerBellIcon";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { EmptyState } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
@@ -55,6 +56,7 @@ export default function Building() {
 
   const [tourVisible, setTourVisible] = useState(false);
   const homeRef = useRef<View>(null);
+  const bellRef = useRef<View>(null);
   const buildingDropdownRef = useRef<View>(null);
   const statusDropdownRef = useRef<View>(null);
   const statsRef = useRef<View>(null);
@@ -62,6 +64,7 @@ export default function Building() {
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
+    { key: "bell", ref: bellRef, title: "Notifications", description: "Shows admin updates waiting for your review, like payments and building changes.", edgeInset: "top", round: true },
     { key: "building", ref: buildingDropdownRef, title: "Building filter", description: "Switch between buildings to see only that building's stalls.", edgeInset: "top" },
     { key: "status", ref: statusDropdownRef, title: "Status filter", description: "Narrow the list to occupied or unoccupied stalls.", edgeInset: "top" },
     { key: "stats", ref: statsRef, title: "Units / Occupied / Vacant", description: "Total stalls in this building, and how many are currently occupied vs. vacant.", edgeInset: "top" },
@@ -195,9 +198,14 @@ export default function Building() {
             </TouchableOpacity>
           </View>
           <Text style={styles.headerTitle}>RentWise</Text>
-          <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
-            <HelpCircle size={24} color={colors.emeraldSoft} />
-          </TouchableOpacity>
+          <View style={styles.headerRight}>
+            <View ref={bellRef} collapsable={false}>
+              <OwnerBellIcon />
+            </View>
+            <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
+              <HelpCircle size={24} color={colors.emeraldSoft} />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Sub-header */}
@@ -453,6 +461,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+
+  headerRight: { flexDirection: "row", alignItems: "center", gap: spacing.md + 2 },
 
   headerIconBtn: {
     width: 40,

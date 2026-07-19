@@ -3,8 +3,9 @@ import { Stack, router } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, getDoc, onSnapshot, updateDoc } from "firebase/firestore";
-import { Alert, View, StyleSheet } from "react-native";
+import { Alert, View, StyleSheet, Platform } from "react-native";
 import * as SplashScreen from "expo-splash-screen";
+import * as NavigationBar from "expo-navigation-bar";
 import {
   useFonts,
   PlusJakartaSans_400Regular,
@@ -47,6 +48,18 @@ export default function RootLayout() {
       }
     });
     return unsub;
+  }, []);
+
+  useEffect(() => {
+    // Dark icons/pill so the system nav bar stays visible against this
+    // app's light backgrounds (matches the app.json config-plugin default,
+    // but the config plugin only bakes into a fresh native build — this
+    // runtime call is what actually applies it in Expo Go/dev builds).
+    if (Platform.OS === "android") {
+      try {
+        NavigationBar.setStyle("dark");
+      } catch {}
+    }
   }, []);
 
   useEffect(() => {

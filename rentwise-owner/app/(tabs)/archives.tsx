@@ -28,6 +28,7 @@ import {
 } from "../../shared/services/accountServices";
 
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import OwnerBellIcon from "../components/OwnerBellIcon";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 
@@ -69,6 +70,7 @@ export default function Archives() {
   const [deleteError, setDeleteError] = useState("");
   const [tourVisible, setTourVisible] = useState(false);
   const homeRef = useRef<View>(null);
+  const bellRef = useRef<View>(null);
   const countRef = useRef<View>(null);
   const searchRef = useRef<View>(null);
   const cardRef = useRef<View>(null);
@@ -77,6 +79,7 @@ export default function Archives() {
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
+    { key: "bell", ref: bellRef, title: "Notifications", description: "Shows admin updates waiting for your review, like payments and building changes.", edgeInset: "top", round: true },
     { key: "count", ref: countRef, title: "Archived count", description: "Total number of tenant accounts currently archived.", edgeInset: "top" },
     { key: "search", ref: searchRef, title: "Search", description: "Find an archived tenant fast by typing their name.", edgeInset: "top" },
     { key: "card", ref: cardRef, title: "Archived tenant", description: "Shows who was archived, when, and their building/space.", edgeInset: "top" },
@@ -236,9 +239,14 @@ export default function Archives() {
             </TouchableOpacity>
           </View>
           <Text style={styles.headerTitle}>RentWise</Text>
-          <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
-            <HelpCircle size={24} color={colors.emeraldSoft} />
-          </TouchableOpacity>
+          <View style={styles.headerRight}>
+            <View ref={bellRef} collapsable={false}>
+              <OwnerBellIcon />
+            </View>
+            <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
+              <HelpCircle size={24} color={colors.emeraldSoft} />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Sub-header */}
@@ -479,6 +487,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: spacing.md + 2 },
   headerIconBtn: {
     width: 40,
     height: 40,

@@ -23,7 +23,14 @@
           "backgroundColor": "#0E6B54"
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-navigation-bar",
+        {
+          "style": "dark",
+          "enforceContrast": false
+        }
+      ]
     ],
     "version": "1.0.0",
     "orientation": "portrait",

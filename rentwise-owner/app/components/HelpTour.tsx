@@ -8,11 +8,22 @@ import {
   useWindowDimensions,
   findNodeHandle,
   UIManager,
+  Animated,
+  Easing,
 } from "react-native";
 import { ArrowRight } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Defs, Mask, Rect as SvgRect, Circle as SvgCircle } from "react-native-svg";
 import { colors, fontFamily, fontSize, radius, spacing } from "../../shared/theme";
+
+// Hoisted to module scope -- react-native-svg's Animated integration pattern
+// (see their docs) requires wrapping each primitive with
+// Animated.createAnimatedComponent exactly once. Calling it inside the
+// component body would create a brand-new component type on every render,
+// forcing a full remount of the SVG node (and losing any in-flight
+// animation) instead of just updating its animated props.
+const AnimatedSvgRect = Animated.createAnimatedComponent(SvgRect);
+const AnimatedSvgCircle = Animated.createAnimatedComponent(SvgCircle);
 
 export type HelpStep = {
   key: string;
@@ -78,6 +89,9 @@ export type HelpStep = {
 type Rect = { x: number; y: number; width: number; height: number };
 
 const PADDING = 6;
+// How long the spotlight + tooltip glide from the previous step's position
+// to the next step's, once it's measured.
+const TRANSITION_MS = 280;
 
 // First-paint fallback only: real placement switches to the tooltip card's
 // own measured height (via onLayout, see tooltipHeight state below) almost
@@ -177,9 +191,25 @@ export default function HelpTour({
   const stepsRef = useRef(steps);
   stepsRef.current = steps;
 
+  // Animated position of the spotlight (mask cutout + visible border) and
+  // the tooltip card. Driven imperatively (see the effect below) rather than
+  // just used as plain numbers, so moving from one step's target to the
+  // next glides instead of snapping straight there.
+  const animX = useRef(new Animated.Value(0)).current;
+  const animY = useRef(new Animated.Value(0)).current;
+  const animWidth = useRef(new Animated.Value(0)).current;
+  const animHeight = useRef(new Animated.Value(0)).current;
+  const animTooltipTop = useRef(new Animated.Value(screenHeight / 2 - 80)).current;
+  // True until the very first real measurement of a freshly-opened tour --
+  // that first placement should snap straight there (there's no previous
+  // position to glide from), only step-to-step moves within an already-open
+  // tour should animate.
+  const isFirstMeasureRef = useRef(true);
+
   useEffect(() => {
     if (!visible) return;
     setStepIndex(0);
+    isFirstMeasureRef.current = true;
   }, [visible]);
 
   useEffect(() => {
@@ -187,10 +217,18 @@ export default function HelpTour({
     const step = stepsRef.current[stepIndex];
     if (!step) return;
 
-    // Clears the old spotlight immediately so a stale box from the previous
-    // step is never shown while the new one is still being measured.
-    setRect(null);
-    setEndRect(null);
+    // Deliberately NOT clearing `rect` here -- doing so used to blank the
+    // spotlight/tooltip back to their "nothing measured yet" fallback
+    // (screen-center) for the ~150-300ms this step's target takes to
+    // measure, which is exactly what produced the "jumps to center, then
+    // jumps again to the real spot" flicker on every Next tap. Keeping the
+    // previous step's rect visible until the new one resolves means there's
+    // always a real position on screen, so the animated glide below has an
+    // actual start point instead of a center-screen detour.
+    // `endRect` is safe to clear immediately, unlike `rect` -- a step
+    // without its own endRef would otherwise keep using a stale one left
+    // over from an earlier step that had one, corrupting its height calc.
+    if (!step.endRef) setEndRect(null);
 
     let cancelled = false;
     Promise.resolve(step.onBeforeMeasure?.()).then(() => {
@@ -210,12 +248,10 @@ export default function HelpTour({
     };
   }, [visible, stepIndex]);
 
-  if (!visible || steps.length === 0) return null;
-
   const step = steps[stepIndex];
-  const isLast = stepIndex === steps.length - 1;
+  const isLast = !!step && stepIndex === steps.length - 1;
 
-  const spot: Rect = rect
+  const spot: Rect = step && rect
     ? (() => {
         // The Modal is statusBarTranslucent, so measureInWindow's coordinate
         // space is shifted from the real screen by ~insets.top -- confirmed
@@ -281,6 +317,40 @@ export default function HelpTour({
     Math.max(safeTop, safeBottom - measuredTooltipHeight),
   );
 
+  // Drives the actual glide: whenever this step's real target position
+  // changes (a fresh measurement resolved), animate every animated value to
+  // it together. The very first placement of a freshly-opened tour snaps
+  // instead -- there's no earlier position for it to glide from.
+  useEffect(() => {
+    if (!visible || !step || !rect) return;
+
+    if (isFirstMeasureRef.current) {
+      isFirstMeasureRef.current = false;
+      animX.setValue(spot.x);
+      animY.setValue(spot.y);
+      animWidth.setValue(spot.width);
+      animHeight.setValue(spot.height);
+      animTooltipTop.setValue(tooltipTop);
+      return;
+    }
+
+    const config = { duration: TRANSITION_MS, easing: Easing.out(Easing.cubic), useNativeDriver: false };
+    Animated.parallel([
+      Animated.timing(animX, { ...config, toValue: spot.x }),
+      Animated.timing(animY, { ...config, toValue: spot.y }),
+      Animated.timing(animWidth, { ...config, toValue: spot.width }),
+      Animated.timing(animHeight, { ...config, toValue: spot.height }),
+      Animated.timing(animTooltipTop, { ...config, toValue: tooltipTop }),
+    ]).start();
+    // Only the actual target numbers should retrigger the glide -- animX/Y/etc
+    // are stable refs, and including the full `spot`/`step` objects would
+    // fire on every render (they're rebuilt each time) instead of only when
+    // the target position genuinely changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, spot.x, spot.y, spot.width, spot.height, tooltipTop]);
+
+  if (!visible || steps.length === 0 || !step) return null;
+
   return (
     <Modal
       visible={visible}
@@ -297,18 +367,18 @@ export default function HelpTour({
                 <Mask id="spotlightMask">
                   <SvgRect x="0" y="0" width="100%" height="100%" fill="#fff" />
                   {step.round ? (
-                    <SvgCircle
-                      cx={spot.x + spot.width / 2}
-                      cy={spot.y + spot.height / 2}
-                      r={spot.width / 2}
+                    <AnimatedSvgCircle
+                      cx={Animated.add(animX, Animated.divide(animWidth, 2))}
+                      cy={Animated.add(animY, Animated.divide(animHeight, 2))}
+                      r={Animated.divide(animWidth, 2)}
                       fill="#000"
                     />
                   ) : (
-                    <SvgRect
-                      x={spot.x}
-                      y={spot.y}
-                      width={spot.width}
-                      height={spot.height}
+                    <AnimatedSvgRect
+                      x={animX}
+                      y={animY}
+                      width={animWidth}
+                      height={animHeight}
                       rx={radius.lg - 2}
                       fill="#000"
                     />
@@ -324,16 +394,16 @@ export default function HelpTour({
                 mask="url(#spotlightMask)"
               />
             </Svg>
-            <View
+            <Animated.View
               pointerEvents="none"
               style={[
                 styles.spotlightBorder,
                 {
-                  top: spot.y,
-                  left: spot.x,
-                  width: spot.width,
-                  height: spot.height,
-                  borderRadius: step.round ? spot.width / 2 : radius.lg - 2,
+                  top: animY,
+                  left: animX,
+                  width: animWidth,
+                  height: animHeight,
+                  borderRadius: step.round ? Animated.divide(animWidth, 2) : radius.lg - 2,
                 },
               ]}
             />
@@ -344,7 +414,7 @@ export default function HelpTour({
 
         <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
 
-        <View style={[styles.tooltip, { top: tooltipTop }]} pointerEvents="box-none">
+        <Animated.View style={[styles.tooltip, { top: animTooltipTop }]} pointerEvents="box-none">
           <View
             style={styles.tooltipCard}
             onLayout={(e) => setTooltipHeight(e.nativeEvent.layout.height)}
@@ -378,7 +448,7 @@ export default function HelpTour({
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </Animated.View>
       </View>
     </Modal>
   );

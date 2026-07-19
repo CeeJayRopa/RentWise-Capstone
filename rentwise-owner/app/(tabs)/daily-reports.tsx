@@ -25,6 +25,7 @@ import { House, HelpCircle, Download, FileText, Archive, Wallet, CheckCircle2 } 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import OwnerBellIcon from "../components/OwnerBellIcon";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 
@@ -153,12 +154,14 @@ export default function DailyReports() {
   const [toastVisible, setToastVisible] = useState(false);
   const [tourVisible, setTourVisible] = useState(false);
   const homeRef = useRef<View>(null);
+  const bellRef = useRef<View>(null);
   const datePillRef = useRef<View>(null);
   const downloadRef = useRef<View>(null);
   const listRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
+    { key: "bell", ref: bellRef, title: "Notifications", description: "Shows admin updates waiting for your review, like payments and building changes.", edgeInset: "top", round: true },
     { key: "date", ref: datePillRef, title: "Date filter", description: "Pick a date to only download reports acknowledged on that day.", edgeInset: "top" },
     { key: "download", ref: downloadRef, title: "Download Report", description: "Saves a PDF of the reports for the selected date to your phone's Downloads folder.", edgeInset: "top" },
     { key: "list", ref: listRef, title: "Report list", description: "Every update the admin made that you've acknowledged, grouped by date. Reports are auto-deleted once they're over a month old.", edgeInset: "top", clipBottom: 90 },
@@ -294,9 +297,14 @@ export default function DailyReports() {
             </TouchableOpacity>
           </View>
           <Text style={styles.headerTitle}>RentWise</Text>
-          <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
-            <HelpCircle size={24} color={colors.emeraldSoft} />
-          </TouchableOpacity>
+          <View style={styles.headerRight}>
+            <View ref={bellRef} collapsable={false}>
+              <OwnerBellIcon />
+            </View>
+            <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
+              <HelpCircle size={24} color={colors.emeraldSoft} />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Sub-header */}
@@ -437,6 +445,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: spacing.md + 2 },
   headerIconBtn: {
     width: 40,
     height: 40,

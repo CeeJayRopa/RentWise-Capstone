@@ -1,8 +1,9 @@
 import { useEffect } from "react";
-import { View, StyleSheet } from "react-native";
+import { View, StyleSheet, Platform } from "react-native";
 import { Stack } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import * as SplashScreen from "expo-splash-screen";
+import * as NavigationBar from "expo-navigation-bar";
 import {
   useFonts,
   PlusJakartaSans_400Regular,
@@ -39,6 +40,18 @@ export default function RootLayout() {
   });
 
   const { isTablet } = useResponsive();
+
+  useEffect(() => {
+    // Dark icons/pill so the system nav bar stays visible against this
+    // app's light backgrounds (matches the app.json config-plugin default,
+    // but the config plugin only bakes into a fresh native build — this
+    // runtime call is what actually applies it in Expo Go/dev builds).
+    if (Platform.OS === "android") {
+      try {
+        NavigationBar.setStyle("dark");
+      } catch {}
+    }
+  }, []);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
