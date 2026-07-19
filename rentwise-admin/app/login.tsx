@@ -22,11 +22,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useRef, useEffect } from "react";
 import { router } from "expo-router";
 import { Mail, Lock, Eye, EyeOff, AlertCircle, X, Info, Check } from "lucide-react-native";
-import { collection, query, where, getDocs, addDoc, serverTimestamp } from "firebase/firestore";
+import { getFunctions, httpsCallable } from "firebase/functions";
 
 import { loginUser } from "../shared/services/auth";
-import { getUserByUsername } from "../shared/services/userServices";
-import { db } from "../shared/services/firestore";
+import { firebaseApp } from "../shared/firebaseConfig";
 import {
   checkLockout,
   recordFailedAttempt,
@@ -35,6 +34,8 @@ import {
 } from "../shared/services/loginLockout";
 import { setRememberMe } from "../shared/services/rememberMe";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
+
+const cloudFunctions = getFunctions(firebaseApp);
 
 export default function Login() {
   const insets = useSafeAreaInsets();
@@ -181,10 +182,14 @@ export default function Login() {
 
     setLoading(true);
     try {
+      // Server-side (Cloud Function) instead of a direct client-side `users`
+      // read -- that read required `users` to stay publicly queryable,
+      // which leaked every user's name/email/phone to anyone.
       let email = identifier;
-      const userDoc = await getUserByUsername(identifier, "admin");
-      if (userDoc) {
-        email = userDoc.email;
+      const resolveEmail = httpsCallable(cloudFunctions, "resolveLoginEmail");
+      const resolved: any = await resolveEmail({ identifier, role: "admin" });
+      if (resolved.data?.email) {
+        email = resolved.data.email;
       } else if (!email.includes("@")) {
         email = `${email}@rentwise.app`;
       }
@@ -239,36 +244,18 @@ export default function Login() {
     setFpError(null);
     setFpLoading(true);
     try {
-      const snap = await getDocs(
-        query(
-          collection(db, "users"),
-          where("email", "==", trimmed),
-          where("role", "==", "admin"),
-        ),
-      );
-      if (snap.empty) {
-        setFpError("No admin account found with this email.");
-        return;
-      }
-      const matched = snap.docs[0];
-      const data = matched.data();
-
-      // Admin password resets always go to the owner to handle manually —
-      // no self-service path, by design (reduces owner's workload only
-      // where it's safe to; an admin account resetting itself isn't).
-      await addDoc(collection(db, "passwordResetRequests"), {
-        email: trimmed,
-        tenantId: matched.id,
-        tenantName: `${data.firstName ?? ""} ${data.lastName ?? ""}`.trim(),
-        requestedRole: "admin",
-        status: "pending",
-        createdAt: serverTimestamp(),
-      });
+      // Looked up + filed entirely server-side now (Cloud Function, Admin
+      // SDK) instead of a direct client-side `users` read -- that read
+      // required `users` to stay publicly queryable, which leaked every
+      // user's name/email/phone to anyone. Admin resets always go to the
+      // owner to handle manually -- no self-service path, by design.
+      const forgotPassword = httpsCallable(cloudFunctions, "adminForgotPassword");
+      await forgotPassword({ email: trimmed });
       setFpSuccess(true);
       setTimeout(() => closeForgotModal(), 2500);
-    } catch (err) {
+    } catch (err: any) {
       console.log("ForgotPassword error:", err);
-      setFpError("Something went wrong. Please try again.");
+      setFpError(err?.code === "functions/not-found" ? "No admin account found with this email." : "Something went wrong. Please try again.");
     } finally {
       setFpLoading(false);
     }

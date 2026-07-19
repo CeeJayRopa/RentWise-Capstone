@@ -92,13 +92,13 @@ export default function EditRentalInfo() {
   const modifyBtnRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", offsetY: 41, round: true },
-    { key: "stall", ref: stallPillRef, title: "Stall", description: "The stall whose rental info you're editing.", offsetY: 41 },
-    { key: "category", ref: categoryRef, title: "Market category", description: "The kind of goods sold at this stall.", offsetY: 41 },
-    { key: "dimensions", ref: dimensionsRef, title: "Length & width", description: "The stall's physical dimensions, in meters.", offsetY: 41 },
-    { key: "rate", ref: rateRef, title: "Rental rate", description: "The stall's charge per billing period.", offsetY: 41 },
-    { key: "schedule", ref: scheduleRef, title: "Payment schedule", description: "How often rent is due — daily, weekly, semi-monthly, or monthly.", offsetY: 41 },
-    { key: "modify", ref: modifyBtnRef, title: "Modify Rental Info", description: "Unlocks the fields above so you can update them, then saves your changes.", offsetY: 41 },
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+    { key: "stall", ref: stallPillRef, title: "Stall", description: "The stall whose rental info you're editing.", edgeInset: "top" },
+    { key: "category", ref: categoryRef, title: "Market category", description: "The kind of goods sold at this stall.", edgeInset: "top" },
+    { key: "dimensions", ref: dimensionsRef, title: "Length & width", description: "The stall's physical dimensions, in meters.", edgeInset: "top" },
+    { key: "rate", ref: rateRef, title: "Rental rate", description: "The stall's charge per billing period.", edgeInset: "top" },
+    { key: "schedule", ref: scheduleRef, title: "Payment schedule", description: "How often rent is due — daily, weekly, semi-monthly, or monthly.", edgeInset: "top" },
+    { key: "modify", ref: modifyBtnRef, title: "Modify Rental Info", description: "Unlocks the fields above so you can update them, then saves your changes.", edgeInset: "top" },
   ];
 
   useEffect(() => {
@@ -355,7 +355,7 @@ export default function EditRentalInfo() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Edit rental info</Text>
         <View ref={helpRef} collapsable={false}>
-          <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} hitSlop={8}>
+          <TouchableOpacity style={styles.headerIconBtn} onPress={() => setTourVisible(true)} activeOpacity={0.7} hitSlop={8}>
             <HelpCircle size={22} color={colors.white} />
           </TouchableOpacity>
         </View>
@@ -620,6 +620,15 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.semibold,
     flex: 1,
     textAlign: "center",
+  },
+
+  headerIconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "rgba(255,255,255,0.14)",
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   // ── Body ─────────────────────────────────────────────────────────────────────

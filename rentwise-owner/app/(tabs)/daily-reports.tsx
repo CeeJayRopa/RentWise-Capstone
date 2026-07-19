@@ -158,10 +158,10 @@ export default function DailyReports() {
   const listRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
-    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", offsetY: 41, round: true },
-    { key: "date", ref: datePillRef, title: "Date filter", description: "Pick a date to only download reports acknowledged on that day.", offsetY: 41 },
-    { key: "download", ref: downloadRef, title: "Download Report", description: "Saves a PDF of the reports for the selected date to your phone's Downloads folder.", offsetY: 41 },
-    { key: "list", ref: listRef, title: "Report list", description: "Every update the admin made that you've acknowledged, grouped by date. Reports are auto-deleted once they're over a month old.", offsetY: 41, clipBottom: 90 },
+    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
+    { key: "date", ref: datePillRef, title: "Date filter", description: "Pick a date to only download reports acknowledged on that day.", edgeInset: "top" },
+    { key: "download", ref: downloadRef, title: "Download Report", description: "Saves a PDF of the reports for the selected date to your phone's Downloads folder.", edgeInset: "top" },
+    { key: "list", ref: listRef, title: "Report list", description: "Every update the admin made that you've acknowledged, grouped by date. Reports are auto-deleted once they're over a month old.", edgeInset: "top", clipBottom: 90 },
   ];
 
   // Reset downloading state on mount — prevents stuck button on app restart/revisit

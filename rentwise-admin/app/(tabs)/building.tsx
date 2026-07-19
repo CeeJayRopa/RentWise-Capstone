@@ -72,6 +72,7 @@ export default function Building() {
   const manageBtnRef = useRef<View>(null);
   const editRentalBtnRef = useRef<View>(null);
   const registerBtnRef = useRef<View>(null);
+  const fabRef = useRef<View>(null);
   const listScrollRef = useRef<ScrollView>(null);
 
   // Scrolls a given stall row into view and gives the ScrollView time to
@@ -230,19 +231,20 @@ export default function Building() {
   const firstUnoccupiedIndex = displayedStalls.findIndex((s) => s.status === "unoccupied");
 
   const tourSteps: HelpStep[] = [
-    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", offsetY: 41, round: true },
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", offsetY: 41, round: true },
-    { key: "building", ref: buildingDropdownRef, title: "Building filter", description: "Switch between buildings to see only that building's stalls.", offsetY: 41 },
-    { key: "status", ref: statusDropdownRef, title: "Status filter", description: "Narrow the list to occupied or unoccupied stalls.", offsetY: 41 },
-    { key: "list", ref: listRef, title: "Stall list", description: "Register a tenant into a vacant stall, or manage and edit rental info for an occupied one.", offsetY: 41 },
+    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+    { key: "building", ref: buildingDropdownRef, title: "Building filter", description: "Switch between buildings to see only that building's stalls.", edgeInset: "top" },
+    { key: "status", ref: statusDropdownRef, title: "Status filter", description: "Narrow the list to occupied or unoccupied stalls.", edgeInset: "top" },
+    { key: "list", ref: listRef, title: "Stall list", description: "Register a tenant into a vacant stall, or manage and edit rental info for an occupied one.", edgeInset: "top" },
   ];
   if (firstOccupiedIndex !== -1) {
-    tourSteps.push({ key: "manage", ref: manageBtnRef, title: "Manage", description: "Opens this tenant's account so you can view or update their details.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(manageBtnRef) });
-    tourSteps.push({ key: "editrental", ref: editRentalBtnRef, title: "Edit Rental", description: "Updates this stall's rent, payment schedule, or other rental terms.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(editRentalBtnRef) });
+    tourSteps.push({ key: "manage", ref: manageBtnRef, title: "Manage", description: "Opens this tenant's account so you can view or update their details.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(manageBtnRef) });
+    tourSteps.push({ key: "editrental", ref: editRentalBtnRef, title: "Edit Rental", description: "Updates this stall's rent, payment schedule, or other rental terms.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(editRentalBtnRef) });
   }
   if (firstUnoccupiedIndex !== -1) {
-    tourSteps.push({ key: "register", ref: registerBtnRef, title: "Register", description: "Registers a new tenant into this vacant stall.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(registerBtnRef) });
+    tourSteps.push({ key: "register", ref: registerBtnRef, title: "Register", description: "Registers a new tenant into this vacant stall.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(registerBtnRef) });
   }
+  tourSteps.push({ key: "fab", ref: fabRef, title: "Updates report", description: "Shows recent changes awaiting your review, organized by building, financials, and accounts.", edgeInset: "bottom", round: true, nudgeY: 5 });
 
   if (checking) {
     return (
@@ -447,7 +449,7 @@ export default function Building() {
         />
       )}
 
-      <UpdatesReportFAB />
+      <UpdatesReportFAB fabRef={fabRef} />
 
       <HelpTour
         visible={tourVisible}

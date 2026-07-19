@@ -19,16 +19,22 @@ service cloud.firestore {
     function isStaff() { return isAdmin() || isOwner(); }
 
     // ── users ──────────────────────────────────────────────────────────
-    // Owner/admin/tenant login screens all look a user up by
-    // username/email BEFORE Firebase Auth sign-in succeeds (there's no
-    // Cloud Function fronting this today), so `users` has to stay
-    // readable pre-auth or every login/forgot-password flow breaks.
-    // This is a known, bounded trade-off (profile fields only -- no
-    // payments, no recovery data, no auth secrets) vs. today's fully
-    // open database; tightening it further means moving those lookups
-    // into a callable function, which is a follow-up, not tonight's fix.
+    // Owner/admin/tenant login and forgot-password screens used to look a
+    // user up by username/email directly against this collection BEFORE
+    // Firebase Auth sign-in succeeded, which meant `users` had to stay
+    // fully public (`allow get, list: if true`) -- letting anyone dump
+    // every user's name/email/phone with one unauthenticated query. Those
+    // lookups now run server-side via Cloud Functions (resolveLoginEmail,
+    // tenantForgotPassword, adminForgotPassword -- see
+    // functions/src/index.ts), which use the Admin SDK and bypass these
+    // rules entirely, so reads can require auth like everything else here.
     match /users/{userId} {
-      allow get, list: if true;
+      // A signed-in user can read their own doc; staff can read anyone's.
+      allow get: if isSignedIn() && (isStaff() || request.auth.uid == userId);
+      // Only staff run unfiltered/`where`-filtered queries against this
+      // collection (tenant lists, admin lookups, etc.) -- no screen for a
+      // plain tenant does a `list` here.
+      allow list: if isStaff();
 
       // Admin's client-side tenant-creation flow (accountServices.ts)
       // writes the new tenant's user doc directly with a fresh Auth uid.
@@ -108,6 +114,15 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ── rateLimits ───────────────────────────────────────────────────
+    // Cloud Functions only (Admin SDK bypasses rules entirely) -- internal
+    // per-endpoint attempt counters (see checkRateLimit in
+    // functions/src/index.ts). No client ever needs direct access; letting
+    // one write here would let it reset/inflate its own rate limit.
+    match /rateLimits/{key} {
+      allow read, write: if false;
+    }
+
     // ── passwordResetRequests ──────────────────────────────────────────
     // Every app's forgot-password flow files this before the user is
     // signed in, so create must stay open. Reading/managing the queue is
@@ -123,8 +138,22 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
+    // Unauthenticated by design (anonymous guest-site analytics), so this
+    // can't be locked to a real identity -- validated instead, so an open
+    // `create` can't be used to write arbitrary-shaped/arbitrary-sized
+    // garbage documents (no schema/type checking existed here before).
+    // Doesn't stop volume-based spam (no auth = no per-caller rate limit
+    // possible without App Check), just malformed/oversized ones.
     match /arPlacementEvents/{eventId} {
-      allow create: if true;
+      allow create: if
+        request.resource.data.keys().hasOnly(["objectId", "objectName", "category", "createdAt"])
+        && request.resource.data.objectId is string
+        && request.resource.data.objectId.size() > 0 && request.resource.data.objectId.size() < 200
+        && request.resource.data.objectName is string
+        && request.resource.data.objectName.size() > 0 && request.resource.data.objectName.size() < 200
+        && request.resource.data.category is string
+        && request.resource.data.category.size() < 100
+        && request.resource.data.createdAt == request.time;
       allow read, update, delete: if false;
     }
 

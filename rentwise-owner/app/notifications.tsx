@@ -103,10 +103,10 @@ export default function Notifications() {
   const firstPendingIndex = notifications.findIndex((n) => isPendingStatus(n.status) && n.updateId);
 
   const tourSteps: HelpStep[] = [
-    { key: "actions", ref: actionRowRef, title: "Acknowledge All / Clear All", description: "Acknowledge All approves every pending update at once. Clear All removes already-acknowledged notifications from this list.", offsetY: 41 },
-    { key: "card", ref: cardRef, title: "Notification", description: "Shows who made the update, when, and its current status.", offsetY: 41 },
+    { key: "actions", ref: actionRowRef, title: "Acknowledge All / Clear All", description: "Acknowledge All approves every pending update at once. Clear All removes already-acknowledged notifications from this list.", edgeInset: "top" },
+    { key: "card", ref: cardRef, title: "Notification", description: "Shows who made the update, when, and its current status.", edgeInset: "top" },
     ...(firstPendingIndex !== -1
-      ? [{ key: "checkreport", ref: checkReportRef, title: "Check Report", description: "Opens the full details of a pending update so you can review it before acknowledging.", offsetY: 41 }]
+      ? [{ key: "checkreport", ref: checkReportRef, title: "Check Report", description: "Opens the full details of a pending update so you can review it before acknowledging.", edgeInset: "top" as const }]
       : []),
   ];
 

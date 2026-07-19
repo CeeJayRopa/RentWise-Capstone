@@ -38,7 +38,6 @@ import { db } from "../../shared/services/firestore";
 import { isTenantPaidThisMonth } from "../../shared/services/financeServices";
 import { hasSeenAdminDashboardTour, markAdminDashboardTourSeen } from "../../shared/services/onboardingTour";
 import NotificationBell from "../components/NotificationBell";
-import UpdatesReportFAB, { FAB_CLEARANCE } from "../components/UpdatesReportFAB";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { bottomNavRefs } from "../components/bottomNavRefs";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
@@ -96,21 +95,19 @@ export default function Dashboard() {
   const marketChartRef = useRef<View>(null);
   const financeChartRef = useRef<View>(null);
   const paymentStatusRef = useRef<View>(null);
-  const fabRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
-    { key: "profile", ref: profileRef, title: "Profile", description: "View and edit your admin account details.", offsetY: 41, round: true },
-    { key: "bell", ref: bellRef, title: "Notifications", description: "Shows password reset requests and messages from the owner.", offsetY: 41, round: true },
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", offsetY: 41, round: true },
-    { key: "market", ref: marketChartRef, title: "Market overview", description: "How many stalls are occupied vs. unoccupied right now.", offsetY: 41 },
-    { key: "finance", ref: financeChartRef, title: "Financial performance", description: "Amount collected today and this month, compared against the prior period.", offsetY: 41 },
-    { key: "payment", ref: paymentStatusRef, title: "Payment status", description: "How many active tenants have paid this month vs. are still unpaid.", offsetY: 41 },
-    { key: "fab", ref: fabRef, title: "Updates Report", description: "Review pending changes you've made and submit them to the owner for acknowledgment. Drag this button anywhere on screen.", offsetY: 41, round: true },
-    { key: "navfinancials", ref: bottomNavRefs.financials, title: "Financials", description: "Track tenant payments, view receipts, and see who's paid or unpaid.", offsetY: 36 },
-    { key: "navbuilding", ref: bottomNavRefs.building, title: "Building", description: "Browse every stall across all buildings, register tenants, and manage rentals.", offsetY: 36 },
-    { key: "navtenants", ref: bottomNavRefs.tenants, title: "Tenants", description: "View active tenants and archive their accounts.", offsetY: 36 },
-    { key: "navarchives", ref: bottomNavRefs.archives, title: "Archives", description: "View archived tenant accounts, and restore or permanently delete them.", offsetY: 36 },
-    { key: "navreports", ref: bottomNavRefs.reports, title: "Reports", description: "See the history of update reports you've submitted to the owner.", offsetY: 36 },
+    { key: "profile", ref: profileRef, title: "Profile", description: "View and edit your admin account details.", edgeInset: "top", round: true },
+    { key: "bell", ref: bellRef, title: "Notifications", description: "Shows password reset requests and messages from the owner.", edgeInset: "top", round: true },
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+    { key: "market", ref: marketChartRef, title: "Market overview", description: "How many stalls are occupied vs. unoccupied right now.", edgeInset: "top" },
+    { key: "finance", ref: financeChartRef, title: "Financial performance", description: "Amount collected today and this month, compared against the prior period.", edgeInset: "top" },
+    { key: "payment", ref: paymentStatusRef, title: "Payment status", description: "How many active tenants have paid this month vs. are still unpaid.", edgeInset: "top" },
+    { key: "navfinancials", ref: bottomNavRefs.financials, title: "Financials", description: "Track tenant payments, view receipts, and see who's paid or unpaid.", edgeInset: "bottom" },
+    { key: "navbuilding", ref: bottomNavRefs.building, title: "Building", description: "Browse every stall across all buildings, register tenants, and manage rentals.", edgeInset: "bottom" },
+    { key: "navtenants", ref: bottomNavRefs.tenants, title: "Tenants", description: "View active tenants and archive their accounts.", edgeInset: "bottom" },
+    { key: "navarchives", ref: bottomNavRefs.archives, title: "Archives", description: "View archived tenant accounts, and restore or permanently delete them.", edgeInset: "bottom" },
+    { key: "navreports", ref: bottomNavRefs.reports, title: "Reports", description: "See the history of update reports you've submitted to the owner.", edgeInset: "bottom" },
   ];
 
   useEffect(() => {
@@ -321,7 +318,7 @@ export default function Dashboard() {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + FAB_CLEARANCE }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + spacing.xl }]}
         showsVerticalScrollIndicator={false}
         scrollEnabled={false}
         refreshControl={
@@ -446,8 +443,6 @@ export default function Dashboard() {
         )}
       </ScrollView>
 
-      <UpdatesReportFAB fabRef={fabRef} />
-
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
     </View>
   );
@@ -525,7 +520,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
   },
-  headerLogo: { width: 130, height: 60 },
+  headerLogo: { width: 130, height: 60, marginLeft: -62 },
   headerRight: {
     flexDirection: "row",
     alignItems: "center",

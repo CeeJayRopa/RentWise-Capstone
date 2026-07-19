@@ -61,11 +61,11 @@ export default function Building() {
   const listRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
-    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", offsetY: 41, round: true },
-    { key: "building", ref: buildingDropdownRef, title: "Building filter", description: "Switch between buildings to see only that building's stalls.", offsetY: 41 },
-    { key: "status", ref: statusDropdownRef, title: "Status filter", description: "Narrow the list to occupied or unoccupied stalls.", offsetY: 41 },
-    { key: "stats", ref: statsRef, title: "Units / Occupied / Vacant", description: "Total stalls in this building, and how many are currently occupied vs. vacant.", offsetY: 41 },
-    { key: "badge", ref: listRef, title: "Occupied / Unoccupied", description: "Shows whether a stall currently has a tenant. Occupied stalls also show the tenant's name.", offsetY: 41 },
+    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
+    { key: "building", ref: buildingDropdownRef, title: "Building filter", description: "Switch between buildings to see only that building's stalls.", edgeInset: "top" },
+    { key: "status", ref: statusDropdownRef, title: "Status filter", description: "Narrow the list to occupied or unoccupied stalls.", edgeInset: "top" },
+    { key: "stats", ref: statsRef, title: "Units / Occupied / Vacant", description: "Total stalls in this building, and how many are currently occupied vs. vacant.", edgeInset: "top" },
+    { key: "badge", ref: listRef, title: "Occupied / Unoccupied", description: "Shows whether a stall currently has a tenant. Occupied stalls also show the tenant's name.", edgeInset: "top" },
   ];
 
   useEffect(() => {

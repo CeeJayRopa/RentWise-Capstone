@@ -13,13 +13,14 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useEffect, useRef, useState } from "react";
 import { doc, onSnapshot, updateDoc } from "firebase/firestore";
+import { sendEmailVerification, updatePassword } from "firebase/auth";
 import { auth } from "../../shared/firebaseConfig";
 import { db } from "../../shared/services/firestore";
 import { getTenantData, updateTenantProfile, syncPersonalEmail } from "../../services/tenantService";
 import { logoutUser } from "../../services/authService";
 import { setRememberMe } from "../../shared/services/rememberMe";
 import { router } from "expo-router";
-import { Store, Tag, CheckCircle2, LogOut, User, Phone, Mail, Pencil, ShieldCheck, HelpCircle } from "lucide-react-native";
+import { Store, Tag, CheckCircle2, LogOut, User, Phone, Mail, Pencil, ShieldCheck, HelpCircle, Eye, EyeOff } from "lucide-react-native";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
@@ -33,6 +34,8 @@ export default function Profile() {
   const [lastName, setLastName] = useState("");
   const [contact, setContact] = useState("");
   const [personalEmail, setPersonalEmail] = useState("");
+  const [emailVerified, setEmailVerified] = useState(false);
+  const [resendingVerification, setResendingVerification] = useState(false);
   const [stallId, setStallId] = useState("");
   const [memberSince, setMemberSince] = useState("");
   const [category, setCategory] = useState<MarketCategory | "">("");
@@ -43,6 +46,14 @@ export default function Profile() {
   const [original, setOriginal] = useState({ firstName: "", lastName: "", contact: "", personalEmail: "", category: "" as MarketCategory | "" });
   const [isEditing, setIsEditing] = useState(false);
   const [showToast, setShowToast] = useState(false);
+
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showNewPass, setShowNewPass] = useState(false);
+  const [showConfirmPass, setShowConfirmPass] = useState(false);
+  const [pwError, setPwError] = useState("");
+  const [confirmError, setConfirmError] = useState("");
+  const [changingPw, setChangingPw] = useState(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(20)).current;
 
@@ -51,6 +62,8 @@ export default function Profile() {
   const identityRef = useRef<View>(null);
   const categoryRef = useRef<View>(null);
   const formRef = useRef<View>(null);
+  const emailSectionRef = useRef<View>(null);
+  const pwSectionRef = useRef<View>(null);
   const saveBtnRef = useRef<View>(null);
   const signOutRef = useRef<View>(null);
   const scrollRef = useRef<ScrollView>(null);
@@ -78,12 +91,13 @@ export default function Profile() {
     });
 
   const tourSteps: HelpStep[] = [
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", offsetY: 41, round: true },
-    { key: "identity", ref: identityRef, title: "Your space", description: "Your space ID and how long you've been a tenant.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(identityRef) },
-    { key: "category", ref: categoryRef, title: "Market category", description: "The kind of goods sold at your stall. Tap Edit Profile to change it — updates here sync with the admin's records too.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(categoryRef) },
-    { key: "form", ref: formRef, title: "Your details", description: "Your name, contact number, and personal email — the email enables self-service password reset without needing the admin.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(formRef) },
-    { key: "save", ref: saveBtnRef, title: "Edit Profile", description: "Unlocks the fields above so you can update them.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(saveBtnRef) },
-    { key: "signout", ref: signOutRef, title: "Sign out", description: "Signs you out of your account.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(signOutRef) },
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+    { key: "identity", ref: identityRef, title: "Your space", description: "Your space ID and how long you've been a tenant.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(identityRef) },
+    { key: "category", ref: categoryRef, title: "Market category", description: "The kind of goods sold at your stall. Tap Edit Profile to change it — updates here sync with the admin's records too.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(categoryRef) },
+    { key: "form", ref: formRef, endRef: emailSectionRef, title: "Your details", description: "Your name, contact number, and personal email — the email enables self-service password reset without needing the admin, once verified. Didn't get the verification email? Resend it here.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(formRef) },
+    { key: "save", ref: saveBtnRef, title: "Edit Profile", description: "Unlocks the fields above so you can update them.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(saveBtnRef) },
+    { key: "password", ref: pwSectionRef, title: "Change password", description: "Set a new login password without needing the Forgot Password flow. Must be 8-12 characters with an uppercase letter, a number, and a special character.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(pwSectionRef) },
+    { key: "signout", ref: signOutRef, title: "Sign out", description: "Signs you out of your account.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(signOutRef) },
   ];
 
   useEffect(() => {
@@ -128,6 +142,7 @@ export default function Profile() {
         setLastName(data.lastName || "");
         setContact(data.contactNo || "");
         setPersonalEmail(data.personalEmail || "");
+        setEmailVerified((data as any).emailVerified === true);
         setStallId(data.stallId || "");
         const createdAt = (data as any).createdAt;
         if (createdAt?.toDate) {
@@ -149,6 +164,62 @@ export default function Profile() {
       }
     } catch (error) {
       console.log("Profile Load Error:", error);
+    }
+  }
+
+  async function handleResendVerification() {
+    const user = auth.currentUser;
+    if (!user) return;
+    setResendingVerification(true);
+    try {
+      await sendEmailVerification(user);
+      Alert.alert("Verification email sent", "Check your inbox and tap the link to confirm your email.");
+    } catch {
+      Alert.alert("Error", "Couldn't send the verification email. Please try again later.");
+    } finally {
+      setResendingVerification(false);
+    }
+  }
+
+  async function handleChangePassword() {
+    const pwRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
+    let valid = true;
+
+    if (!pwRegex.test(newPassword)) {
+      setPwError("8–12 characters with at least 1 uppercase letter, number & special character.");
+      valid = false;
+    } else {
+      setPwError("");
+    }
+
+    if (!confirmPassword) {
+      setConfirmError("Please confirm your password.");
+      valid = false;
+    } else if (newPassword !== confirmPassword) {
+      setConfirmError("Passwords do not match.");
+      valid = false;
+    } else {
+      setConfirmError("");
+    }
+
+    if (!valid) return;
+
+    const user = auth.currentUser;
+    if (!user) return;
+    setChangingPw(true);
+    try {
+      await updatePassword(user, newPassword);
+      setNewPassword("");
+      setConfirmPassword("");
+      Alert.alert("Success", "Password updated!");
+    } catch (err: any) {
+      if (err?.code === "auth/requires-recent-login") {
+        Alert.alert("Session Expired", "Please log out and log in again before changing your password.");
+      } else {
+        Alert.alert("Error", "Failed to change password.");
+      }
+    } finally {
+      setChangingPw(false);
     }
   }
 
@@ -377,32 +448,59 @@ export default function Profile() {
 
           {/* Personal email — optional, enables self-service password reset.
               Once set, it's shown read-only (changing an email in place isn't
-              supported yet — that's a bigger operation than adding one). */}
-          <View style={styles.labelRow}>
-            <Mail size={13} color={colors.emerald} />
-            <Text style={styles.label}>Email</Text>
+              supported yet — that's a bigger operation than adding one).
+              Wrapped in its own ref so the "Your details" tour step's
+              spotlight can end here instead of at formRef's full height,
+              which also spans the Save/Edit button below. */}
+          <View ref={emailSectionRef} collapsable={false}>
+            <View style={styles.labelRow}>
+              <Mail size={13} color={colors.emerald} />
+              <Text style={styles.label}>Email</Text>
+            </View>
+            {!original.personalEmail && (
+              <Text style={styles.emailHint}>
+                Add this so you can reset your own password later, without needing the admin.
+              </Text>
+            )}
+            <TextInput
+              style={[
+                styles.input,
+                (!isEditing || !!original.personalEmail) && styles.inputReadOnly,
+                isEditing && !original.personalEmail && emailFocused && styles.inputFocused,
+              ]}
+              value={personalEmail}
+              onChangeText={setPersonalEmail}
+              placeholder="example@gmail.com"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              editable={isEditing && !original.personalEmail}
+              onFocus={() => setEmailFocused(true)}
+              onBlur={() => setEmailFocused(false)}
+            />
+
+            {!!original.personalEmail && (
+              <View style={styles.verifyRow}>
+                {emailVerified ? (
+                  <View style={styles.verifyBadgeSuccess}>
+                    <CheckCircle2 size={13} color={colors.emerald} />
+                    <Text style={styles.verifyBadgeSuccessText}>Email verified</Text>
+                  </View>
+                ) : (
+                  <>
+                    <View style={styles.verifyBadgeWarning}>
+                      <Text style={styles.verifyBadgeWarningText}>Email not verified yet</Text>
+                    </View>
+                    <Pressable onPress={handleResendVerification} disabled={resendingVerification} hitSlop={8}>
+                      <Text style={styles.resendLink}>
+                        {resendingVerification ? "Sending..." : "Resend verification email"}
+                      </Text>
+                    </Pressable>
+                  </>
+                )}
+              </View>
+            )}
           </View>
-          {!original.personalEmail && (
-            <Text style={styles.emailHint}>
-              Add this so you can reset your own password later, without needing the admin.
-            </Text>
-          )}
-          <TextInput
-            style={[
-              styles.input,
-              (!isEditing || !!original.personalEmail) && styles.inputReadOnly,
-              isEditing && !original.personalEmail && emailFocused && styles.inputFocused,
-            ]}
-            value={personalEmail}
-            onChangeText={setPersonalEmail}
-            placeholder="example@gmail.com"
-            placeholderTextColor={colors.textMuted}
-            autoCapitalize="none"
-            keyboardType="email-address"
-            editable={isEditing && !original.personalEmail}
-            onFocus={() => setEmailFocused(true)}
-            onBlur={() => setEmailFocused(false)}
-          />
 
           {/* Edit / Save button */}
           {(() => {
@@ -430,6 +528,75 @@ export default function Profile() {
               </Pressable>
             );
           })()}
+        </View>
+
+        {/* Change password */}
+        <View ref={pwSectionRef} collapsable={false} style={styles.formCard}>
+          <Text style={styles.sectionTitle}>Change Password</Text>
+
+          <View style={styles.labelRow}>
+            <Text style={styles.label}>New password</Text>
+          </View>
+          <View style={[styles.pwField, !isEditing && styles.inputReadOnly, !!pwError && styles.pwFieldError]}>
+            <TextInput
+              style={styles.pwInput}
+              value={newPassword}
+              onChangeText={(t) => {
+                setNewPassword(t);
+                setPwError("");
+                if (confirmPassword && confirmPassword === t) setConfirmError("");
+              }}
+              secureTextEntry={!showNewPass}
+              placeholder="New password"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              maxLength={12}
+              editable={isEditing}
+            />
+            <Pressable onPress={() => setShowNewPass((v) => !v)} hitSlop={8}>
+              {showNewPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+            </Pressable>
+          </View>
+          {!!pwError && <Text style={styles.pwFieldErrorText}>{pwError}</Text>}
+          <Text style={styles.emailHint}>Min. 8 characters with a capital letter, a number, and a special character.</Text>
+
+          <View style={styles.labelRow}>
+            <Text style={styles.label}>Confirm password</Text>
+          </View>
+          <View style={[styles.pwField, !isEditing && styles.inputReadOnly, !!confirmError && styles.pwFieldError]}>
+            <TextInput
+              style={styles.pwInput}
+              value={confirmPassword}
+              onChangeText={(t) => {
+                setConfirmPassword(t);
+                setConfirmError(t && t !== newPassword ? "Passwords do not match." : "");
+              }}
+              secureTextEntry={!showConfirmPass}
+              placeholder="Confirm new password"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              maxLength={12}
+              editable={isEditing}
+            />
+            <Pressable onPress={() => setShowConfirmPass((v) => !v)} hitSlop={8}>
+              {showConfirmPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+            </Pressable>
+          </View>
+          {!!confirmError && <Text style={styles.pwFieldErrorText}>{confirmError}</Text>}
+
+          {isEditing && (
+            <Pressable
+              style={({ pressed }) => [
+                styles.saveButton,
+                (changingPw || newPassword.length < 8 || confirmPassword.length < 8) && styles.saveButtonDisabled,
+                pressed && { backgroundColor: colors.ink, transform: [{ scale: 0.97 }] },
+              ]}
+              onPress={handleChangePassword}
+              disabled={changingPw || newPassword.length < 8 || confirmPassword.length < 8}
+            >
+              <Text style={styles.saveText}>{changingPw ? "Updating…" : "Update Password"}</Text>
+            </Pressable>
+          )}
         </View>
 
         <Pressable
@@ -640,6 +807,46 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
 
+  // ── Change password card ─────────────────────────
+  sectionTitle: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    marginBottom: spacing.lg,
+  },
+
+  pwField: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: colors.white,
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.emeraldSoft,
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.sm - 2,
+  },
+
+  pwFieldError: {
+    borderColor: colors.error,
+  },
+
+  pwInput: {
+    flex: 1,
+    paddingVertical: spacing.md + 1,
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
+  },
+
+  pwFieldErrorText: {
+    fontSize: fontSize.xs,
+    color: colors.error,
+    fontFamily: fontFamily.medium,
+    marginBottom: spacing.sm,
+    marginTop: -spacing.sm + 2,
+  },
+
   labelRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -682,6 +889,46 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginTop: -4,
     marginBottom: spacing.sm,
+  },
+
+  verifyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    marginTop: spacing.xs + 2,
+    marginBottom: spacing.sm,
+  },
+  verifyBadgeSuccess: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: colors.successSoft,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+  },
+  verifyBadgeSuccessText: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
+  },
+  verifyBadgeWarning: {
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+  },
+  verifyBadgeWarningText: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.warning,
+  },
+  resendLink: {
+    fontSize: fontSize.xs + 1,
+    fontFamily: fontFamily.semibold,
+    color: colors.emeraldBright,
+    textDecorationLine: "underline",
   },
 
   // ── Phone row ────────────────────────────────────

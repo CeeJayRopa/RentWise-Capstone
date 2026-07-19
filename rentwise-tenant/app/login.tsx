@@ -22,9 +22,8 @@ import { useState, useRef, useEffect } from "react";
 import { router } from "expo-router";
 import { Mail, Lock, Eye, EyeOff, Check, X, Info } from "lucide-react-native";
 import { loginUser, logoutUser } from "../services/authService";
-import { collection, query, where, getDocs, addDoc, serverTimestamp } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
-import { db, firebaseApp } from "../shared/firebaseConfig";
+import { firebaseApp } from "../shared/firebaseConfig";
 import {
   checkLockout,
   recordFailedAttempt,
@@ -210,40 +209,24 @@ export default function Login() {
     setFpError(null);
     setFpLoading(true);
     try {
-      const snap = await getDocs(
-        query(collection(db, "users"), where("email", "==", trimmed))
-      );
-      if (snap.empty) {
-        setFpError("No account found with this email.");
-        return;
-      }
-      const matched = snap.docs[0];
-      const data = matched.data();
+      // Looked up + acted on entirely server-side now (Cloud Function, Admin
+      // SDK) instead of a direct client-side `users` read -- that read
+      // required `users` to stay publicly queryable, which leaked every
+      // tenant's name/email/phone to anyone. See tenantForgotPassword in
+      // functions/src/index.ts.
+      const forgotPassword = httpsCallable(cloudFunctions, "tenantForgotPassword");
+      const result: any = await forgotPassword({ email: trimmed });
 
-      if (data.personalEmail) {
-        // Self-service: this tenant has a real email on file. Generate the
-        // reset code server-side and go straight to the native reset screen
-        // — no need to make them go check an email inbox.
-        const generateLink = httpsCallable(cloudFunctions, "generateTenantResetLink");
-        const result: any = await generateLink({ email: data.personalEmail });
+      if (result.data.method === "self-service") {
         closeForgotModal();
         router.push({ pathname: "/reset-password", params: { oobCode: result.data.oobCode } });
         return;
-      } else {
-        await addDoc(collection(db, "passwordResetRequests"), {
-          email: trimmed,
-          tenantId: matched.id,
-          tenantName: `${data.firstName ?? ""} ${data.lastName ?? ""}`.trim(),
-          spaceId: data.spaceId ?? data.stallId ?? "",
-          status: "pending",
-          createdAt: serverTimestamp(),
-        });
-        setFpSuccess(true);
-        setTimeout(() => closeForgotModal(), 2500);
       }
-    } catch (err) {
+      setFpSuccess(true);
+      setTimeout(() => closeForgotModal(), 2500);
+    } catch (err: any) {
       console.log("ForgotPassword error:", err);
-      setFpError("Something went wrong. Please try again.");
+      setFpError(err?.code === "functions/not-found" ? "No account found with this email." : "Something went wrong. Please try again.");
     } finally {
       setFpLoading(false);
     }

@@ -113,10 +113,10 @@ export default function OwnerProfile() {
     });
 
   const tourSteps: HelpStep[] = [
-    { key: "fields", ref: fieldsRef, title: "Your details", description: "Your last name, first name, login username, and contact number.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(fieldsRef) },
-    { key: "edit", ref: editBtnRef, title: "Edit Profile", description: "Unlocks your name, username, and contact number so you can update them, plus the password fields below.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(editBtnRef) },
-    { key: "password", ref: pwSectionRef, title: "Change password", description: "Set a new login password. Must be 8-12 characters with an uppercase letter, a number, and a special character.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(pwSectionRef) },
-    { key: "secquestions", ref: secQSectionRef, title: "Security questions", description: "Set 3 recovery questions so you can get back into your account if you ever forget your password.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(secQSectionRef) },
+    { key: "fields", ref: fieldsRef, title: "Your details", description: "Your last name, first name, login username, and contact number.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(fieldsRef) },
+    { key: "edit", ref: editBtnRef, title: "Edit Profile", description: "Unlocks your name, username, and contact number so you can update them, plus the password fields below.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(editBtnRef) },
+    { key: "password", ref: pwSectionRef, title: "Change password", description: "Set a new login password. Must be 8-12 characters with an uppercase letter, a number, and a special character.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(pwSectionRef) },
+    { key: "secquestions", ref: secQSectionRef, title: "Security questions", description: "Set 3 recovery questions so you can get back into your account if you ever forget your password.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(secQSectionRef) },
   ];
 
   useEffect(() => {
@@ -313,7 +313,6 @@ export default function OwnerProfile() {
       );
       const saveFn = httpsCallable(cloudFunctions, "ownerSaveSecurityQuestions");
       await saveFn({
-        callerUid: user.uid,
         securityQuestions: secQuestions.map((q, i) => ({ question: q, answer: secAnswers[i] })),
       });
       setSecCurrentPassword("");

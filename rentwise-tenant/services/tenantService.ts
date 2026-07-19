@@ -43,10 +43,9 @@ export async function updateTenantProfile(userId: string, data: any) {
 // client can't do that for itself without a recent-login check) and stores
 // it on their Firestore doc, so "Forgot password" can find it afterward.
 export async function syncPersonalEmail(personalEmail: string): Promise<void> {
-  const callerUid = auth.currentUser?.uid;
-  if (!callerUid) throw new Error("Not authenticated.");
+  if (!auth.currentUser?.uid) throw new Error("Not authenticated.");
   const syncFn = httpsCallable(cloudFunctions, "syncPersonalEmail");
-  await syncFn({ callerUid, personalEmail });
+  await syncFn({ personalEmail });
 }
 
 export async function getTenantData(uid: string): Promise<Tenant | null> {

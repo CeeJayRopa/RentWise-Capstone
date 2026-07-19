@@ -19,10 +19,11 @@ export type HelpStep = {
   ref: React.RefObject<View | null>;
   title: string;
   description: string;
-  // Manual nudge applied on top of the measured position, for spots that
-  // measure slightly off no matter how long the tour waits (e.g. status-bar
-  // insets settling to a stable-but-wrong value on some devices).
-  offsetY?: number;
+  // Which system-bar edge this step's target sits near, so its spotlight
+  // can be corrected by this device's OWN real inset instead of a flat
+  // pixel guess tuned against one test device (which is exactly why the
+  // old approach broke on other resolutions/OEMs). Defaults to "top".
+  edgeInset?: "top" | "bottom";
   // Set for fully circular targets (e.g. round header icon buttons) so the
   // spotlight border is drawn as a circle instead of the default rounded
   // rectangle — otherwise the corners visibly poke out past the icon.
@@ -38,6 +39,40 @@ export type HelpStep = {
   // absolutely-positioned element on top, so the spotlight would otherwise
   // light up the nav bar too.
   clipBottom?: number;
+  // Caps the spotlight's bottom edge at this second element's bottom edge
+  // instead of `ref`'s own measured height -- for a step whose ref wraps
+  // more content than should actually be highlighted (e.g. a form card
+  // that also contains a button meant to be its own separate tour step),
+  // this stays correct across devices/content-length/font-scale because
+  // it's a live measurement, not a guessed pixel cutoff.
+  endRef?: React.RefObject<View | null>;
+  // Shrinks the spotlight inward from both the left and right edges by this
+  // fraction (0-1) of the measured width -- for a target that's a full-bleed
+  // block (only inner padding, no real width constraint), the measured rect
+  // is the full screen width, so the spotlight would otherwise stretch
+  // edge-to-edge even though the actual content it's meant to highlight is
+  // narrower than that. A fraction (not a flat px count) scales with the
+  // real measured width instead of staying a fixed size regardless of
+  // device screen width.
+  insetXPercent?: number;
+  // Per-step manual vertical fine-tune, added on top of everything else --
+  // for a one-off target that needs its own nudge without touching the
+  // shared BOTTOM_NUDGE/EDGE_MARGIN constants other already-confirmed
+  // bottom-anchored steps (like the bottom nav icons) rely on.
+  nudgeY?: number;
+  // Same as nudgeY but as a fraction of screenHeight instead of a flat px
+  // count -- scales with the actual device instead of staying a fixed size
+  // regardless of screen height. Adds on top of nudgeY if both are set.
+  nudgeYPercent?: number;
+  // Trims this many px off the spotlight's bottom edge, shrinking its
+  // height without moving its top -- for a target whose measured height
+  // is taller than what should actually be highlighted.
+  heightTrim?: number;
+  // Same as heightTrim but as a fraction of the target's own measured
+  // height instead of a flat px count -- scales with the target instead of
+  // staying a fixed size regardless of device/content. Adds on top of
+  // heightTrim if both are set.
+  heightTrimPercent?: number;
 };
 
 type Rect = { x: number; y: number; width: number; height: number };
@@ -114,6 +149,7 @@ export default function HelpTour({
 }) {
   const [stepIndex, setStepIndex] = useState(0);
   const [rect, setRect] = useState<Rect | null>(null);
+  const [endRect, setEndRect] = useState<Rect | null>(null);
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
@@ -154,6 +190,7 @@ export default function HelpTour({
     // Clears the old spotlight immediately so a stale box from the previous
     // step is never shown while the new one is still being measured.
     setRect(null);
+    setEndRect(null);
 
     let cancelled = false;
     Promise.resolve(step.onBeforeMeasure?.()).then(() => {
@@ -161,6 +198,11 @@ export default function HelpTour({
       measureStable(step.ref, () => cancelled).then((r) => {
         if (mountedRef.current && !cancelled) setRect(r);
       });
+      if (step.endRef) {
+        measureStable(step.endRef, () => cancelled).then((r) => {
+          if (mountedRef.current && !cancelled) setEndRect(r);
+        });
+      }
     });
 
     return () => {
@@ -175,13 +217,35 @@ export default function HelpTour({
 
   const spot: Rect = rect
     ? (() => {
-        const y = rect.y - PADDING + (step.offsetY ?? 0);
-        const rawHeight = rect.height + PADDING * 2;
+        // Confirmed via on-device debug readout (not guessed) for both
+        // cases: measureInWindow under-reports Y for top-anchored spots by
+        // ~insets.top, and (also confirmed on-device) bottom-anchored spots
+        // need ~insets.bottom added too -- the bottom nav bar's own
+        // reserved gesture-nav padding isn't reflected in the raw
+        // measurement either.
+        const EDGE_MARGIN = 0;
+        const BOTTOM_NUDGE = -8;
+        const y =
+          (step.edgeInset === "bottom"
+            ? rect.y - PADDING + insets.bottom + EDGE_MARGIN + BOTTOM_NUDGE
+            : rect.y - PADDING + insets.top + EDGE_MARGIN) +
+          (step.nudgeY ?? 0) +
+          screenHeight * (step.nudgeYPercent ?? 0);
+        // When endRef is set and measured, the box's bottom tracks that
+        // element's real position instead of rect's own height -- correct
+        // regardless of screen size or how much taller the content grows.
+        const rawHeight = Math.max(
+          0,
+          (endRect ? Math.max(0, endRect.y + endRect.height - rect.y) + PADDING * 2 : rect.height + PADDING * 2) -
+            (step.heightTrim ?? 0) -
+            rect.height * (step.heightTrimPercent ?? 0),
+        );
         const maxHeight = step.clipBottom != null ? screenHeight - step.clipBottom - y : rawHeight;
+        const insetX = rect.width * (step.insetXPercent ?? 0);
         return {
-          x: rect.x - PADDING,
+          x: rect.x - PADDING + insetX,
           y,
-          width: rect.width + PADDING * 2,
+          width: Math.max(0, rect.width + PADDING * 2 - insetX * 2),
           height: Math.max(0, Math.min(rawHeight, maxHeight)),
         };
       })()
@@ -286,6 +350,16 @@ export default function HelpTour({
             </Text>
             <Text style={styles.tooltipTitle}>{step.title}</Text>
             <Text style={styles.tooltipDesc}>{step.description}</Text>
+            {__DEV__ && (
+              // Temporary calibration readout -- remove once the spotlight
+              // offset is confirmed correct across devices. Screenshot this
+              // to report exact numbers instead of eyeballing pixel gaps.
+              <Text style={styles.debugText} selectable>
+                rect.y={Math.round(rect?.y ?? -1)} rect.h={Math.round(rect?.height ?? -1)}{"\n"}
+                insets.top={Math.round(insets.top)} insets.bottom={Math.round(insets.bottom)}{"\n"}
+                spot.y={Math.round(spot.y)} screenH={Math.round(screenHeight)}
+              </Text>
+            )}
             <View style={styles.tooltipActions}>
               <TouchableOpacity onPress={onClose} activeOpacity={0.7}>
                 <Text style={styles.skipText}>Skip</Text>
@@ -336,6 +410,7 @@ const styles = StyleSheet.create({
   },
   tooltipTitle: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.ink, marginBottom: 3 },
   tooltipDesc: { fontSize: fontSize.xs + 1, color: colors.textSecondary, fontFamily: fontFamily.regular, lineHeight: 16 },
+  debugText: { fontSize: 10, color: "#D22", fontFamily: "monospace", marginTop: 6, lineHeight: 13 },
   tooltipActions: {
     flexDirection: "row",
     alignItems: "center",

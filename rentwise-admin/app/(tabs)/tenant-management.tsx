@@ -24,7 +24,7 @@ import { archiveTenant } from "../../shared/services/accountServices";
 import UpdatesReportFAB, { FAB_CLEARANCE } from "../components/UpdatesReportFAB";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
-import { EmptyState } from "../../shared/components/ui";
+import { Badge, EmptyState } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 
 type Tenant = {
@@ -32,6 +32,7 @@ type Tenant = {
   firstName: string;
   lastName: string;
   email: string;
+  emailVerified: boolean;
   contactNo: string;
   stallId: string;
   buildingNumber: string;
@@ -56,12 +57,14 @@ export default function TenantManagement() {
   const helpRef = useRef<View>(null);
   const listRef = useRef<View>(null);
   const archiveBtnRef = useRef<View>(null);
+  const fabRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
-    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", offsetY: 41, round: true },
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", offsetY: 41, round: true },
-    { key: "list", ref: listRef, title: "Active tenants", description: "Every tenant currently renting a stall.", offsetY: 41 },
-    { key: "archive", ref: archiveBtnRef, title: "Archive", description: "Archives this tenant, freeing up their stall. You'll be asked to confirm before it happens.", offsetY: 41 },
+    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+    { key: "list", ref: listRef, title: "Active tenants", description: "Every tenant currently renting a stall.", edgeInset: "top" },
+    { key: "archive", ref: archiveBtnRef, title: "Archive", description: "Archives this tenant, freeing up their stall. You'll be asked to confirm before it happens.", edgeInset: "top" },
+    { key: "fab", ref: fabRef, title: "Updates report", description: "Shows recent changes awaiting your review, organized by building, financials, and accounts.", edgeInset: "bottom", round: true, nudgeY: 5 },
   ];
 
   const fetchData = useCallback(async () => {
@@ -102,6 +105,7 @@ export default function TenantManagement() {
             (data.email as string) ||
             (data.username ? `${data.username}@rentwise.app` : "") ||
             "",
+          emailVerified: data.emailVerified === true,
           contactNo: (data.contactNo as string) ?? "",
           stallId: (data.stallId as string) ?? "",
           buildingNumber: stall.buildingNumber,
@@ -234,7 +238,13 @@ export default function TenantManagement() {
                   <Text style={styles.cardName}>
                     {item.firstName} {item.lastName}
                   </Text>
-                  <Text style={styles.cardEmail}>{item.email}</Text>
+                  <View style={styles.cardEmailRow}>
+                    <Text style={styles.cardEmail}>{item.email}</Text>
+                    <Badge
+                      label={item.emailVerified ? "Verified" : "Unverified"}
+                      tone={item.emailVerified ? "success" : "warning"}
+                    />
+                  </View>
                   {item.buildingNumber ? (
                     <Text style={styles.cardStall}>
                       Building {item.buildingNumber} {"·"} Space {item.spaceId}
@@ -269,7 +279,7 @@ export default function TenantManagement() {
         )}
       </View>
 
-      <UpdatesReportFAB />
+      <UpdatesReportFAB fabRef={fabRef} />
 
       {/* ARCHIVE CONFIRMATION MODAL */}
       <Modal
@@ -438,11 +448,19 @@ const styles = StyleSheet.create({
     color: colors.ink,
   },
 
+  cardEmailRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: spacing.xs + 2,
+    marginTop: 2,
+  },
+
   cardEmail: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.medium,
     color: colors.emeraldBright,
-    marginTop: 2,
+    flexShrink: 1,
   },
 
   cardStall: {

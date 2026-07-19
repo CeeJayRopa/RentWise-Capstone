@@ -10,7 +10,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { router, useFocusEffect } from "expo-router";
 import {
   collection,
@@ -31,11 +31,14 @@ import {
   AlarmClock,
   Wallet,
   CheckCircle2,
+  HelpCircle,
 } from "lucide-react-native";
 
 import { auth } from "../shared/firebaseConfig";
 import { db } from "../shared/services/firestore";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
+import HelpTour, { HelpStep } from "./components/HelpTour";
+import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
 
 type Notification = {
   id: string;
@@ -87,6 +90,34 @@ export default function Notification() {
   const [clearing, setClearing] = useState(false);
 
   const unsubRef = useRef<(() => void) | null>(null);
+
+  const [tourVisible, setTourVisible] = useState(false);
+  const helpRef = useRef<View>(null);
+  const markAllRef = useRef<View>(null);
+  const clearAllRef = useRef<View>(null);
+  const listRef = useRef<View>(null);
+  const firstCardRef = useRef<View>(null);
+
+  const tourSteps: HelpStep[] = [
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+    { key: "markAllRead", ref: markAllRef, title: "Mark all read", description: "Marks every notification in your list as read, in one tap.", edgeInset: "top" },
+    { key: "clearAll", ref: clearAllRef, title: "Clear all", description: "Removes every notification from your list. This can't be undone.", edgeInset: "top" },
+    { key: "list", ref: listRef, endRef: firstCardRef, title: "Notifications", description: "Rent reminders, payment updates, and other alerts. Tap one to mark it read.", edgeInset: "top" },
+  ];
+
+  // Auto-opens the guided tour the first time the tenant ever lands on this
+  // page — never again after that, since it flips a persisted per-device
+  // flag. Can still be replayed anytime via the Help button.
+  useEffect(() => {
+    if (loading) return;
+    (async () => {
+      const seen = await hasSeenPageTour("tenant-notifications");
+      if (!seen) {
+        setTourVisible(true);
+        await markPageTourSeen("tenant-notifications");
+      }
+    })();
+  }, [loading]);
 
   const subscribe = useCallback(() => {
     const user = auth.currentUser;
@@ -199,12 +230,15 @@ export default function Notification() {
           <TouchableOpacity style={styles.headerIconBtn} onPress={() => router.back()} hitSlop={8}>
             <ArrowLeft size={20} color={colors.white} />
           </TouchableOpacity>
-          <Text style={styles.headerRowTitle}>RentWise</Text>
-          <View style={{ width: 38 }} />
+          <Text style={styles.headerRowTitle}>Notifications</Text>
+          <View ref={helpRef} collapsable={false}>
+            <TouchableOpacity style={styles.headerIconBtn} onPress={() => setTourVisible(true)} hitSlop={8}>
+              <HelpCircle size={20} color={colors.white} />
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={styles.titleBlock}>
-          <Text style={styles.pageTitle}>Notifications</Text>
           <Text style={styles.pageSubtitle}>
             {unreadCount} unread update{unreadCount !== 1 ? "s" : ""}
           </Text>
@@ -213,6 +247,7 @@ export default function Notification() {
 
       <View style={styles.actionsRow}>
         <TouchableOpacity
+          ref={markAllRef}
           style={[styles.actionPill, (!hasUnread || markingAll) && styles.actionPillDisabled]}
           onPress={markAllRead}
           disabled={!hasUnread || markingAll}
@@ -222,6 +257,7 @@ export default function Notification() {
         </TouchableOpacity>
 
         <TouchableOpacity
+          ref={clearAllRef}
           style={[styles.actionPill, (notifications.length === 0 || clearing) && styles.actionPillDisabled]}
           onPress={handleClearAll}
           disabled={notifications.length === 0 || clearing}
@@ -236,36 +272,45 @@ export default function Notification() {
         contentContainerStyle={[styles.bodyContent, { paddingBottom: insets.bottom + 24 }]}
         showsVerticalScrollIndicator={false}
       >
-        {notifications.length === 0 ? (
-          <View style={styles.empty}>
-            <BellOff size={44} color={colors.emeraldSoft} style={{ marginBottom: 16 }} />
-            <Text style={styles.emptyText}>No notifications yet.</Text>
-          </View>
-        ) : (
-          notifications.map((item) => {
-            const cat = categorize(item.message);
-            const Icon = cat.icon;
-            return (
-              <TouchableOpacity
-                key={item.id}
-                style={styles.card}
-                onPress={() => markRead(item)}
-                activeOpacity={0.8}
-              >
-                <View style={[styles.iconCircle, { backgroundColor: cat.iconBg }]}>
-                  <Icon size={18} color={cat.iconColor} />
-                </View>
-                <View style={styles.textGroup}>
-                  <Text style={styles.cardTitle}>{cat.title}</Text>
-                  <Text style={styles.message}>{item.message}</Text>
-                  <Text style={styles.timestamp}>{relativeTime(item.createdAt)}</Text>
-                </View>
-                {!item.read && <View style={styles.unreadDot} />}
-              </TouchableOpacity>
-            );
-          })
-        )}
+        <View ref={listRef} collapsable={false}>
+          {notifications.length === 0 ? (
+            <View style={styles.empty}>
+              <BellOff size={44} color={colors.emeraldSoft} style={{ marginBottom: 16 }} />
+              <Text style={styles.emptyText}>No notifications yet.</Text>
+            </View>
+          ) : (
+            notifications.map((item, index) => {
+              const cat = categorize(item.message);
+              const Icon = cat.icon;
+              return (
+                <TouchableOpacity
+                  key={item.id}
+                  ref={index === 0 ? firstCardRef : undefined}
+                  style={styles.card}
+                  onPress={() => markRead(item)}
+                  activeOpacity={0.8}
+                >
+                  <View style={[styles.iconCircle, { backgroundColor: cat.iconBg }]}>
+                    <Icon size={18} color={cat.iconColor} />
+                  </View>
+                  <View style={styles.textGroup}>
+                    <Text style={styles.cardTitle}>{cat.title}</Text>
+                    <Text style={styles.message}>{item.message}</Text>
+                    <Text style={styles.timestamp}>{relativeTime(item.createdAt)}</Text>
+                  </View>
+                  {!item.read && <View style={styles.unreadDot} />}
+                </TouchableOpacity>
+              );
+            })
+          )}
+        </View>
       </ScrollView>
+
+      <HelpTour
+        visible={tourVisible}
+        steps={tourSteps}
+        onClose={() => setTourVisible(false)}
+      />
     </View>
   );
 }
@@ -309,8 +354,10 @@ const styles = StyleSheet.create({
   },
 
   headerRowTitle: {
+    flex: 1,
+    textAlign: "center",
     color: colors.white,
-    fontSize: fontSize.md,
+    fontSize: fontSize.lg,
     fontFamily: fontFamily.bold,
   },
 
@@ -318,17 +365,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
   },
 
-  pageTitle: {
-    color: colors.white,
-    fontSize: fontSize.xxl,
-    fontFamily: fontFamily.extrabold,
-  },
-
   pageSubtitle: {
     color: colors.emeraldSoft,
     fontSize: fontSize.sm,
     fontFamily: fontFamily.medium,
     marginTop: 2,
+    textAlign: "right",
   },
 
   // ── Floating action pills ─────────────────────────

@@ -98,6 +98,7 @@ export default function PaymentsScreen() {
   const [tourVisible, setTourVisible] = useState(false);
   const helpRef = useRef<View>(null);
   const historyRef = useRef<View>(null);
+  const balanceRef = useRef<View>(null);
   const amountRef = useRef<View>(null);
   const methodRef = useRef<View>(null);
   const payBtnRef = useRef<View>(null);
@@ -128,6 +129,14 @@ export default function PaymentsScreen() {
     useCallback(() => {
       const user = auth.currentUser;
       if (!user) return;
+
+      // Tabs keep this screen mounted in the background when the tenant
+      // switches to another tab, so without this, whatever was left in the
+      // amount field (including erased-to-empty) would still be sitting
+      // there on return instead of refreshing to the current computed due
+      // amount. Resetting on every focus makes each visit start clean.
+      setPayAmount("");
+      setHasEditedAmount(false);
 
       loadTenantProfile(user.uid);
 
@@ -271,13 +280,14 @@ export default function PaymentsScreen() {
     remainingBill <= 0 || hasPendingThisMonth || hasPaidForCurrentSpecificPeriod || beforeSemiMonthlyDueDate;
 
   const tourSteps: HelpStep[] = [
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", offsetY: 41, round: true },
-    { key: "history", ref: historyRef, title: "Payment history", description: "View past payments and download receipts.", offsetY: 41, round: true },
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+    { key: "history", ref: historyRef, title: "Payment history", description: "View past payments and download receipts.", edgeInset: "top", round: true },
+    { key: "balance", ref: balanceRef, title: "Total balance due", description: "What you currently owe for this billing period, after any payments already made.", edgeInset: "top" },
     ...(!hasPaidCurrentPeriod
       ? [
-          { key: "amount", ref: amountRef, title: "Enter amount", description: "Pre-filled with what's currently due. You can pay more, but not less.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(amountRef) },
-          { key: "method", ref: methodRef, title: "Payment method", description: "Choose GCash or Maya to pay online.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(methodRef) },
-          { key: "pay", ref: payBtnRef, title: "Pay Now", description: "Redirects you to your chosen e-wallet to confirm the transaction. A receipt is auto-saved to your history.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(payBtnRef) },
+          { key: "amount", ref: amountRef, title: "Enter amount", description: "Pre-filled with what's currently due. You can pay more, but not less.", edgeInset: "top" as const, onBeforeMeasure: () => scrollSectionIntoView(amountRef) },
+          { key: "method", ref: methodRef, title: "Payment method", description: "Choose GCash or Maya to pay online.", edgeInset: "top" as const, onBeforeMeasure: () => scrollSectionIntoView(methodRef) },
+          { key: "pay", ref: payBtnRef, title: "Pay Now", description: "Redirects you to your chosen e-wallet to confirm the transaction. A receipt is auto-saved to your history.", edgeInset: "top" as const, onBeforeMeasure: () => scrollSectionIntoView(payBtnRef) },
         ]
       : []),
   ];
@@ -467,7 +477,7 @@ export default function PaymentsScreen() {
           </View>
         </View>
 
-        <View style={styles.balanceCard}>
+        <View style={styles.balanceCard} ref={balanceRef} collapsable={false}>
           <Text style={styles.balanceLabel}>Total Balance Due</Text>
           <Text style={styles.balanceAmount}>₱{remainingBill.toLocaleString()}.00</Text>
         </View>

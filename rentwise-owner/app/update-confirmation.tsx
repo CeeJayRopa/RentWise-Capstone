@@ -291,13 +291,13 @@ export default function UpdateConfirmation() {
 
   const tourSteps: HelpStep[] = [];
   if (hasBeforeAfter) {
-    tourSteps.push({ key: "beforeafter", ref: beforeAfterRef, title: "Previous vs. Updated", description: "Compares what the field used to be against the admin's new change, side by side.", offsetY: 41 });
+    tourSteps.push({ key: "beforeafter", ref: beforeAfterRef, title: "Previous vs. Updated", description: "Compares what the field used to be against the admin's new change, side by side.", edgeInset: "top" });
   }
   if (hasAmount) {
-    tourSteps.push({ key: "amount", ref: amountRef, title: "Amount", description: "The payment amount, with a breakdown of how it was calculated (e.g. number of days × the daily rate) so you can see why it's that price.", offsetY: 41 });
+    tourSteps.push({ key: "amount", ref: amountRef, title: "Amount", description: "The payment amount, with a breakdown of how it was calculated (e.g. number of days × the daily rate) so you can see why it's that price.", edgeInset: "top" });
   }
   if (!isAlreadyDecided) {
-    tourSteps.push({ key: "approve", ref: approveRef, title: "Acknowledge", description: "Confirms you've reviewed this update. It'll then show as acknowledged and appear in Daily Reports.", offsetY: 41 });
+    tourSteps.push({ key: "approve", ref: approveRef, title: "Acknowledge", description: "Confirms you've reviewed this update. It'll then show as acknowledged and appear in Daily Reports.", edgeInset: "top" });
   }
 
   return (

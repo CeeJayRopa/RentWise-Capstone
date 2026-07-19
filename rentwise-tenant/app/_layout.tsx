@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { Stack, router } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { onAuthStateChanged, signOut } from "firebase/auth";
-import { doc, onSnapshot } from "firebase/firestore";
+import { doc, getDoc, onSnapshot, updateDoc } from "firebase/firestore";
 import { Alert, View, StyleSheet } from "react-native";
 import * as SplashScreen from "expo-splash-screen";
 import {
@@ -82,6 +82,32 @@ export default function RootLayout() {
       unsubAuth();
       unsubDoc?.();
     };
+  }, []);
+
+  useEffect(() => {
+    // Firebase Auth's own emailVerified flag doesn't push itself into
+    // Firestore -- this notices it flipped (after the tenant clicks the
+    // verification link sent at account creation) and syncs it, so the
+    // admin app can show a Verified/Unverified badge without needing an
+    // Admin SDK call. reload() refetches the latest Auth state; without
+    // it, `user.emailVerified` would still reflect whatever it was at the
+    // start of this session, even if the tenant verified moments ago.
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) return;
+      try {
+        await user.reload();
+        if (!user.emailVerified) return;
+        const userRef = doc(db, "users", user.uid);
+        const snap = await getDoc(userRef);
+        if (snap.exists() && snap.data()?.emailVerified !== true) {
+          await updateDoc(userRef, { emailVerified: true });
+        }
+      } catch {
+        // Non-fatal -- the badge just stays "Unverified" a bit longer,
+        // corrected on the next app open/auth-state change.
+      }
+    });
+    return unsub;
   }, []);
 
   const { isTablet } = useResponsive();

@@ -80,17 +80,17 @@ export default function Account() {
 
   const tourSteps: HelpStep[] = isCreate
     ? [
-        { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", offsetY: 41, round: true },
-        { key: "stall", ref: stallPillRef, title: "Stall", description: "The stall this tenant will be registered to.", offsetY: 41 },
-        { key: "details", ref: detailsRef, title: "Tenant details", description: "Enter the new tenant's name, contact number, and personal email — used to log in and reset their own password.", offsetY: 41 },
-        { key: "password", ref: passwordNoteRef, title: "Default password", description: "The tenant signs in with this password the first time, then sets their own.", offsetY: 41 },
-        { key: "create", ref: createBtnRef, title: "Create Account", description: "Creates the tenant's account and assigns them to this stall.", offsetY: 41 },
+        { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+        { key: "stall", ref: stallPillRef, title: "Stall", description: "The stall this tenant will be registered to.", edgeInset: "top" },
+        { key: "details", ref: detailsRef, title: "Tenant details", description: "Enter the new tenant's name, contact number, and personal email — used to log in and reset their own password.", edgeInset: "top" },
+        { key: "password", ref: passwordNoteRef, title: "Default password", description: "The tenant signs in with this password the first time, then sets their own.", edgeInset: "top" },
+        { key: "create", ref: createBtnRef, title: "Create Account", description: "Creates the tenant's account and assigns them to this stall.", edgeInset: "top" },
       ]
     : [
-        { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", offsetY: 41, round: true },
-        { key: "stall", ref: stallPillRef, title: "Stall", description: "The stall this tenant currently occupies.", offsetY: 41 },
-        { key: "info", ref: infoCardRef, title: "Tenant info", description: "The current tenant's name, email, and contact number.", offsetY: 41 },
-        { key: "move", ref: moveBtnRef, title: "Move Location", description: "Relocate this active tenant to a different stall, without archiving them first.", offsetY: 41 },
+        { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+        { key: "stall", ref: stallPillRef, title: "Stall", description: "The stall this tenant currently occupies.", edgeInset: "top" },
+        { key: "info", ref: infoCardRef, title: "Tenant info", description: "The current tenant's name, email, and contact number.", edgeInset: "top" },
+        { key: "move", ref: moveBtnRef, title: "Move Location", description: "Relocate this active tenant to a different stall, without archiving them first.", edgeInset: "top" },
       ];
 
   useEffect(() => {
@@ -245,7 +245,7 @@ export default function Account() {
         onBack={() => router.back()}
         rightAction={
           <View ref={helpRef} collapsable={false}>
-            <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} hitSlop={8}>
+            <TouchableOpacity style={styles.headerIconBtn} onPress={() => setTourVisible(true)} activeOpacity={0.7} hitSlop={8}>
               <HelpCircle size={22} color={colors.white} />
             </TouchableOpacity>
           </View>
@@ -517,6 +517,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: colors.parchment,
+  },
+
+  headerIconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(255,255,255,0.14)",
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   // ── Body ─────────────────────────────────────────────────────────────────────

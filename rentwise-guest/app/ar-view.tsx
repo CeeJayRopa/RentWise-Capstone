@@ -73,8 +73,8 @@ const AR_TOUR_STEPS = [
     text: "Tap a placed item to select it, then rotate, resize, move, or delete it using the panel that appears.",
   },
   {
-    title: "Save Your Look",
-    text: "Happy with your arrangement? Tap Share up top to save or send a photo of it.",
+    title: "Finish Up",
+    text: "Happy with your arrangement? Tap Done up top when you're finished.",
   },
 ];
 
@@ -263,45 +263,6 @@ export default function ARView() {
     }
   };
 
-  const [sharing, setSharing] = useState(false);
-
-  const shareArrangement = async () => {
-    if (!sceneRef.current || sharing) return;
-    setSharing(true);
-    setError(null);
-    try {
-      const dataUrl = await sceneRef.current.capturePhoto();
-      if (!dataUrl) {
-        setError("Couldn't capture a photo. Please try again.");
-        return;
-      }
-
-      const blob = await (await fetch(dataUrl)).blob();
-      const file = new File([blob], "rentwise-ar-arrangement.jpg", { type: "image/jpeg" });
-      const nav = navigator as any;
-
-      if (nav.share && nav.canShare?.({ files: [file] })) {
-        try {
-          await nav.share({ files: [file], title: "My RentWise AR arrangement" });
-        } catch (shareErr: any) {
-          // AbortError just means the user closed the share sheet — not a real error.
-          if (shareErr?.name !== "AbortError") throw shareErr;
-        }
-      } else {
-        // No Web Share API (or no file-sharing support) — fall back to a direct download.
-        const link = document.createElement("a");
-        link.href = dataUrl;
-        link.download = "rentwise-ar-arrangement.jpg";
-        link.click();
-      }
-    } catch (e: any) {
-      console.error("[AR] share failed:", e);
-      setError("Couldn't share the photo. Please try again.");
-    } finally {
-      setSharing(false);
-    }
-  };
-
   // Wired to onPressIn/onPressOut on every control-panel and catalog-rail button, so
   // pressing rotate/scale/move/delete/arm doesn't also place or select something in the
   // scene underneath the button (see ARSessionScene.beginUIInteraction — must start on
@@ -484,9 +445,8 @@ export default function ARView() {
         {/* Header */}
         <View style={styles.header} pointerEvents="box-none">
           <TouchableOpacity onPress={endAR} style={styles.doneBtn}>
-            <Text style={styles.doneBtnText}>{sessionActive ? "Done" : "◀"}</Text>
+            <Text style={styles.doneBtnText}>{sessionActive ? "Done" : "Back"}</Text>
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Arrange in AR</Text>
           <View style={styles.headerRightGroup}>
             {sessionActive && placedState.canUndo && (
               <TouchableOpacity
@@ -495,22 +455,7 @@ export default function ARView() {
                 onPressIn={suppressPressIn}
                 onPressOut={suppressPressOut}
               >
-                <Text style={styles.doneBtnText}>↶</Text>
-              </TouchableOpacity>
-            )}
-            {sessionActive && placedState.placed.length > 0 && (
-              <TouchableOpacity
-                style={styles.doneBtn}
-                onPress={shareArrangement}
-                disabled={sharing}
-                onPressIn={suppressPressIn}
-                onPressOut={suppressPressOut}
-              >
-                {sharing ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={styles.doneBtnText}>Share</Text>
-                )}
+                <Text style={styles.doneBtnText}>Undo</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity
@@ -520,7 +465,7 @@ export default function ARView() {
                 setTourVisible(true);
               }}
             >
-              <Text style={styles.doneBtnText}>?</Text>
+              <Text style={styles.doneBtnText}>Help</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -618,30 +563,30 @@ export default function ARView() {
 
         {sessionActive && (
           <View style={styles.statusPanel} pointerEvents="none">
-            {statusRows.map((row) => (
-              <View key={row.label} style={styles.statusRow}>
-                <View style={[styles.statusDot, row.ok ? styles.statusDotOk : styles.statusDotBad]} />
-                <Text style={styles.statusLabel}>{row.label}</Text>
-                <Text style={[styles.statusValue, !row.ok && styles.statusValueBad]}>{row.text}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {sessionActive && (
-          <View style={styles.hintBanner} pointerEvents="none">
-            <Text style={styles.hintText}>
-              {arming
-                ? `Loading ${armedObject?.name ?? "item"}…`
-                : !reticleVisible
-                ? surfaceHintText
-                : armedObject
-                ? `Tap the ${surfaceType === "wall" ? "wall" : "surface"} to place: ${armedObject.name}`
-                : "Tap an item below to place it"}
-            </Text>
-            {error && (
-              <Text style={[styles.hintText, styles.hintErrorText]}>{error}</Text>
-            )}
+            <View style={styles.statusGrid}>
+              {statusRows.map((row) => (
+                <View key={row.label} style={styles.statusCell}>
+                  <View style={[styles.statusDot, row.ok ? styles.statusDotOk : styles.statusDotBad]} />
+                  <Text style={styles.statusLabel}>{row.label}</Text>
+                  <Text style={[styles.statusValue, !row.ok && styles.statusValueBad]}>{row.text}</Text>
+                </View>
+              ))}
+            </View>
+            <View style={styles.statusDivider} />
+            <View style={styles.statusHintRow}>
+              <Text style={styles.statusHintText}>
+                {arming
+                  ? `Loading ${armedObject?.name ?? "item"}…`
+                  : !reticleVisible
+                  ? surfaceHintText
+                  : armedObject
+                  ? `Tap the ${surfaceType === "wall" ? "wall" : "surface"} to place: ${armedObject.name}`
+                  : "Tap an item below to place it"}
+              </Text>
+              {error && (
+                <Text style={[styles.statusHintText, styles.hintErrorText]}>{error}</Text>
+              )}
+            </View>
           </View>
         )}
 
@@ -654,7 +599,7 @@ export default function ARView() {
             pointerEvents="none"
           >
             <Text style={styles.measurementLabelText}>
-              {measurement.widthM.toFixed(2)}m × {measurement.heightM.toFixed(2)}m ×{" "}
+              W: {measurement.widthM.toFixed(2)}m × L: {measurement.heightM.toFixed(2)}m × H:{" "}
               {measurement.depthM.toFixed(2)}m
             </Text>
           </View>
@@ -827,7 +772,6 @@ const styles = StyleSheet.create({
   headerRightGroup: { flexDirection: "row", alignItems: "center", gap: 4 },
   doneBtn: { width: 48, alignItems: "center" },
   doneBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
-  headerTitle: { color: "#fff", fontSize: 16, fontWeight: "bold" },
 
   centerPrompt: {
     position: "absolute",
@@ -892,19 +836,37 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 90,
     left: 16,
+    width: 230,
     backgroundColor: "rgba(8,28,38,0.82)",
     borderRadius: 10,
     paddingVertical: 8,
     paddingHorizontal: 10,
-    gap: 4,
   },
-  statusRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  // 2x2 grid — two status readouts per row instead of one long stacked column.
+  statusGrid: { flexDirection: "row", flexWrap: "wrap" },
+  statusCell: {
+    width: "50%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 3,
+  },
   statusDot: { width: 6, height: 6, borderRadius: 3 },
   statusDotOk: { backgroundColor: "#4CAF50" },
   statusDotBad: { backgroundColor: "#FFAA00" },
-  statusLabel: { color: "rgba(255,255,255,0.7)", fontSize: 10, fontWeight: "600", width: 78 },
-  statusValue: { color: "#fff", fontSize: 10, fontWeight: "700" },
+  statusLabel: { color: "rgba(255,255,255,0.7)", fontSize: 9, fontWeight: "600" },
+  statusValue: { color: "#fff", fontSize: 9, fontWeight: "700" },
   statusValueBad: { color: "#FFD27A" },
+  statusDivider: {
+    height: 1,
+    backgroundColor: "rgba(255,255,255,0.15)",
+    marginTop: 6,
+    marginBottom: 8,
+  },
+  // Hint text now lives at the bottom of the same card as the 2x2 status
+  // grid above, instead of being a separate floating banner.
+  statusHintRow: { alignItems: "center" },
+  statusHintText: { color: "#fff", fontSize: 12, textAlign: "center" },
 
   scanPulseWrap: {
     position: "absolute",
@@ -932,26 +894,9 @@ const styles = StyleSheet.create({
     backgroundColor: PRIMARY,
   },
 
-  hintBanner: {
-    position: "absolute",
-    top: 100,
-    left: 24,
-    right: 24,
-    alignItems: "center",
-  },
-  hintText: {
-    color: "#fff",
-    fontSize: 13,
-    backgroundColor: "rgba(8,28,38,0.75)",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 16,
-    overflow: "hidden",
-  },
   hintErrorText: {
-    marginTop: 8,
-    backgroundColor: "rgba(179,38,30,0.88)",
-    color: "#fff",
+    marginTop: 6,
+    color: "#FF8A80",
   },
 
   measurementLabel: {

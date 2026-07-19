@@ -95,17 +95,17 @@ export default function Dashboard() {
   const collectedRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
-    { key: "profile", ref: profileRef, title: "Profile", description: "View and edit your owner account details.", offsetY: 41, round: true },
-    { key: "bell", ref: bellRef, title: "Notifications", description: "Shows admin updates waiting for your review, like payments and building changes.", offsetY: 41, round: true },
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", offsetY: 41, round: true },
-    { key: "market", ref: marketChartRef, title: "Market overview", description: "How many stalls are occupied vs. unoccupied right now.", offsetY: 41 },
-    { key: "finance", ref: financeChartRef, title: "Financial performance", description: "Amount collected today and this month, compared against the prior period.", offsetY: 41 },
-    { key: "collected", ref: collectedRef, title: "Payment status", description: "How many active tenants have paid this month vs. are still unpaid.", offsetY: 41 },
-    { key: "navfinancials", ref: bottomNavRefs.financials, title: "Financials", description: "Track tenant payments, view receipts, and see who's paid or unpaid.", offsetY: 36 },
-    { key: "navbuilding", ref: bottomNavRefs.building, title: "Building", description: "Browse every stall across your buildings and see which are occupied or vacant.", offsetY: 36 },
-    { key: "navadmins", ref: bottomNavRefs.admins, title: "Admins", description: "Manage the market admin's profile and login password.", offsetY: 36 },
-    { key: "navarchives", ref: bottomNavRefs.archives, title: "Archives", description: "View archived tenant accounts, and restore or permanently delete them.", offsetY: 36 },
-    { key: "navreports", ref: bottomNavRefs.reports, title: "Reports", description: "Download a daily PDF report of every update the admin made and you acknowledged.", offsetY: 36 },
+    { key: "profile", ref: profileRef, title: "Profile", description: "View and edit your owner account details.", edgeInset: "top", round: true },
+    { key: "bell", ref: bellRef, title: "Notifications", description: "Shows admin updates waiting for your review, like payments and building changes.", edgeInset: "top", round: true },
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+    { key: "market", ref: marketChartRef, title: "Market overview", description: "How many stalls are occupied vs. unoccupied right now.", edgeInset: "top" },
+    { key: "finance", ref: financeChartRef, title: "Financial performance", description: "Amount collected today and this month, compared against the prior period.", edgeInset: "top" },
+    { key: "collected", ref: collectedRef, title: "Payment status", description: "How many active tenants have paid this month vs. are still unpaid.", edgeInset: "top" },
+    { key: "navfinancials", ref: bottomNavRefs.financials, title: "Financials", description: "Track tenant payments, view receipts, and see who's paid or unpaid.", edgeInset: "bottom" },
+    { key: "navbuilding", ref: bottomNavRefs.building, title: "Building", description: "Browse every stall across your buildings and see which are occupied or vacant.", edgeInset: "bottom" },
+    { key: "navadmins", ref: bottomNavRefs.admins, title: "Admins", description: "Manage the market admin's profile and login password.", edgeInset: "bottom" },
+    { key: "navarchives", ref: bottomNavRefs.archives, title: "Archives", description: "View archived tenant accounts, and restore or permanently delete them.", edgeInset: "bottom" },
+    { key: "navreports", ref: bottomNavRefs.reports, title: "Reports", description: "Download a daily PDF report of every update the admin made and you acknowledged.", edgeInset: "bottom" },
   ];
 
   useEffect(() => {
@@ -513,7 +513,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   headerLogoWrap: { flex: 1, alignItems: "center" },
-  headerLogo: { width: 112, height: 51 },
+  headerLogo: { width: 112, height: 51, marginLeft: -62 },
   headerRight: { flexDirection: "row", alignItems: "center", gap: spacing.md + 2 },
   headerIconBtn: {
     width: 40,

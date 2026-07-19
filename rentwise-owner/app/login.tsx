@@ -23,7 +23,8 @@ import { router } from "expo-router";
 import { Mail, Lock, Eye, EyeOff, AlertCircle, Check } from "lucide-react-native";
 
 import { loginUser } from "../shared/services/auth";
-import { getUserByUsername } from "../shared/services/userServices";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { firebaseApp } from "../shared/firebaseConfig";
 import {
   checkLockout,
   recordFailedAttempt,
@@ -32,6 +33,8 @@ import {
 } from "../shared/services/loginLockout";
 import { setRememberMe } from "../shared/services/rememberMe";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
+
+const cloudFunctions = getFunctions(firebaseApp);
 
 export default function Login() {
   const insets = useSafeAreaInsets();
@@ -165,11 +168,15 @@ export default function Login() {
 
     setLoading(true);
     try {
-      // Resolve email: try username lookup first, then treat input as direct email
+      // Resolve email: try username lookup first, then treat input as direct
+      // email. Server-side (Cloud Function) instead of a direct client-side
+      // `users` read -- that read required `users` to stay publicly
+      // queryable, which leaked every user's name/email/phone to anyone.
       let email = identifier;
-      const userDoc = await getUserByUsername(identifier, "owner");
-      if (userDoc) {
-        email = userDoc.email;
+      const resolveEmail = httpsCallable(cloudFunctions, "resolveLoginEmail");
+      const resolved: any = await resolveEmail({ identifier, role: "owner" });
+      if (resolved.data?.email) {
+        email = resolved.data.email;
       }
       // loginUser will throw if credentials are wrong
       const result = await loginUser(email, password);

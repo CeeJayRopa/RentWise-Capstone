@@ -450,10 +450,10 @@ export default function TenantPreview() {
   }, [progressPct]);
 
   const tourSteps: HelpStep[] = [
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", offsetY: 41, round: true },
-    { key: "notify", ref: notifyRef, title: "Notify", description: "Sends this tenant a reminder notification about their payment status.", offsetY: 41 },
-    { key: "payment", ref: paymentCardRef, title: "Rental payment", description: "This tenant's remaining bill this month, how much they've paid, and their current payment status.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(paymentCardRef) },
-    { key: "history", ref: historyCardRef, title: "Monthly payment history", description: "Every payment this tenant has made. Tap one with a receipt to view it.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(historyCardRef) },
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+    { key: "notify", ref: notifyRef, title: "Notify", description: "Sends this tenant a reminder notification about their payment status.", edgeInset: "top" },
+    { key: "payment", ref: paymentCardRef, title: "Rental payment", description: "This tenant's remaining bill this month, how much they've paid, and their current payment status.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(paymentCardRef) },
+    { key: "history", ref: historyCardRef, title: "Monthly payment history", description: "Every payment this tenant has made. Tap one with a receipt to view it.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(historyCardRef) },
   ];
 
   // For the digital receipt modal's Breakdown section — `data.payment` is
@@ -568,6 +568,17 @@ export default function TenantPreview() {
             <Text style={styles.bannerContact}>
               {tenant?.contactNo ? `+63 ${tenant.contactNo}` : ""}
             </Text>
+            {!!(tenant?.personalEmail || tenant?.email) && (
+              <View style={styles.bannerEmailRow}>
+                <Text style={styles.bannerEmail} numberOfLines={1}>
+                  {tenant.personalEmail || tenant.email}
+                </Text>
+                <Badge
+                  label={tenant?.emailVerified ? "Verified" : "Unverified"}
+                  tone={tenant?.emailVerified ? "success" : "warning"}
+                />
+              </View>
+            )}
           </View>
         </View>
 
@@ -964,6 +975,21 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     fontFamily: fontFamily.regular,
     marginTop: 2,
+  },
+
+  bannerEmailRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: spacing.xs + 2,
+    marginTop: 4,
+  },
+
+  bannerEmail: {
+    color: colors.emeraldSoft,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    flexShrink: 1,
   },
 
   // ── Card ─────────────────────────────────────────────────────────────────────

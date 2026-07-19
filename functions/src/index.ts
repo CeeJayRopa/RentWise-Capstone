@@ -83,6 +83,43 @@ async function assertIsAdminOrOwner(uid: string) {
 }
 
 // =====================================
+// RATE LIMITING
+// Cloud Functions v2 onCall has no built-in per-caller throttling, and this
+// project has no App Check/API gateway in front of it, so without this a
+// script can call any endpoint as fast as it wants. Firestore-backed
+// fixed-window counter, keyed per-endpoint + per-identity (authenticated
+// uid, or the target identifier for pre-auth lookups so a specific
+// account/email can't be hammered). Not a substitute for real
+// infrastructure-level protection (e.g. Cloud Armor) at real scale, but
+// stops naive scripted abuse of a single endpoint.
+// =====================================
+async function checkRateLimit(key: string, maxAttempts: number, windowMs: number) {
+  const ref = db.collection("rateLimits").doc(key);
+  const now = Date.now();
+
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const data = snap.exists
+      ? (snap.data() as { count: number; windowStart: number })
+      : null;
+
+    if (!data || now - data.windowStart > windowMs) {
+      tx.set(ref, { count: 1, windowStart: now });
+      return;
+    }
+
+    if (data.count >= maxAttempts) {
+      throw new HttpsError(
+        "resource-exhausted",
+        "Too many attempts. Please try again later.",
+      );
+    }
+
+    tx.update(ref, { count: FieldValue.increment(1) });
+  });
+}
+
+// =====================================
 // CREATE TENANT ACCOUNT
 // =====================================
 
@@ -178,17 +215,22 @@ export const adminCreateTenant = onCall(async (request) => {
 // =====================================
 
 export const adminResetTenantPassword = onCall(async (request) => {
-  const { uid, newPassword, callerUid } = request.data as {
-    uid: string;
-    newPassword: string;
-    callerUid: string;
-  };
+  const callerUid = request.auth?.uid;
+  if (!callerUid) {
+    throw new HttpsError("unauthenticated", "You must be logged in.");
+  }
+  await checkRateLimit(`adminResetTenantPassword:${callerUid}`, 20, 60 * 60_000);
 
-  if (!uid || !newPassword || !callerUid) {
+  const { uid, newPassword } = request.data as { uid: string; newPassword: string };
+  if (!uid || !newPassword) {
     throw new HttpsError("invalid-argument", "Missing password data");
   }
 
-  // Verify caller is an admin via Firestore (works even when request.auth is unavailable in RN)
+  // Verify caller is an admin using the caller's OWN verified auth identity
+  // (request.auth.uid, set by Firebase from the caller's ID token) -- NOT a
+  // client-supplied uid. Trusting a client-supplied "callerUid" field here
+  // used to let anyone claim to be any admin and reset any tenant's
+  // password; see CAPSTONE_NOTES.txt for the full writeup.
   await assertIsAdmin(callerUid);
 
   await auth.updateUser(uid, { password: newPassword });
@@ -206,12 +248,19 @@ export const adminResetTenantPassword = onCall(async (request) => {
 // acts on the caller's own account, never someone else's.
 
 export const syncPersonalEmail = onCall(async (request) => {
-  const { callerUid, personalEmail } = request.data as {
-    callerUid: string;
-    personalEmail: string;
-  };
+  const callerUid = request.auth?.uid;
+  if (!callerUid) {
+    throw new HttpsError("unauthenticated", "You must be logged in.");
+  }
+  await checkRateLimit(`syncPersonalEmail:${callerUid}`, 10, 60 * 60_000);
 
-  if (!callerUid || !personalEmail) {
+  // Uses the caller's OWN verified auth identity (request.auth.uid) --
+  // previously trusted a client-supplied "callerUid" field instead, which
+  // let anyone change ANY account's login email (and from there, take it
+  // over via a normal password reset). See CAPSTONE_NOTES.txt.
+  const { personalEmail } = request.data as { personalEmail: string };
+
+  if (!personalEmail) {
     throw new HttpsError("invalid-argument", "Missing email data");
   }
 
@@ -252,17 +301,19 @@ export const syncPersonalEmail = onCall(async (request) => {
 // =====================================
 
 export const ownerResetAdminPassword = onCall(async (request) => {
-  const { uid, newPassword, callerUid } = request.data as {
-    uid: string;
-    newPassword: string;
-    callerUid: string;
-  };
+  const callerUid = request.auth?.uid;
+  if (!callerUid) {
+    throw new HttpsError("unauthenticated", "You must be logged in.");
+  }
+  await checkRateLimit(`ownerResetAdminPassword:${callerUid}`, 20, 60 * 60_000);
 
-  if (!uid || !newPassword || !callerUid) {
+  const { uid, newPassword } = request.data as { uid: string; newPassword: string };
+  if (!uid || !newPassword) {
     throw new HttpsError("invalid-argument", "Missing password data");
   }
 
-  // Verify caller is an owner via Firestore (works even when request.auth is unavailable in RN)
+  // Verify caller is an owner using the caller's OWN verified auth identity
+  // (request.auth.uid) -- NOT a client-supplied uid. See CAPSTONE_NOTES.txt.
   await assertIsOwner(callerUid);
 
   // Verify the target account is actually an admin, not an arbitrary user
@@ -281,19 +332,26 @@ export const ownerResetAdminPassword = onCall(async (request) => {
 // reset above has to go through the Admin SDK.
 
 export const ownerUpdateAdminProfile = onCall(async (request) => {
-  const { uid, callerUid, firstName, lastName, username, contactNo } = request.data as {
+  const callerUid = request.auth?.uid;
+  if (!callerUid) {
+    throw new HttpsError("unauthenticated", "You must be logged in.");
+  }
+  await checkRateLimit(`ownerUpdateAdminProfile:${callerUid}`, 30, 60 * 60_000);
+
+  const { uid, firstName, lastName, username, contactNo } = request.data as {
     uid: string;
-    callerUid: string;
     firstName: string;
     lastName: string;
     username: string;
     contactNo: string;
   };
 
-  if (!uid || !callerUid || !firstName || !lastName || !username || !contactNo) {
+  if (!uid || !firstName || !lastName || !username || !contactNo) {
     throw new HttpsError("invalid-argument", "Missing profile data");
   }
 
+  // Verify caller is an owner using the caller's OWN verified auth identity
+  // (request.auth.uid) -- NOT a client-supplied uid. See CAPSTONE_NOTES.txt.
   await assertIsOwner(callerUid);
   await assertIsAdmin(uid);
 
@@ -321,17 +379,21 @@ export const ownerUpdateAdminProfile = onCall(async (request) => {
 // =====================================
 
 export const adminSetAccountDisabled = onCall(async (request) => {
-  const { uid, disabled, callerUid } = request.data as {
-    uid: string;
-    disabled: boolean;
-    callerUid: string;
-  };
+  const callerUid = request.auth?.uid;
+  if (!callerUid) {
+    throw new HttpsError("unauthenticated", "You must be logged in.");
+  }
+  await checkRateLimit(`adminSetAccountDisabled:${callerUid}`, 30, 60 * 60_000);
 
-  if (!uid || typeof disabled !== "boolean" || !callerUid) {
+  const { uid, disabled } = request.data as { uid: string; disabled: boolean };
+
+  if (!uid || typeof disabled !== "boolean") {
     throw new HttpsError("invalid-argument", "Missing account data");
   }
 
-  // Admin or owner can enable/disable a tenant's login access
+  // Admin or owner can enable/disable a tenant's login access. Verified via
+  // the caller's OWN auth identity (request.auth.uid), not a client-supplied
+  // uid. See CAPSTONE_NOTES.txt.
   await assertIsAdminOrOwner(callerUid);
 
   await auth.updateUser(uid, { disabled });
@@ -425,13 +487,21 @@ export const createPaymongoCheckout = httpsV1.onCall(
 // FREE PLAN block in that same file.
 // ─────────────────────────────────────────────────────────────────────────────
 export const adminDeleteTenant = onCall(async (request) => {
-  const { uid, callerUid } = request.data as { uid: string; callerUid: string };
+  const callerUid = request.auth?.uid;
+  if (!callerUid) {
+    throw new HttpsError("unauthenticated", "You must be logged in.");
+  }
+  await checkRateLimit(`adminDeleteTenant:${callerUid}`, 30, 60 * 60_000);
 
-  if (!uid || !callerUid) {
+  const { uid } = request.data as { uid: string };
+
+  if (!uid) {
     throw new HttpsError("invalid-argument", "Missing required fields");
   }
 
-  // Admin or owner can permanently delete an archived tenant
+  // Admin or owner can permanently delete an archived tenant. Verified via
+  // the caller's OWN auth identity (request.auth.uid), not a client-supplied
+  // uid. See CAPSTONE_NOTES.txt.
   await assertIsAdminOrOwner(callerUid);
 
   // Delete Firebase Auth account — silently ignore if already gone
@@ -457,13 +527,17 @@ export const adminDeleteTenant = onCall(async (request) => {
 // =====================================
 
 export const ownerSaveSecurityQuestions = onCall(async (request) => {
-  const { callerUid, securityQuestions } = request.data as {
-    callerUid: string;
+  const callerUid = request.auth?.uid;
+  if (!callerUid) {
+    throw new HttpsError("unauthenticated", "You must be logged in.");
+  }
+  await checkRateLimit(`ownerSaveSecurityQuestions:${callerUid}`, 10, 60 * 60_000);
+
+  const { securityQuestions } = request.data as {
     securityQuestions: { question: string; answer: string }[];
   };
 
   if (
-    !callerUid ||
     !Array.isArray(securityQuestions) ||
     securityQuestions.length !== 3 ||
     securityQuestions.some((q) => !q.question || !q.answer)
@@ -471,6 +545,11 @@ export const ownerSaveSecurityQuestions = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "Missing security question data");
   }
 
+  // Verified via the caller's OWN auth identity (request.auth.uid) -- a
+  // client-supplied "callerUid" here used to let anyone overwrite ANY
+  // owner's recovery security questions with their own answers, then use
+  // those to obtain a real password-reset link for that owner's account.
+  // See CAPSTONE_NOTES.txt.
   await assertIsOwner(callerUid);
 
   // The client re-authenticates with the owner's current password via
@@ -486,6 +565,8 @@ export const ownerSaveSecurityQuestions = onCall(async (request) => {
 });
 
 export const getOwnerSecurityQuestions = onCall(async () => {
+  await checkRateLimit("getOwnerSecurityQuestions:global", 30, 5 * 60_000);
+
   // There's only ever one owner account, so recovery skips identifying an
   // account by email/username — tapping "Forgot password" goes straight to
   // whichever owner has security questions set up.
@@ -515,6 +596,9 @@ export const verifyOwnerSecurityAnswers = onCall(async (request) => {
   if (!ownerId || !Array.isArray(answers) || answers.length !== 3) {
     throw new HttpsError("invalid-argument", "Missing answers.");
   }
+  // Keyed per-ownerId (not per-caller, since there's no caller identity yet)
+  // so guessing security answers can't be scripted.
+  await checkRateLimit(`verifyOwnerSecurityAnswers:${ownerId}`, 5, 15 * 60_000);
 
   const recoverySnap = await db.collection("ownerRecovery").doc(ownerId).get();
   if (!recoverySnap.exists) {
@@ -567,6 +651,7 @@ export const verifyOwnerSecurityAnswers = onCall(async (request) => {
 export const generateTenantResetLink = onCall(async (request) => {
   const { email } = request.data as { email: string };
   if (!email) throw new HttpsError("invalid-argument", "Email is required.");
+  await checkRateLimit(`generateTenantResetLink:${email}`, 5, 15 * 60_000);
 
   const snap = await db
     .collection("users")
@@ -590,4 +675,124 @@ export const generateTenantResetLink = onCall(async (request) => {
   const oobCode = new URL(link).searchParams.get("oobCode");
 
   return { oobCode };
+});
+
+// =====================================
+// PRE-AUTH USER LOOKUPS (server-side, narrow-response versions of what
+// used to be direct client-side Firestore reads against `users`). These
+// exist so `firestore.rules` can require auth on `users` get/list without
+// breaking login or forgot-password, which all run before the user is
+// signed in. Each returns only the minimum field(s) the caller actually
+// needs -- never the full user document -- unlike the old client-side
+// `getUserByUsername()`/inline queries this replaces.
+// =====================================
+
+// Owner/admin login screens accept either a username or a raw email. This
+// resolves a username to its account email so the client can hand it to
+// signInWithEmailAndPassword; a null result just means "treat the input as
+// a raw email instead", not an error -- the client already falls back to
+// that.
+export const resolveLoginEmail = onCall(async (request) => {
+  const { identifier, role } = request.data as { identifier: string; role: string };
+  if (!identifier || !role) {
+    throw new HttpsError("invalid-argument", "Identifier and role are required.");
+  }
+  await checkRateLimit(`resolveLoginEmail:${role}:${identifier}`, 15, 5 * 60_000);
+
+  // Two field-name conventions exist in the data (see the old
+  // getUserByUsername for why) -- try both.
+  const q1 = await db
+    .collection("users")
+    .where("username", "==", identifier)
+    .where("role", "==", role)
+    .limit(1)
+    .get();
+  if (!q1.empty) return { email: q1.docs[0].data().email ?? null };
+
+  const q2 = await db
+    .collection("users")
+    .where("userName", "==", identifier)
+    .where("role", "==", role)
+    .limit(1)
+    .get();
+  if (!q2.empty) return { email: q2.docs[0].data().email ?? null };
+
+  return { email: null };
+});
+
+export const tenantForgotPassword = onCall(async (request) => {
+  const { email } = request.data as { email: string };
+  if (!email) throw new HttpsError("invalid-argument", "Email is required.");
+  await checkRateLimit(`tenantForgotPassword:${email}`, 5, 15 * 60_000);
+
+  const snap = await db
+    .collection("users")
+    .where("email", "==", email)
+    .where("role", "==", "tenant")
+    .limit(1)
+    .get();
+
+  if (snap.empty) {
+    throw new HttpsError("not-found", "No account found with this email.");
+  }
+
+  const matched = snap.docs[0];
+  const data = matched.data();
+
+  if (data.personalEmail) {
+    // Same approach as generateTenantResetLink above: a real, one-time-use
+    // reset code handed straight to the tenant app's own reset screen.
+    const link = await auth.generatePasswordResetLink(data.personalEmail, {
+      url: "https://rentwise-capstone-project.web.app/reset-password",
+      handleCodeInApp: true,
+    });
+    const oobCode = new URL(link).searchParams.get("oobCode");
+    return { method: "self-service", oobCode };
+  }
+
+  // No personal email on file -- fall back to a manual request the admin
+  // handles. Written here (Admin SDK) instead of client-side so the client
+  // never needs to read firstName/lastName/spaceId off the users doc itself.
+  await db.collection("passwordResetRequests").add({
+    email,
+    tenantId: matched.id,
+    tenantName: `${data.firstName ?? ""} ${data.lastName ?? ""}`.trim(),
+    spaceId: data.spaceId ?? data.stallId ?? "",
+    status: "pending",
+    createdAt: FieldValue.serverTimestamp(),
+  });
+  return { method: "manual" };
+});
+
+export const adminForgotPassword = onCall(async (request) => {
+  const { email } = request.data as { email: string };
+  if (!email) throw new HttpsError("invalid-argument", "Email is required.");
+  await checkRateLimit(`adminForgotPassword:${email}`, 5, 15 * 60_000);
+
+  const snap = await db
+    .collection("users")
+    .where("email", "==", email)
+    .where("role", "==", "admin")
+    .limit(1)
+    .get();
+
+  if (snap.empty) {
+    throw new HttpsError("not-found", "No admin account found with this email.");
+  }
+
+  const matched = snap.docs[0];
+  const data = matched.data();
+
+  // Admin password resets always go to the owner to handle manually -- no
+  // self-service path, by design (an admin account resetting itself isn't
+  // something to automate).
+  await db.collection("passwordResetRequests").add({
+    email,
+    tenantId: matched.id,
+    tenantName: `${data.firstName ?? ""} ${data.lastName ?? ""}`.trim(),
+    requestedRole: "admin",
+    status: "pending",
+    createdAt: FieldValue.serverTimestamp(),
+  });
+  return { ok: true };
 });

@@ -1,7 +1,7 @@
-import { View, Text, Image, StyleSheet, TouchableOpacity, Share, Alert } from "react-native";
+import { View, Text, Image, StyleSheet, TouchableOpacity, Alert } from "react-native";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
-import { Check, Clock, XCircle, Share2, Download } from "lucide-react-native";
+import { Check, Clock, XCircle, Download } from "lucide-react-native";
 import { computePeriodCharge, consecutivePeriodsEnding, periodLabel } from "../../services/billingSchedule";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 
@@ -81,28 +81,6 @@ function synthesizeBreakdown(data: any, stall: any): BreakdownLine[] {
   }));
 }
 
-function buildShareText(data: any, breakdown: BreakdownLine[], amountPaid: number) {
-  const lines = [
-    "RentWise Payment Receipt",
-    `Reference ID: #${data.receiptNo ?? ""}`,
-    `Date: ${data.date ? new Date(data.date).toLocaleString() : ""}`,
-    `Method: ${data.paymentMethod ?? ""}`,
-    `Status: ${data.status ?? ""}`,
-    "",
-  ];
-  if (breakdown.length > 0) {
-    lines.push("Breakdown:");
-    breakdown.forEach((b) => lines.push(`  ${b.label} — ₱${b.amount.toLocaleString()}`));
-    lines.push("");
-  }
-  lines.push(`Total: ₱${amountPaid.toLocaleString()}`);
-  if (data.change > 0) {
-    lines.push(`Cash Tendered: ₱${Number(data.payment ?? 0).toLocaleString()}`);
-    lines.push(`Change: ₱${Number(data.change).toLocaleString()}`);
-  }
-  return lines.join("\n");
-}
-
 function buildReceiptHtml(data: any, breakdown: BreakdownLine[], amountPaid: number) {
   const rows = breakdown
     .map(
@@ -144,10 +122,12 @@ export default function ReceiptCardContent({
   data,
   stall,
   showActions = true,
+  onClose,
 }: {
   data: any;
   stall?: any;
   showActions?: boolean;
+  onClose?: () => void;
 }) {
   const receiptDate = data.date ? new Date(data.date) : new Date();
 
@@ -164,14 +144,6 @@ export default function ReceiptCardContent({
   // over — it includes change owed back, which was never actually applied
   // toward rent. The real amount paid is that minus the change.
   const amountPaid = Number(data.payment ?? 0) - Number(data.change ?? 0);
-
-  async function handleShare() {
-    try {
-      await Share.share({ message: buildShareText(data, breakdown, amountPaid) });
-    } catch (err) {
-      console.log("[receipt share] error:", err);
-    }
-  }
 
   async function handleDownloadPdf() {
     try {
@@ -283,9 +255,8 @@ export default function ReceiptCardContent({
 
       {showActions && (
         <View style={styles.actionsRow}>
-          <TouchableOpacity style={styles.shareBtn} onPress={handleShare} activeOpacity={0.7}>
-            <Share2 size={16} color={colors.textSecondary} />
-            <Text style={styles.shareBtnText}>Share</Text>
+          <TouchableOpacity style={styles.closeBtn} onPress={onClose} activeOpacity={0.7}>
+            <Text style={styles.closeBtnText}>Close</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.pdfBtn} onPress={handleDownloadPdf} activeOpacity={0.7}>
             <Download size={16} color={colors.white} />
@@ -463,7 +434,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.xl,
   },
 
-  shareBtn: {
+  closeBtn: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
@@ -475,7 +446,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
 
-  shareBtnText: {
+  closeBtnText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     color: colors.textSecondary,

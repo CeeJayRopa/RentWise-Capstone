@@ -57,8 +57,8 @@ export default function TenantRelocation() {
   const restoreBtnRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
-    { key: "stalls", ref: stallListRef, title: "Available stalls", description: "Pick which unoccupied stall to move this tenant into.", offsetY: 41 },
-    { key: "restore", ref: restoreBtnRef, title: isMove ? "Move Tenant" : "Restore account", description: isMove ? "Moves the tenant into the stall you selected above." : "Restores the tenant's account and assigns them to the stall you selected above.", offsetY: 41 },
+    { key: "stalls", ref: stallListRef, title: "Available stalls", description: "Pick which unoccupied stall to move this tenant into.", edgeInset: "top" },
+    { key: "restore", ref: restoreBtnRef, title: isMove ? "Move Tenant" : "Restore account", description: isMove ? "Moves the tenant into the stall you selected above." : "Restores the tenant's account and assigns them to the stall you selected above.", edgeInset: "top" },
   ];
 
   useEffect(() => {

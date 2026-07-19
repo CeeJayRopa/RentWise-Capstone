@@ -29,7 +29,7 @@ import {
   where,
 } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { House, HelpCircle, Users, Wallet, Receipt as ReceiptIcon, CheckCircle2, Eye } from "lucide-react-native";
+import { House, HelpCircle, Users, Wallet, Receipt as ReceiptIcon, CheckCircle2, Eye, Clock } from "lucide-react-native";
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
 import { logDetailedUpdate } from "../../shared/services/updatesService";
@@ -164,8 +164,27 @@ export default function Financials() {
   const summaryRef = useRef<View>(null);
   const filterRef = useRef<View>(null);
   const listRef = useRef<View>(null);
-  const setPaidRef = useRef<View>(null);
   const viewBtnRef = useRef<View>(null);
+  const fabRef = useRef<View>(null);
+  const listScrollRef = useRef<ScrollView>(null);
+
+  // Scrolls a given section into view and gives the ScrollView time to
+  // settle before HelpTour measures it — otherwise a row near the bottom of
+  // the list would stay hidden behind the fixed UpdatesReportFAB, since that
+  // FAB floats at a fixed screen position rather than scrolling with content.
+  const scrollSectionIntoView = (targetRef: React.RefObject<View | null>) =>
+    new Promise<void>((resolve) => {
+      const scrollNode = listScrollRef.current?.getNativeScrollRef?.();
+      if (!scrollNode || !targetRef.current) { resolve(); return; }
+      targetRef.current.measureLayout(
+        scrollNode as any,
+        (_x: number, y: number) => {
+          listScrollRef.current?.scrollTo({ y: Math.max(0, y - 100), animated: true });
+          setTimeout(resolve, 400);
+        },
+        () => resolve(),
+      );
+    });
 
   // Auth guard — redirect if not signed in
   useEffect(() => {
@@ -178,6 +197,35 @@ export default function Financials() {
     });
     return unsub;
   }, []);
+
+  // selectedTenant is a one-time snapshot taken when a modal opens (e.g.
+  // "Set Paid" / cash payment) -- rows keeps updating live in the
+  // background (payments listener, refreshUsersAndStalls) but that snapshot
+  // otherwise never does, so computedRent/change etc. could show stale
+  // numbers if the tenant's real paymentDue changes while the modal is
+  // still open (e.g. another payment lands, or an admin on another device
+  // confirms one). Re-syncing it to the matching live row keeps every
+  // value derived from it current for as long as the modal stays open.
+  useEffect(() => {
+    if (!selectedTenant) return;
+    const fresh = rows.find((r) => r.id === selectedTenant.id);
+    // computeRows builds a brand-new object every time regardless of
+    // whether anything actually changed, so compare the fields that feed
+    // computedRent/change/periodsOwed rather than object identity --
+    // otherwise this would re-render the open modal (and disrupt the cash
+    // input's focus) on every single payments snapshot, even ones that
+    // didn't touch this tenant at all.
+    if (
+      fresh &&
+      (fresh.paymentDue !== selectedTenant.paymentDue ||
+        fresh.rent !== selectedTenant.rent ||
+        fresh.paymentSchedule !== selectedTenant.paymentSchedule ||
+        fresh.status !== selectedTenant.status ||
+        fresh.paymentId !== selectedTenant.paymentId)
+    ) {
+      setSelectedTenant(fresh);
+    }
+  }, [rows, selectedTenant]);
 
   // Auto-opens the guided tour the first time the admin ever lands on this
   // page — never again after that, since it flips a persisted per-device
@@ -493,6 +541,7 @@ export default function Financials() {
         buildingNumber: row.buildingNumber,
         spaceId: row.spaceId,
         date: resolvedDate,
+        paymentMethod: payment.paymentMethod ?? "",
 
         // IMPORTANT PART
         rentAmount: payment.rentAmount,
@@ -502,6 +551,10 @@ export default function Financials() {
         status: payment.status,
         periodsCovered: payment.periodsCovered ?? 1,
         periodsAdvance: payment.periodsAdvance ?? 0,
+        // Same itemized, date-labeled lines the tenant saw when they paid --
+        // stored on the payment doc at creation, so this reads the real
+        // breakdown instead of re-deriving an approximation of it.
+        breakdown: payment.receiptData?.breakdown ?? [],
       });
 
       setOnlineConfirmModal(true);
@@ -537,23 +590,17 @@ export default function Financials() {
   const paidCount = rows.filter((r) => r.status === "paid").length;
   const unpaidCount = rows.filter((r) => r.status === "unpaid" || r.status === "online").length;
 
-  // First row that actually shows a Set Paid/Confirm button — used to point
-  // the tour at a real, on-screen example instead of a generic description.
-  const firstActionableIndex = filteredRows.findIndex((r) => r.status !== "paid");
-
   const tourSteps: HelpStep[] = [
-    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", offsetY: 41, round: true },
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", offsetY: 41, round: true },
-    { key: "summary", ref: summaryRef, title: "Spaces / Paid / Unpaid", description: "Total stalls tracked here, and how many tenants have paid vs. are still unpaid this period.", offsetY: 41 },
-    { key: "filter", ref: filterRef, title: "Status filter", description: "Narrow the list to only paid or only unpaid tenants.", offsetY: 41 },
-    { key: "list", ref: listRef, title: "Tenant list", description: "Paid/Unpaid badges show status at a glance.", offsetY: 41 },
+    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+    { key: "summary", ref: summaryRef, title: "Spaces / Paid / Unpaid", description: "Total stalls tracked here, and how many tenants have paid vs. are still unpaid this period.", edgeInset: "top" },
+    { key: "filter", ref: filterRef, title: "Status filter", description: "Narrow the list to only paid or only unpaid tenants.", edgeInset: "top" },
+    { key: "list", ref: listRef, title: "Tenant list", description: "Paid/Unpaid badges show status at a glance. Unpaid tenants show a Set Paid button to record their payment; pending online payments show Confirm instead.", edgeInset: "top" },
   ];
-  if (firstActionableIndex !== -1) {
-    tourSteps.push({ key: "setpaid", ref: setPaidRef, title: "Set Paid", description: "Records a cash payment for this tenant, or confirms a pending online payment.", offsetY: 41 });
-  }
   if (filteredRows.length > 0) {
-    tourSteps.push({ key: "view", ref: viewBtnRef, title: "View", description: "Opens this tenant's full payment details and history.", offsetY: 41 });
+    tourSteps.push({ key: "view", ref: viewBtnRef, title: "View", description: "Opens this tenant's full payment details and history.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(viewBtnRef) });
   }
+  tourSteps.push({ key: "fab", ref: fabRef, title: "Updates report", description: "Shows recent changes awaiting your review, organized by building, financials, and accounts.", edgeInset: "bottom", round: true, nudgeY: 5 });
 
   if (checking) {
     return (
@@ -657,6 +704,7 @@ export default function Financials() {
               </View>
             ) : (
               <ScrollView
+                ref={listScrollRef}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={{ paddingBottom: insets.bottom + FAB_CLEARANCE }}
                 refreshControl={
@@ -684,7 +732,6 @@ export default function Financials() {
                     <View style={styles.actionBtns}>
                       {/* PAYMENT BUTTON — hidden once already paid, nothing to action */}
                       {item.status !== "paid" && (
-                        <View ref={idx === firstActionableIndex ? setPaidRef : undefined} collapsable={false}>
                         <Pressable
                           style={({ pressed }) => [
                             styles.setPaidBtn,
@@ -715,7 +762,6 @@ export default function Financials() {
                             {item.status === "online" ? "Confirm" : "Set Paid"}
                           </Text>
                         </Pressable>
-                        </View>
                       )}
 
                       {/* VIEW INFO BUTTON */}
@@ -744,7 +790,7 @@ export default function Financials() {
           </View>
         )}
       </View>
-      <UpdatesReportFAB />
+      <UpdatesReportFAB fabRef={fabRef} />
 
       {/* CASH PAYMENT MODAL */}
       <Modal visible={paymentModal} transparent animationType="fade">
@@ -907,9 +953,20 @@ export default function Financials() {
 
       <Modal visible={receiptPreviewModal} transparent animationType="fade">
         <View style={styles.modalBg}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>Tenant Digital Receipt</Text>
+          <View style={styles.receiptBox}>
+            <LinearGradient
+              colors={[colors.emerald, colors.ink]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.receiptHeader}
+            >
+              <View style={styles.receiptHeaderIcon}>
+                <ReceiptIcon size={20} color={colors.emerald} />
+              </View>
+              <Text style={styles.receiptHeaderTitle}>Cash Payment</Text>
+            </LinearGradient>
 
+            <View style={styles.receiptBody}>
             <View style={styles.modalRow}>
               <Text style={styles.modalLabel}>Tenant Name</Text>
               <Text style={styles.modalValue}>{selectedTenant?.name}</Text>
@@ -963,6 +1020,7 @@ export default function Financials() {
 
               <Text style={styles.modalValue}>APPROVED</Text>
             </View>
+            </View>
 
             <View style={styles.modalButtons}>
               <TouchableOpacity
@@ -1000,49 +1058,101 @@ export default function Financials() {
 
       <Modal visible={onlineConfirmModal} transparent animationType="fade">
         <View style={styles.modalBg}>
-          <View style={styles.modalBox}>
-            <View style={styles.modalTitleRow}>
-              <ReceiptIcon size={18} color={colors.emerald} style={{ marginRight: spacing.sm }} />
-              <Text style={styles.modalTitle}>Tenant's Online Receipt</Text>
-            </View>
-
-            <Text style={styles.receiptLine}>Receipt No: {receiptData?.receiptNo}</Text>
-            <Text style={styles.receiptLine}>Tenant Name: {receiptData?.tenantName}</Text>
-            <Text style={styles.receiptLine}>Building Number: {receiptData?.buildingNumber}</Text>
-            <Text style={styles.receiptLine}>Space ID: {receiptData?.spaceId}</Text>
-            <Text style={styles.receiptLine}>
-              Date: {receiptData?.date?.toLocaleDateString?.() ?? ""}
-            </Text>
-            <Text style={styles.receiptLine}>Rent Amount: ₱{receiptData?.rentAmount}</Text>
-            <Text style={styles.receiptLine}>Payment: ₱{receiptData?.payment}</Text>
-            {receiptData?.change > 0 && (
-              <Text style={styles.receiptLine}>Change: ₱{receiptData.change}</Text>
-            )}
-
-            {receiptData?.periodsCovered > 1 && (
-              <View style={styles.coversBox}>
-                <Text style={styles.coversBoxText}>
-                  Covers: {receiptData.periodsCovered}{" "}
-                  {periodUnitLabel(selectedTenant?.paymentSchedule ?? "monthly", receiptData.periodsCovered)}
-                  {receiptData?.periodsAdvance > 0
-                    ? ` (${receiptData.periodsCovered - receiptData.periodsAdvance} due + ${receiptData.periodsAdvance} advance)`
-                    : " (no advance payment)"}
-                </Text>
+          <View style={styles.receiptBox}>
+            <ScrollView style={styles.confirmScrollArea} showsVerticalScrollIndicator={false}>
+            <View style={styles.confirmBody}>
+              <View style={styles.confirmIconCircle}>
+                <Clock size={26} color={colors.warning} />
               </View>
-            )}
 
-            <View style={styles.modalButtons}>
+              <Text style={styles.confirmTotalLabel}>AMOUNT PENDING</Text>
+              <Text style={styles.confirmTotalAmount}>₱{Number(receiptData?.payment ?? 0).toLocaleString()}</Text>
+
+              <View style={styles.confirmPill}>
+                <Text style={styles.confirmPillText}>TRANSACTION PENDING</Text>
+              </View>
+
+              <View style={styles.confirmDivider} />
+
+              <View style={styles.confirmDetailRows}>
+                <View style={styles.confirmDetailRow}>
+                  <Text style={styles.confirmDetailLabel}>Reference ID</Text>
+                  <Text style={styles.confirmDetailValue}>#{receiptData?.receiptNo}</Text>
+                </View>
+                <View style={styles.confirmDetailRow}>
+                  <Text style={styles.confirmDetailLabel}>Tenant Name</Text>
+                  <Text style={styles.confirmDetailValue}>{receiptData?.tenantName}</Text>
+                </View>
+                <View style={styles.confirmDetailRow}>
+                  <Text style={styles.confirmDetailLabel}>Space</Text>
+                  <Text style={styles.confirmDetailValue}>
+                    B{receiptData?.buildingNumber} · {receiptData?.spaceId}
+                  </Text>
+                </View>
+                <View style={styles.confirmDetailRow}>
+                  <Text style={styles.confirmDetailLabel}>Payment Date</Text>
+                  <Text style={[styles.confirmDetailValue, styles.confirmDetailValueAccent]}>
+                    {receiptData?.date?.toLocaleDateString?.("en-US", {
+                      month: "long",
+                      day: "numeric",
+                      year: "numeric",
+                    }) ?? ""}
+                  </Text>
+                </View>
+                <View style={styles.confirmDetailRow}>
+                  <Text style={styles.confirmDetailLabel}>Payment Method</Text>
+                  <Text style={styles.confirmDetailValue}>{receiptData?.paymentMethod || "—"}</Text>
+                </View>
+                <View style={styles.confirmDetailRow}>
+                  <Text style={styles.confirmDetailLabel}>Rent Amount</Text>
+                  <Text style={styles.confirmDetailValue}>₱{receiptData?.rentAmount}</Text>
+                </View>
+                {receiptData?.change > 0 && (
+                  <View style={styles.confirmDetailRow}>
+                    <Text style={styles.confirmDetailLabel}>Change</Text>
+                    <Text style={styles.confirmDetailValue}>₱{receiptData.change}</Text>
+                  </View>
+                )}
+                <View style={[styles.confirmDetailRow, { borderBottomWidth: 0 }]}>
+                  <Text style={styles.confirmDetailLabel}>Status</Text>
+                  <Text style={[styles.confirmDetailValue, { color: colors.warning }]}>PENDING</Text>
+                </View>
+              </View>
+
+              {receiptData?.breakdown?.length > 0 && (
+                <>
+                  <View style={styles.confirmDivider} />
+                  <View style={styles.confirmBreakdownSection}>
+                    <Text style={styles.confirmBreakdownTitle}>Breakdown</Text>
+                    {receiptData.breakdown.map((line: { label: string; amount: number }, i: number) => (
+                      <View key={i} style={styles.confirmBreakdownRow}>
+                        <Text style={styles.confirmBreakdownLabel}>{line.label}</Text>
+                        <Text style={styles.confirmBreakdownValue}>₱{line.amount.toLocaleString()}</Text>
+                      </View>
+                    ))}
+                    <View style={styles.confirmBreakdownDivider} />
+                    <View style={styles.confirmBreakdownRow}>
+                      <Text style={styles.confirmBreakdownTotalLabel}>Total</Text>
+                      <Text style={styles.confirmBreakdownTotalValue}>₱{receiptData?.payment}</Text>
+                    </View>
+                  </View>
+                </>
+              )}
+            </View>
+            </ScrollView>
+
+            <View style={styles.confirmButtonsRow}>
               <TouchableOpacity
-                style={styles.modalBtnSecondary}
+                style={styles.confirmCloseBtn}
                 onPress={() => {
                   setOnlineConfirmModal(false);
                 }}
               >
-                <Text style={styles.modalBtnSecondaryText}>Cancel</Text>
+                <Text style={styles.confirmCloseBtnText}>Close</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.modalBtnPrimary}
+                style={styles.confirmPrimaryBtn}
                 onPress={async () => {
                   if (!selectedTenant?.paymentId) return;
 
@@ -1082,7 +1192,7 @@ export default function Financials() {
                   setOnlineConfirmModal(false);
                 }}
               >
-                <Text style={styles.modalBtnPrimaryText}>Confirm Payment</Text>
+                <Text style={styles.confirmPrimaryBtnText}>Confirm Payment</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1093,42 +1203,61 @@ export default function Financials() {
 
       <Modal visible={receiptModal} transparent animationType="fade">
         <View style={styles.modalBg}>
-          <View style={styles.modalBox}>
-            <View style={styles.modalTitleRow}>
-              <ReceiptIcon size={18} color={colors.emerald} style={{ marginRight: spacing.sm }} />
-              <Text style={styles.modalTitle}>Tenant's Digital Receipt</Text>
+          <View style={styles.receiptBox}>
+            <LinearGradient
+              colors={[colors.emerald, colors.ink]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.receiptHeader}
+            >
+              <View style={styles.receiptHeaderIcon}>
+                <ReceiptIcon size={20} color={colors.emerald} />
+              </View>
+              <Text style={styles.receiptHeaderTitle}>Payment Receipt</Text>
+              {!!receiptData?.receiptNo && (
+                <Text style={styles.receiptHeaderNo}>#{receiptData.receiptNo}</Text>
+              )}
+            </LinearGradient>
+
+            <View style={styles.receiptBody}>
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Tenant Name</Text>
+                <Text style={styles.receiptValue}>{receiptData?.tenantName}</Text>
+              </View>
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Building Number</Text>
+                <Text style={styles.receiptValue}>{receiptData?.buildingNumber}</Text>
+              </View>
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Space ID</Text>
+                <Text style={styles.receiptValue}>{receiptData?.spaceId}</Text>
+              </View>
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Date</Text>
+                <Text style={styles.receiptValue}>{receiptData?.date?.toDateString()}</Text>
+              </View>
+
+              <View style={styles.receiptDivider} />
+
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Rent Amount</Text>
+                <Text style={styles.receiptValue}>₱{receiptData?.rentAmount}</Text>
+              </View>
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Change</Text>
+                <Text style={styles.receiptValue}>₱{receiptData?.change}</Text>
+              </View>
+
+              <View style={styles.receiptTotalRow}>
+                <Text style={styles.receiptTotalLabel}>Payment</Text>
+                <Text style={styles.receiptTotalValue}>₱{receiptData?.payment}</Text>
+              </View>
+
+              <View style={styles.receiptStatusBadge}>
+                <CheckCircle2 size={13} color={colors.emerald} style={{ marginRight: 5 }} />
+                <Text style={styles.receiptStatusText}>{receiptData?.status}</Text>
+              </View>
             </View>
-
-            <Text style={styles.receiptLine}>
-              Tenant Name:
-              {receiptData?.tenantName}
-            </Text>
-
-            <Text style={styles.receiptLine}>
-              Building Number:
-              {receiptData?.buildingNumber}
-            </Text>
-
-            <Text style={styles.receiptLine}>
-              Space ID:
-              {receiptData?.spaceId}
-            </Text>
-
-            <Text style={styles.receiptLine}>
-              Date:
-              {receiptData?.date?.toDateString()}
-            </Text>
-
-            <Text style={styles.receiptLine}>Rent Amount: ₱{receiptData?.rentAmount}</Text>
-
-            <Text style={styles.receiptLine}>Payment: ₱{receiptData?.payment}</Text>
-
-            <Text style={styles.receiptLine}>Change: ₱{receiptData?.change}</Text>
-
-            <Text style={styles.receiptLine}>
-              Approval Status:
-              {receiptData?.status}
-            </Text>
 
             <View style={styles.modalButtons}>
               <TouchableOpacity
@@ -1400,16 +1529,108 @@ const styles = StyleSheet.create({
     padding: spacing.xl,
     ...shadow.raised,
   },
-  modalTitle: {
-    fontSize: fontSize.lg,
-    fontFamily: fontFamily.bold,
-    marginBottom: spacing.lg - 1,
-    color: colors.ink,
+
+  // ── Payment receipt card ────────────────────────────────────────────
+  receiptBox: {
+    width: "88%",
+    maxWidth: 380,
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    overflow: "hidden",
+    ...shadow.raised,
   },
-  modalTitleRow: {
+  receiptHeader: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: spacing.lg - 1,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+  },
+  receiptHeaderIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.goldSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: spacing.sm + 2,
+  },
+  receiptHeaderTitle: {
+    flex: 1,
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
+    color: colors.white,
+  },
+  receiptHeaderNo: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.medium,
+    color: colors.emeraldSoft,
+  },
+  receiptBody: {
+    padding: spacing.xl,
+    paddingBottom: spacing.lg,
+  },
+  receiptRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: spacing.xs + 2,
+  },
+  receiptLabel: {
+    fontSize: fontSize.xs + 1,
+    fontFamily: fontFamily.semibold,
+    color: colors.textSecondary,
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+  },
+  receiptValue: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.ink,
+    flexShrink: 1,
+    textAlign: "right",
+    marginLeft: spacing.md,
+  },
+  receiptDivider: {
+    borderTopWidth: 1,
+    borderStyle: "dashed",
+    borderTopColor: colors.border,
+    marginVertical: spacing.sm + 2,
+  },
+  receiptTotalRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: spacing.sm,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  receiptTotalLabel: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+  },
+  receiptTotalValue: {
+    fontSize: fontSize.xl,
+    fontFamily: fontFamily.extrabold,
+    color: colors.gold,
+  },
+  receiptStatusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    backgroundColor: colors.successSoft,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 1,
+    marginTop: spacing.lg,
+  },
+  receiptStatusText: {
+    fontSize: fontSize.xs + 1,
+    fontFamily: fontFamily.bold,
+    color: colors.emerald,
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
   },
   modalRow: {
     flexDirection: "row",
@@ -1418,29 +1639,169 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  coversBox: {
-    backgroundColor: colors.emeraldSoft,
-    borderRadius: radius.sm - 2,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md - 2,
+  // ── Online payment confirm card ───────────────────
+  confirmScrollArea: {
+    maxHeight: 480,
+  },
+  confirmBody: {
+    width: "100%",
+    alignItems: "center",
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xxl,
+  },
+  confirmIconCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.warningSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.md,
+  },
+  confirmTotalLabel: {
+    fontSize: fontSize.xs + 1,
+    fontFamily: fontFamily.bold,
+    color: colors.textSecondary,
+    letterSpacing: 0.4,
+  },
+  confirmTotalAmount: {
+    fontSize: fontSize.xxl,
+    fontFamily: fontFamily.extrabold,
+    color: colors.ink,
+    marginTop: 4,
+  },
+  confirmPill: {
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius.pill,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.md,
     marginTop: spacing.sm + 2,
   },
-  coversBoxText: {
-    fontSize: fontSize.xs + 1,
+  confirmPillText: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.bold,
+    color: colors.warning,
+    letterSpacing: 0.3,
+  },
+  confirmDivider: {
+    width: "100%",
+    height: 1,
+    backgroundColor: colors.border,
+    marginVertical: spacing.lg,
+  },
+  confirmDetailRows: {
+    width: "100%",
+  },
+  confirmDetailRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: spacing.sm + 2,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  confirmDetailLabel: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+  },
+  confirmDetailValue: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.ink,
+  },
+  confirmDetailValueAccent: {
     color: colors.emerald,
-    fontFamily: fontFamily.medium,
+  },
+  confirmBreakdownSection: {
+    width: "100%",
+  },
+  confirmBreakdownTitle: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    marginBottom: spacing.sm,
+  },
+  confirmBreakdownRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 4,
+  },
+  confirmBreakdownLabel: {
+    flex: 1,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+  },
+  confirmBreakdownValue: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.ink,
+  },
+  confirmBreakdownNote: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.regular,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  confirmBreakdownDivider: {
+    width: "100%",
+    height: 1,
+    backgroundColor: colors.border,
+    marginVertical: spacing.sm + 2,
+  },
+  confirmBreakdownTotalLabel: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+  },
+  confirmBreakdownTotalValue: {
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.extrabold,
+    color: colors.gold,
+  },
+  confirmButtonsRow: {
+    flexDirection: "row",
+    width: "100%",
+    gap: spacing.md,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xl,
+  },
+  confirmCloseBtn: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    paddingVertical: spacing.md,
+  },
+  confirmCloseBtnText: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.textSecondary,
+  },
+  confirmPrimaryBtn: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+    backgroundColor: colors.emerald,
+    paddingVertical: spacing.md,
+    ...shadow.button,
+  },
+  confirmPrimaryBtnText: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.bold,
+    color: colors.white,
   },
   modalLabel: { fontSize: fontSize.sm, fontFamily: fontFamily.regular, color: colors.textSecondary },
   modalValue: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.ink },
   rentAmountBox: { alignItems: "flex-end" },
   dueBreakdownText: { fontSize: fontSize.xs, fontFamily: fontFamily.regular, color: colors.textMuted, marginTop: 2 },
   modalBodyText: { fontSize: fontSize.base, fontFamily: fontFamily.regular, color: colors.textSecondary, marginBottom: spacing.lg },
-  receiptLine: {
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.regular,
-    color: colors.ink,
-    paddingVertical: spacing.xs + 1,
-  },
   modalButtons: {
     flexDirection: "row",
     justifyContent: "flex-end",

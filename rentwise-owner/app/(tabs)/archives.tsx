@@ -76,12 +76,12 @@ export default function Archives() {
   const deleteBtnRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
-    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", offsetY: 41, round: true },
-    { key: "count", ref: countRef, title: "Archived count", description: "Total number of tenant accounts currently archived.", offsetY: 41 },
-    { key: "search", ref: searchRef, title: "Search", description: "Find an archived tenant fast by typing their name.", offsetY: 41 },
-    { key: "card", ref: cardRef, title: "Archived tenant", description: "Shows who was archived, when, and their building/space.", offsetY: 41 },
-    { key: "restore", ref: restoreBtnRef, title: "Restore", description: "Brings the tenant's account back to active. If their old stall is occupied, you'll be asked to relocate them first.", offsetY: 41 },
-    { key: "delete", ref: deleteBtnRef, title: "Delete", description: "Permanently removes the account and its data — this can't be undone.", offsetY: 41 },
+    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
+    { key: "count", ref: countRef, title: "Archived count", description: "Total number of tenant accounts currently archived.", edgeInset: "top" },
+    { key: "search", ref: searchRef, title: "Search", description: "Find an archived tenant fast by typing their name.", edgeInset: "top" },
+    { key: "card", ref: cardRef, title: "Archived tenant", description: "Shows who was archived, when, and their building/space.", edgeInset: "top" },
+    { key: "restore", ref: restoreBtnRef, title: "Restore", description: "Brings the tenant's account back to active. If their old stall is occupied, you'll be asked to relocate them first.", edgeInset: "top" },
+    { key: "delete", ref: deleteBtnRef, title: "Delete", description: "Permanently removes the account and its data — this can't be undone.", edgeInset: "top" },
   ];
 
   const fetchData = useCallback(async () => {

@@ -18,10 +18,9 @@ const setTenantAccountDisabled = async (
   uid: string,
   disabled: boolean,
 ): Promise<void> => {
-  const callerUid = auth.currentUser?.uid;
-  if (!callerUid) throw new Error("Owner not authenticated.");
+  if (!auth.currentUser?.uid) throw new Error("Owner not authenticated.");
   const setDisabledFn = httpsCallable(cloudFunctions, "adminSetAccountDisabled");
-  await setDisabledFn({ uid, disabled, callerUid });
+  await setDisabledFn({ uid, disabled });
 };
 
 export const deleteArchivedTenant = async (uid: string): Promise<void> => {
@@ -29,10 +28,9 @@ export const deleteArchivedTenant = async (uid: string): Promise<void> => {
   if (!archiveSnap.exists()) throw new Error("Archive record not found.");
 
   // Deletes Firebase Auth account so the username can be reused
-  const callerUid = auth.currentUser?.uid;
-  if (!callerUid) throw new Error("Owner not authenticated.");
+  if (!auth.currentUser?.uid) throw new Error("Owner not authenticated.");
   const deleteFn = httpsCallable(cloudFunctions, "adminDeleteTenant");
-  await deleteFn({ uid, callerUid });
+  await deleteFn({ uid });
 
   const batch = writeBatch(db);
   batch.delete(doc(db, "archives", uid));

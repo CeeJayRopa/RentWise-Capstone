@@ -105,11 +105,11 @@ export default function ManageAdmin() {
     });
 
   const tourSteps: HelpStep[] = [
-    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", offsetY: 41, round: true },
-    { key: "profile", ref: profileFieldsRef, title: "Admin profile", description: "The market admin's name, login username, and contact number. This is the account that manages tenants day-to-day.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(profileFieldsRef) },
-    { key: "save", ref: saveBtnRef, title: "Save", description: "Saves any changes to the admin's profile details.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(saveBtnRef) },
-    { key: "password", ref: pwFieldsRef, title: "Change password", description: "Set a new login password for the admin account. Must be 8-12 characters with an uppercase letter, a number, and a special character.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(pwFieldsRef) },
-    { key: "updatepw", ref: updatePwBtnRef, title: "Update Password", description: "Applies the new password. The admin will need to use it the next time they log in.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(updatePwBtnRef) },
+    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
+    { key: "profile", ref: profileFieldsRef, title: "Admin profile", description: "The market admin's name, login username, and contact number. This is the account that manages tenants day-to-day.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(profileFieldsRef) },
+    { key: "save", ref: saveBtnRef, title: "Save", description: "Saves any changes to the admin's profile details.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(saveBtnRef) },
+    { key: "password", ref: pwFieldsRef, title: "Change password", description: "Set a new login password for the admin account. Must be 8-12 characters with an uppercase letter, a number, and a special character.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(pwFieldsRef) },
+    { key: "updatepw", ref: updatePwBtnRef, title: "Update Password", description: "Applies the new password. The admin will need to use it the next time they log in.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(updatePwBtnRef) },
   ];
 
   useEffect(() => {
@@ -199,8 +199,7 @@ export default function ManageAdmin() {
 
   const handleSave = async () => {
     if (!admin) return;
-    const callerUid = auth.currentUser?.uid;
-    if (!callerUid) return;
+    if (!auth.currentUser?.uid) return;
     const fn = firstName.trim();
     const ln = lastName.trim();
     const un = username.trim();
@@ -209,7 +208,7 @@ export default function ManageAdmin() {
     setSaving(true);
     try {
       const updateFn = httpsCallable(cloudFunctions, "ownerUpdateAdminProfile");
-      await updateFn({ uid: admin.uid, callerUid, firstName: fn, lastName: ln, username: un, contactNo: cn });
+      await updateFn({ uid: admin.uid, firstName: fn, lastName: ln, username: un, contactNo: cn });
       setOriginal({ firstName: fn, lastName: ln, username: un, contactNo: cn });
       setIsEditing(false);
       showToast("Profile saved!");
@@ -250,12 +249,11 @@ export default function ManageAdmin() {
 
     if (!valid) return;
 
-    const callerUid = auth.currentUser?.uid;
-    if (!callerUid) return;
+    if (!auth.currentUser?.uid) return;
     setChangingPw(true);
     try {
       const resetFn = httpsCallable(cloudFunctions, "ownerResetAdminPassword");
-      await resetFn({ uid: admin.uid, newPassword, callerUid });
+      await resetFn({ uid: admin.uid, newPassword });
       setNewPassword("");
       setConfirmPassword("");
       showToast("Password updated!");

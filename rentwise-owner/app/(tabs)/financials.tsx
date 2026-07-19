@@ -321,16 +321,16 @@ export default function Financials() {
   const firstReceiptIndex = filtered.findIndex((r) => r.status === "paid" && r.receipt);
 
   const tourSteps: HelpStep[] = [
-    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", offsetY: 41, round: true },
-    { key: "summary", ref: summaryRef, title: "Spaces / Paid / Unpaid", description: "Total stalls tracked here, and how many tenants have paid vs. are still unpaid this period.", offsetY: 41 },
-    { key: "search", ref: searchRef, title: "Search", description: "Find a tenant fast by typing their name or building/space number.", offsetY: 41 },
-    { key: "filter", ref: filterRef, title: "Period & status filters", description: "Narrow the list by payment schedule (daily, weekly, etc.) or by paid/unpaid status.", offsetY: 41 },
+    { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
+    { key: "summary", ref: summaryRef, title: "Spaces / Paid / Unpaid", description: "Total stalls tracked here, and how many tenants have paid vs. are still unpaid this period.", edgeInset: "top" },
+    { key: "search", ref: searchRef, title: "Search", description: "Find a tenant fast by typing their name or building/space number.", edgeInset: "top" },
+    { key: "filter", ref: filterRef, title: "Period & status filters", description: "Narrow the list by payment schedule (daily, weekly, etc.) or by paid/unpaid status.", edgeInset: "top" },
     {
       key: "cardcolor",
       ref: cardColorRef,
       title: "Paid / Unpaid badge",
       description: "A green Paid badge means the tenant already paid this period; red Unpaid means they haven't yet.",
-      offsetY: 41,
+      edgeInset: "top",
       onBeforeMeasure: () => scrollListToIndex(0),
     },
     ...(firstReceiptIndex !== -1
@@ -339,7 +339,7 @@ export default function Financials() {
           ref: receiptBtnRef,
           title: "Receipt",
           description: "Tap Receipt on a paid card to view the full payment breakdown.",
-          offsetY: 41,
+          edgeInset: "top" as const,
           onBeforeMeasure: () => scrollListToIndex(firstReceiptIndex),
         }]
       : []),

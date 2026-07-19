@@ -4,6 +4,7 @@ import {
   inMemoryPersistence,
   createUserWithEmailAndPassword,
   deleteUser as deleteAuthUser,
+  sendEmailVerification,
 } from "firebase/auth";
 import type { User } from "firebase/auth";
 import {
@@ -101,6 +102,11 @@ export const createTenantAccount = async (
         // password and must change it via the forced-change screen the
         // moment they first log in with @Tenant123.
         mustChangePassword: true,
+        // Real proof the personalEmail is a reachable inbox comes later,
+        // once the tenant clicks the verification link this triggers below
+        // -- see _layout.tsx, which syncs this from Firebase Auth's own
+        // emailVerified flag once it flips.
+        emailVerified: false,
         createdAt: serverTimestamp(),
       });
 
@@ -110,6 +116,13 @@ export const createTenantAccount = async (
         status: "occupied",
       });
     });
+
+    // Fire-and-forget, same tolerance as the stall-fetch/log-write below --
+    // the tenant account itself is already fully created at this point, so
+    // a failed verification-email send shouldn't fail the whole flow. Uses
+    // the still-live secondary-app session (torn down only in `finally`
+    // below), so this doesn't touch the admin's own signed-in session.
+    sendEmailVerification(createdUser).catch(() => {});
 
     // Fire-and-forget: fetch stall info for the log (non-blocking)
     getDoc(doc(db, "stalls", stallId)).then((snap) => {
@@ -152,19 +165,20 @@ export const createTenantAccount = async (
 // stores it on their Firestore doc. Self-service only — no target uid param,
 // the Cloud Function always acts on request.auth.uid.
 export const syncPersonalEmail = async (personalEmail: string): Promise<void> => {
-  const callerUid = auth.currentUser?.uid;
-  if (!callerUid) throw new Error("Not authenticated.");
+  // The Cloud Function identifies the caller itself from the verified
+  // auth token (request.auth.uid) -- this check is just a fast client-side
+  // fail rather than something the function relies on.
+  if (!auth.currentUser?.uid) throw new Error("Not authenticated.");
   const syncFn = httpsCallable(cloudFunctions, "syncPersonalEmail");
-  await syncFn({ callerUid, personalEmail });
+  await syncFn({ personalEmail });
 };
 
 export const resetTenantPasswordToDefault = async (
   uid: string,
 ): Promise<void> => {
-  const callerUid = auth.currentUser?.uid;
-  if (!callerUid) throw new Error("Admin not authenticated.");
+  if (!auth.currentUser?.uid) throw new Error("Admin not authenticated.");
   const resetFn = httpsCallable(cloudFunctions, "adminResetTenantPassword");
-  await resetFn({ uid, newPassword: DEFAULT_TENANT_PASSWORD, callerUid });
+  await resetFn({ uid, newPassword: DEFAULT_TENANT_PASSWORD });
   await updateDoc(doc(db, "users", uid), { mustChangePassword: true });
 };
 
@@ -176,10 +190,9 @@ const setTenantAccountDisabled = async (
   uid: string,
   disabled: boolean,
 ): Promise<void> => {
-  const callerUid = auth.currentUser?.uid;
-  if (!callerUid) throw new Error("Admin not authenticated.");
+  if (!auth.currentUser?.uid) throw new Error("Admin not authenticated.");
   const setDisabledFn = httpsCallable(cloudFunctions, "adminSetAccountDisabled");
-  await setDisabledFn({ uid, disabled, callerUid });
+  await setDisabledFn({ uid, disabled });
 };
 
 export const archiveTenant = async (uid: string): Promise<void> => {
@@ -304,10 +317,9 @@ export const deleteArchivedTenant = async (uid: string): Promise<void> => {
   const tenantName = `${archive.firstName ?? ""} ${archive.lastName ?? ""}`.trim();
 
   // Deletes Firebase Auth account so the username can be reused
-  const callerUid = auth.currentUser?.uid;
-  if (!callerUid) throw new Error("Admin not authenticated.");
+  if (!auth.currentUser?.uid) throw new Error("Admin not authenticated.");
   const deleteFn = httpsCallable(cloudFunctions, "adminDeleteTenant");
-  await deleteFn({ uid, callerUid });
+  await deleteFn({ uid });
 
   const batch = writeBatch(db);
   batch.delete(doc(db, "archives", uid));

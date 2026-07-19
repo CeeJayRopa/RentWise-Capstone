@@ -57,6 +57,7 @@ export default function PaymentHistoryScreen() {
 
   const [tourVisible, setTourVisible] = useState(false);
   const helpRef = useRef<View>(null);
+  const searchRef = useRef<View>(null);
   const summaryRef = useRef<View>(null);
   const pickerRef = useRef<View>(null);
   const listRef = useRef<View>(null);
@@ -81,10 +82,11 @@ export default function PaymentHistoryScreen() {
     });
 
   const tourSteps: HelpStep[] = [
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", offsetY: 41, round: true },
-    { key: "summary", ref: summaryRef, title: "Monthly total", description: "How much you've paid this month, and your progress toward the full month's charge.", offsetY: 41 },
-    { key: "picker", ref: pickerRef, title: "Month & year", description: "Switch to a different month or year to see that period's transactions.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(pickerRef) },
-    { key: "list", ref: listRef, title: "Transactions", description: "Every payment for the selected period. Tap a card with a receipt to view it.", offsetY: 41, onBeforeMeasure: () => scrollSectionIntoView(listRef), clipBottom: 40 },
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+    { key: "search", ref: searchRef, title: "Search", description: "Find a transaction by amount, date, or payment method.", edgeInset: "top", round: true },
+    { key: "summary", ref: summaryRef, title: "Monthly total", description: "How much you've paid this month, and your progress toward the full month's charge.", edgeInset: "top", insetXPercent: 0.045 },
+    { key: "picker", ref: pickerRef, title: "Month & year", description: "Switch to a different month or year to see that period's transactions.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(pickerRef) },
+    { key: "list", ref: listRef, title: "Transactions", description: "Every payment for the selected period. Tap a card with a receipt to view it.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(listRef), clipBottom: -25 },
   ];
 
   useFocusEffect(
@@ -252,16 +254,18 @@ export default function PaymentHistoryScreen() {
           </View>
           <Text style={styles.headerTitle}>Payment History</Text>
           <View style={styles.headerActions}>
-            <TouchableOpacity
-              style={styles.headerIconBtn}
-              onPress={() => {
-                setShowSearch((v) => !v);
-                if (showSearch) setSearchQuery("");
-              }}
-              hitSlop={8}
-            >
-              {showSearch ? <X size={20} color={colors.white} /> : <Search size={20} color={colors.white} />}
-            </TouchableOpacity>
+            <View ref={searchRef} collapsable={false}>
+              <TouchableOpacity
+                style={styles.headerIconBtn}
+                onPress={() => {
+                  setShowSearch((v) => !v);
+                  if (showSearch) setSearchQuery("");
+                }}
+                hitSlop={8}
+              >
+                {showSearch ? <X size={20} color={colors.white} /> : <Search size={20} color={colors.white} />}
+              </TouchableOpacity>
+            </View>
             <View ref={helpRef} collapsable={false}>
               <TouchableOpacity style={styles.headerIconBtn} onPress={() => setTourVisible(true)} hitSlop={8}>
                 <HelpCircle size={20} color={colors.white} />
@@ -481,22 +485,30 @@ export default function PaymentHistoryScreen() {
       <Modal visible={showReceiptModal} transparent animationType="fade">
         <View style={styles.receiptOverlay}>
           <View style={styles.receiptPreviewCard}>
-            <TouchableOpacity
-              style={styles.receiptCloseX}
-              onPress={() => {
-                setShowReceiptModal(false);
-                setSelectedPayment(null);
-              }}
-              hitSlop={8}
-            >
-              <X size={18} color={colors.textSecondary} />
-            </TouchableOpacity>
-
             <ScrollView style={styles.receiptScrollArea} showsVerticalScrollIndicator={false}>
               {selectedPayment?.receiptData ? (
-                <ReceiptCardContent data={selectedPayment.receiptData} stall={stall} />
+                <ReceiptCardContent
+                  data={selectedPayment.receiptData}
+                  stall={stall}
+                  onClose={() => {
+                    setShowReceiptModal(false);
+                    setSelectedPayment(null);
+                  }}
+                />
               ) : selectedPayment?.receipt ? (
-                <Image source={{ uri: selectedPayment.receipt }} style={styles.receiptImage} />
+                <>
+                  <Image source={{ uri: selectedPayment.receipt }} style={styles.receiptImage} />
+                  <TouchableOpacity
+                    style={styles.legacyReceiptCloseBtn}
+                    onPress={() => {
+                      setShowReceiptModal(false);
+                      setSelectedPayment(null);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.legacyReceiptCloseBtnText}>Close</Text>
+                  </TouchableOpacity>
+                </>
               ) : null}
             </ScrollView>
           </View>
@@ -878,21 +890,24 @@ const styles = StyleSheet.create({
     ...shadow.raised,
   },
 
-  receiptCloseX: {
-    position: "absolute",
-    top: spacing.md,
-    right: spacing.md,
-    zIndex: 1,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: colors.mist,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
   receiptScrollArea: {
     maxHeight: 480,
+  },
+
+  legacyReceiptCloseBtn: {
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    paddingVertical: spacing.md,
+    marginTop: spacing.xl,
+  },
+
+  legacyReceiptCloseBtnText: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.textSecondary,
   },
 
   receiptImage: {
