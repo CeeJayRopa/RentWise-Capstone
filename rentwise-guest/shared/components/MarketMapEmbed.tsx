@@ -27,7 +27,7 @@ import { MARKET_LAYOUT, normalizeStallName } from "../constants/marketLayout";
 const BLUEPRINT_ASPECT_RATIO = 1048 / 672;
 const MIN_BLUEPRINT_WIDTH = 700;
 const HOTSPOT_SHRINK = 0.94;
-const MAP_CARD_BORDER_WIDTH = 5;
+const MAP_CARD_BORDER_WIDTH = 1;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 3;
 
@@ -44,18 +44,36 @@ interface Stall {
 
 interface Props {
   maxWidth?: number;
+  eyebrow?: string;
+  title?: string;
+  description?: string;
 }
 
-export default function MarketMapEmbed({ maxWidth = 1100 }: Props) {
+const PRIMARY = "#0E7C5A";
+const PRIMARY_DARK = "#0B6247";
+const TEXT_DARK = "#171A19";
+const TEXT_MUTED = "#5B6560";
+const CARD_BG = "#F4F8F5";
+
+export default function MarketMapEmbed({ maxWidth = 620, eyebrow, title, description }: Props) {
   const { width: windowWidth } = useWindowDimensions();
   const isMobile = windowWidth <= 480;
+  // Below ~980 there isn't room for a 300px text column + the map's own
+  // readable floor side by side, so the split layout collapses to a single
+  // stacked column (text above, map below) instead.
+  const isSplit = windowWidth > 980;
+  // Split mode: the map column only has whatever's left of the window after
+  // the outer card's padding + the fixed-width text column + its gap.
+  const CARD_CHROME = 36 * 2 + 300 + 48;
+  const available = isSplit ? windowWidth - CARD_CHROME : windowWidth - 32;
   // On phones, don't force the desktop-readability floor — let the map
   // shrink to fit so the whole layout is visible without horizontal
   // scrolling by default (tablet/desktop keep the floor since they have
   // the width to spare and benefit from the extra legibility).
-  const blueprintWidth = isMobile
-    ? Math.min(windowWidth - 32, maxWidth)
-    : Math.max(MIN_BLUEPRINT_WIDTH, Math.min(windowWidth - 32, maxWidth));
+  const blueprintWidth =
+    isMobile || isSplit
+      ? Math.min(available, maxWidth)
+      : Math.max(MIN_BLUEPRINT_WIDTH, Math.min(available, maxWidth));
   const blueprintHeight = blueprintWidth / BLUEPRINT_ASPECT_RATIO;
 
   const [showVacant, setShowVacant] = useState(false);
@@ -130,12 +148,48 @@ export default function MarketMapEmbed({ maxWidth = 1100 }: Props) {
     </View>
   );
 
-  return (
-    <View style={styles.wrap}>
+  const actions = (
+    <View style={styles.actionCol}>
+      <TouchableOpacity style={styles.actionBtnPrimary} onPress={() => setShowVacant(true)}>
+        <Ionicons name="eye-outline" size={16} color="#fff" />
+        <Text style={styles.actionBtnPrimaryText}>Vacant Stalls</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.actionBtnOutline} onPress={() => router.push("/ar-view")}>
+        <Ionicons name="sparkles-outline" size={16} color={PRIMARY_DARK} />
+        <Text style={styles.actionBtnOutlineText}>AR Viewing</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const textCol = (
+    <View style={[styles.textCol, !isSplit && styles.textColStacked]}>
+      {eyebrow && <Text style={styles.eyebrow}>{eyebrow}</Text>}
+      {title && <Text style={styles.blueprintTitle}>{title}</Text>}
+      {description && <Text style={styles.blueprintDesc}>{description}</Text>}
+      {actions}
+    </View>
+  );
+
+  const mapColumn = (
+    <View style={[styles.mapCol, !isSplit && styles.mapColStacked]}>
       <View style={styles.mapCardOuter}>
         <View style={styles.mapCard}>
           {Platform.OS === "web" ? (
             <TransformWrapper
+              // react-zoom-pan-pinch's centerOnInit only ever runs once, the
+              // moment this component first mounts -- on web, windowWidth
+              // (and therefore blueprintWidth) can still read a stale/wrong
+              // value on that very first render before hydration settles to
+              // the real viewport size, especially on phones. When that
+              // happens, centerOnInit computes its centering offset against
+              // the WRONG size and never gets a chance to redo it once the
+              // real size arrives a moment later, panning the content
+              // off-center so one edge renders outside the clipped wrapper
+              // bounds -- the "map looks cut off" symptom. Keying on the
+              // final computed size forces a clean remount (and a fresh
+              // centerOnInit) whenever it actually changes, instead of
+              // trusting the library to notice on its own.
+              key={`${Math.round(blueprintWidth)}x${Math.round(blueprintHeight)}`}
               initialScale={MIN_ZOOM}
               minScale={MIN_ZOOM}
               maxScale={MAX_ZOOM}
@@ -163,7 +217,19 @@ export default function MarketMapEmbed({ maxWidth = 1100 }: Props) {
                       1x is a no-op on its own: limitToBounds + content being
                       exactly wrapper-sized there means there's nowhere to pan
                       to, so no need to actively disable it via state. */}
-                  <TransformComponent wrapperStyle={{ width: blueprintWidth, height: blueprintHeight }}>
+                  {/* Rounding + clipping here too (not just on the parent
+                      mapCard) -- this is the actual DOM node whose bounds
+                      define the pan/zoom viewport, so relying only on an
+                      ancestor's overflow:hidden left the square corners of
+                      the content poking past the card's rounded ones. */}
+                  <TransformComponent
+                    wrapperStyle={{
+                      width: blueprintWidth,
+                      height: blueprintHeight,
+                      borderRadius: 18,
+                      overflow: "hidden",
+                    }}
+                  >
                     {blueprintContent}
                   </TransformComponent>
 
@@ -211,13 +277,24 @@ export default function MarketMapEmbed({ maxWidth = 1100 }: Props) {
         )}
       </View>
 
-      <View style={styles.actionRow}>
-        <TouchableOpacity style={styles.actionBtn} onPress={() => setShowVacant(true)}>
-          <Text style={styles.actionBtnText}>Vacant Stalls</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionBtn} onPress={() => router.push("/ar-view")}>
-          <Text style={styles.actionBtnText}>AR Viewing</Text>
-        </TouchableOpacity>
+      <View style={styles.legendRow}>
+        <View style={styles.legendItem}>
+          <View style={styles.legendSwatchOccupied} />
+          <Text style={styles.legendLabel}>Occupied</Text>
+        </View>
+        <View style={styles.legendItem}>
+          <View style={styles.legendSwatchVacant} />
+          <Text style={styles.legendLabel}>Vacant</Text>
+        </View>
+      </View>
+    </View>
+  );
+
+  return (
+    <View style={styles.wrap}>
+      <View style={[styles.card, isSplit ? styles.cardSplit : styles.cardStacked]}>
+        {textCol}
+        {mapColumn}
       </View>
     </View>
   );
@@ -225,9 +302,90 @@ export default function MarketMapEmbed({ maxWidth = 1100 }: Props) {
 
 const styles = StyleSheet.create({
   wrap: { width: "100%", alignItems: "center" },
+  card: {
+    width: "100%",
+    maxWidth: 1180,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: "#EAEEE9",
+    padding: 36,
+  },
+  cardSplit: { flexDirection: "row", alignItems: "flex-start", gap: 48 },
+  cardStacked: { flexDirection: "column", padding: 24, gap: 28 },
+  textCol: { width: 300, flexShrink: 0 },
+  textColStacked: { width: "100%" },
+  eyebrow: {
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 1.5,
+    color: TEXT_MUTED,
+    marginBottom: 10,
+  },
+  blueprintTitle: {
+    fontSize: 30,
+    fontWeight: "800",
+    color: TEXT_DARK,
+    marginBottom: 14,
+  },
+  blueprintDesc: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: TEXT_MUTED,
+    marginBottom: 24,
+  },
+  actionCol: { gap: 12 },
+  actionBtnPrimary: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+    backgroundColor: PRIMARY_DARK,
+    borderRadius: 28,
+  },
+  actionBtnPrimaryText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  actionBtnOutline: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+    backgroundColor: "#fff",
+    borderRadius: 28,
+    borderWidth: 1.5,
+    borderColor: "#D9E0DB",
+  },
+  actionBtnOutlineText: { color: PRIMARY_DARK, fontSize: 15, fontWeight: "700" },
+  mapCol: { flex: 1, minWidth: 0, alignItems: "center" },
+  mapColStacked: { width: "100%" },
+  legendRow: {
+    flexDirection: "row",
+    gap: 20,
+    marginTop: 16,
+    alignSelf: "flex-start",
+  },
+  legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
+  legendSwatchOccupied: {
+    width: 12,
+    height: 12,
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: "#C9D1CB",
+    backgroundColor: "#fff",
+  },
+  legendSwatchVacant: {
+    width: 12,
+    height: 12,
+    borderRadius: 3,
+    backgroundColor: "rgba(76,175,80,0.55)",
+  },
+  legendLabel: { fontSize: 12.5, color: TEXT_MUTED, fontWeight: "600" },
   mapCardOuter: {
     position: "relative",
     alignSelf: "center",
+    width: "100%",
+    borderRadius: 18,
     // Clips the popup to the map card's own box — it should never visually
     // spill onto the "Vacant Stalls"/"AR Viewing" buttons below.
     overflow: "hidden",
@@ -236,11 +394,11 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     borderWidth: MAP_CARD_BORDER_WIDTH,
     borderStyle: "solid",
-    borderColor: "#0E7C5A",
-    borderRadius: 20,
+    borderColor: "#E4E8E5",
+    borderRadius: 18,
     padding: 0,
     overflow: "hidden",
-    backgroundColor: "#FFFFFF",
+    backgroundColor: CARD_BG,
   },
   hScroll: { flexGrow: 1, alignItems: "center", justifyContent: "center" },
   blueprintContainer: {
@@ -281,21 +439,6 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-  actionRow: {
-    flexDirection: "row",
-    gap: 16,
-    marginTop: 20,
-    width: "100%",
-    maxWidth: 420,
-  },
-  actionBtn: {
-    flex: 1,
-    paddingVertical: 14,
-    backgroundColor: "#0E7C5A",
-    borderRadius: 24,
-    alignItems: "center",
-  },
-  actionBtnText: { color: "#fff", fontSize: 15, fontWeight: "600" },
   popupOverlay: {
     position: "absolute",
     top: 0,

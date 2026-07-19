@@ -13,7 +13,6 @@ import { Ionicons } from "@expo/vector-icons";
 import React, { useRef, useState } from "react";
 import NavigableMap from "../shared/components/NavigableMap";
 import MarketMapEmbed from "../shared/components/MarketMapEmbed";
-import CategoryCarousel from "../shared/components/CategoryCarousel";
 import { useBreakpoints } from "../shared/hooks/useBreakpoints";
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
@@ -31,51 +30,54 @@ const HERO_MUTED = "#B9D9CC";
 const FOOTER_BG = "#12201C";
 const FOOTER_COPY = "#5C7268";
 const WHITE = "#FFFFFF";
+// Category rows background — a near-white mint, subtler than PRIMARY_TINT.
+const CATEGORY_BG = "#F6FBF7";
+const CREAM_LINE = "#DCD0B8";
+const CREAM_TAG_BG = "#FBF8F1";
 
 const FACEBOOK_URL = "https://www.facebook.com/kadomeng.talipapa";
 
 // ─── Data ────────────────────────────────────────────────────────────────────
-// Each category's carousel reuses its own single photo across 7 placeholder
-// slots for now — swap individual `image` entries for real per-stall photos
-// once they're ready.
-function repeatImage(image: any, count: number) {
-  return Array.from({ length: count }, (_, i) => ({ id: i + 1, image }));
-}
-
-const WET_MARKET_IMG = require("../assets/wet_market.png");
-const DRY_MARKET_IMG = require("../assets/dry_market.png");
-const HOME_ESSENTIALS_IMG = require("../assets/home_essentials.png");
+const WET_MARKET_IMG_1 = require("../assets/wet-market/Wet_Market_1.png");
+const WET_MARKET_IMG_2 = require("../assets/wet-market/Wet_Market_2.png");
+const DRY_MARKET_IMG_1 = require("../assets/dry-market/Dry_market_1.png");
+const DRY_MARKET_IMG_2 = require("../assets/dry-market/Dry_market_2.png");
+const HOME_ESSENTIALS_IMG_1 = require("../assets/home-essentials/Home_Essentials_1.png");
+const HOME_ESSENTIALS_IMG_2 = require("../assets/home-essentials/Home_Essentials_2.png");
 
 const CATEGORIES = [
   {
     slug: "wet-market",
-    title: "Wet Market",
-    teaser:
-      "Fresh seafood, farm-raised meats, and locally harvested produce sourced and delivered daily.",
-    image: WET_MARKET_IMG,
-    icon: "fish-outline",
+    label: "Wet Market",
+    heading: "Fresh from the coast, on ice by dawn.",
+    description:
+      "Bangus, tilapia, tanigue, hipon, and pusit the day's catch laid out fresh on ice each morning, straight off the boat before the first jeepney rolls in.",
+    tags: ["Bangus", "Tilapia", "Tanigue", "Hipon", "Pusit", "Alimango"],
+    image: WET_MARKET_IMG_1,
+    secondaryImage: WET_MARKET_IMG_2 as any,
     route: "/wet-market",
-    cards: repeatImage(WET_MARKET_IMG, 7),
   },
   {
     slug: "dry-market",
-    title: "Dry Market",
-    teaser:
-      "Rice, grains, canned goods, and pantry staples — plus local and imported spices.",
-    image: DRY_MARKET_IMG,
-    icon: "basket-outline",
+    label: "Dry Market",
+    heading: "Straight from the farm, piled high daily.",
+    description:
+      "Onions, garlic, tomatoes, potatoes, eggplant, and carrots piled high, alongside eggs and packaged snacks the everyday produce run for the week's cooking.",
+    tags: ["Sibuyas", "Bawang", "Kamatis", "Patatas", "Talong", "Karot"],
+    image: DRY_MARKET_IMG_1,
+    secondaryImage: DRY_MARKET_IMG_2 as any,
     route: "/dry-market",
-    cards: repeatImage(DRY_MARKET_IMG, 7),
   },
   {
     slug: "home-essentials",
-    title: "Home Essentials",
-    teaser:
-      "Kitchenware, cleaning supplies, and everyday household items at market prices.",
-    image: HOME_ESSENTIALS_IMG,
-    icon: "home-outline",
+    label: "Home Essentials",
+    heading: "The stall you didn't know you needed.",
+    description:
+      "Bottled cooking oil, sachets, and hanging rows of snacks the everyday sari-sari staples every household restocks on the way home.",
+    tags: ["Mantika", "Sabon", "Asukal", "Kape", "Toyo"],
+    image: HOME_ESSENTIALS_IMG_1,
+    secondaryImage: HOME_ESSENTIALS_IMG_2 as any,
     route: "/home-essentials",
-    cards: repeatImage(HOME_ESSENTIALS_IMG, 7),
   },
 ] as const;
 
@@ -98,34 +100,70 @@ export default function GuestLanding() {
   // Scroll distance "owned" by each category, as a multiple of the viewport
   // height — higher means more scrolling is required to advance to the next
   // category (a single scroll/swipe shouldn't skip straight past one).
-  const CATEGORY_SCROLL_LENGTH = PIN_H * 1.5;
+  const CATEGORY_SCROLL_LENGTH = PIN_H * 1.4;
 
   const scrollRef = useRef<ScrollView>(null);
   const marketMapSectionY = useRef(0);
   const contactSectionY = useRef(0);
-  const [scrollY, setScrollY] = useState(0);
   const [activeCatIndex, setActiveCatIndex] = useState(0);
-  // Continuous 0-1 progress across the whole pinned category track (not just
-  // the rounded-off active index) — used to drive the Wet Market carousel.
-  const [catProgress, setCatProgress] = useState(0);
 
-  // Category panel crossfade — eased by hand every frame (same reason as the
-  // carousel: CSS transitions on toggled opacity weren't reliably animating
-  // in this RN-Web setup, so it's driven imperatively instead).
+  // Panel crossfade — eased by hand every frame, since CSS transitions on
+  // toggled opacity weren't reliably animating in this RN-Web setup.
   const activeCatIndexRef = useRef(0);
   const catPanelRefs = useRef<any[]>([]);
   const catPanelOpacity = useRef<number[]>(CATEGORIES.map((_, i) => (i === 0 ? 1 : 0)));
+  // Image "pop": a real spring (velocity + damping), not just an ease,
+  // so the incoming category's photo overshoots past its resting scale and
+  // settles back instead of just fading in flat — the tiny bounce Parsec's
+  // site uses on its own scroll-driven feature illustrations. Kept on a
+  // separate ref/node from the opacity crossfade above since only the photo
+  // itself should bounce, not the badge label sitting on top of it.
+  const catImageRefs = useRef<any[]>([]);
+  const catImageScale = useRef<number[]>(CATEGORIES.map((_, i) => (i === 0 ? 1 : 0.88)));
+  const catImageVelocity = useRef<number[]>(CATEGORIES.map(() => 0));
+  // Same spring feel on the text column (number/heading/description/tags),
+  // but as a rise-up translateY rather than a scale -- scaling multi-line
+  // text from a center origin reads as blurry/jittery, a translateY pop
+  // doesn't have that problem and still gives the same bounce-into-place
+  // motion as the image.
+  const catTextRefs = useRef<any[]>([]);
+  const catTextOffset = useRef<number[]>(CATEGORIES.map((_, i) => (i === 0 ? 0 : 16)));
+  const catTextVelocity = useRef<number[]>(CATEGORIES.map(() => 0));
   React.useEffect(() => {
     if (Platform.OS !== "web") return;
     let rafId: number;
     const EASE = 0.07;
+    const SPRING_STIFFNESS = 0.12;
+    const SPRING_DAMPING = 0.72;
     const loop = () => {
       CATEGORIES.forEach((_, i) => {
-        const target = activeCatIndexRef.current === i ? 1 : 0;
+        const isActive = activeCatIndexRef.current === i;
+
+        const target = isActive ? 1 : 0;
         catPanelOpacity.current[i] += (target - catPanelOpacity.current[i]) * EASE;
         const node = catPanelRefs.current[i];
         if (node && node.style) {
           node.style.opacity = String(catPanelOpacity.current[i]);
+        }
+
+        const scaleTarget = isActive ? 1 : 0.88;
+        catImageVelocity.current[i] =
+          (catImageVelocity.current[i] + (scaleTarget - catImageScale.current[i]) * SPRING_STIFFNESS) *
+          SPRING_DAMPING;
+        catImageScale.current[i] += catImageVelocity.current[i];
+        const imgNode = catImageRefs.current[i];
+        if (imgNode && imgNode.style) {
+          imgNode.style.transform = `scale(${catImageScale.current[i]})`;
+        }
+
+        const offsetTarget = isActive ? 0 : 16;
+        catTextVelocity.current[i] =
+          (catTextVelocity.current[i] + (offsetTarget - catTextOffset.current[i]) * SPRING_STIFFNESS) *
+          SPRING_DAMPING;
+        catTextOffset.current[i] += catTextVelocity.current[i];
+        const textNode = catTextRefs.current[i];
+        if (textNode && textNode.style) {
+          textNode.style.transform = `translateY(${catTextOffset.current[i]}px)`;
         }
       });
       rafId = requestAnimationFrame(loop);
@@ -140,7 +178,6 @@ export default function GuestLanding() {
 
   const handleScroll = (e: any) => {
     const y = e.nativeEvent.contentOffset.y;
-    setScrollY(y);
 
     const total = catTrackHeight.current - PIN_H;
     if (total > 0) {
@@ -152,7 +189,6 @@ export default function GuestLanding() {
       );
       activeCatIndexRef.current = idx;
       setActiveCatIndex(idx);
-      setCatProgress(progress);
     }
   };
 
@@ -217,15 +253,6 @@ export default function GuestLanding() {
       }
 
 
-      /* Pinned category crossfade */
-      .rw-pin-panel img {
-        transform: scale(1.12);
-        transition: transform 6s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.7s ease;
-      }
-      .rw-pin-panel.rw-pin-active img {
-        transform: scale(1);
-      }
-
       /* Social chips */
       .rw-social-chip {
         transition: transform 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
@@ -235,16 +262,6 @@ export default function GuestLanding() {
         transform: translateY(-2px);
         border-color: ${PRIMARY} !important;
         background-color: ${PRIMARY} !important;
-      }
-
-      /* Back to top */
-      .rw-back-top {
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
-        cursor: pointer;
-      }
-      .rw-back-top:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 14px 28px rgba(15,25,20,0.28) !important;
       }
 
     `;
@@ -309,46 +326,46 @@ export default function GuestLanding() {
   // own centered row) — reuse the same 30% desktop already proves fits 3
   // per row cleanly, it's a percentage so it scales fine at tablet widths too.
   const cardPct = isMobile ? "100%" : "30%";
-  const heroFontSize = isMobile ? 30 : isTablet ? 32 : 42;
-  // ~75-80% of the previous 260px mobile cap, per the hero-section mobile spec.
-  const mobileCircleSize = Math.min(width * 0.7, isMobile ? 200 : 340);
+  const heroFontSize = isMobile ? 34 : isTablet ? 44 : 54;
   // Hero-only override — increases side padding on mobile without touching
   // `hPad`, which every other section on the page still relies on.
   const heroPadH = isMobile ? 24 : hPad;
   // Buttons stay side-by-side down to 390px; below that they stack full-width.
   const isTinyMobile = isMobile && width < 390;
-  // Tablet gets its own side-by-side layout (text ~52%, image ~42% of the
-  // available hero content width) instead of inheriting the mobile stack.
-  const heroContentWidth = width - heroPadH * 2;
-  const tabletCircleSize = Math.min(heroContentWidth * 0.42, 320);
 
-  // Desktop's produce circle is absolutely positioned (bleeding off the right edge via
-  // `right: -60` — see heroProduceImg), and the text column next to it has its own
-  // `marginLeft: 48`. These two used to be computed completely independently (image sized
-  // from raw viewport width, text sized from a fixed 44%), so they only happened to clear
-  // each other at very wide screens (1920px+) — at narrower "just barely desktop" widths
-  // (~1024-1300px), the circle's left edge actually lands underneath the text column.
-  // Fixed by deriving the image's max width FROM the space left over after the text column
-  // (instead of the other way around), guaranteeing a real gap between them at any width.
-  const HERO_IMG_RIGHT_BLEED = 60;
-  const HERO_TEXT_MARGIN_LEFT = 48;
-  const HERO_TEXT_IMAGE_GAP = 48;
-  // Unchanged from the original 44% — the fix only needed to make the image aware of
-  // this value, not to shrink the text column itself.
-  const desktopTextWidth = heroContentWidth * 0.44;
-  const heroImgWidth = Math.min(
-    width * 0.8, // don't get absurdly huge relative to the viewport
-    1180, // absolute cap, regardless of viewport width
-    // space actually left over after padding, the text column, and both gaps — the
-    // constraint that matters on narrower desktop widths, where the other two don't bind
-    width +
-      HERO_IMG_RIGHT_BLEED -
-      heroPadH -
-      HERO_TEXT_MARGIN_LEFT -
-      desktopTextWidth -
-      HERO_TEXT_IMAGE_GAP
+  // Shared between the pinned (desktop/tablet) and stacked (mobile) category
+  // layouts so the number/heading/description/tags markup isn't duplicated.
+  const renderCategoryText = (cat: (typeof CATEGORIES)[number], compact?: boolean) => (
+    <>
+      <Text style={[styles.marketRowEyebrow, isDesktop && { fontSize: 13.5 }]}>{cat.label}</Text>
+      <Text
+        style={[
+          styles.marketRowHeading,
+          { fontSize: isMobile ? 26 : isDesktop ? 40 : compact ? 30 : 34 },
+        ]}
+      >
+        {cat.heading}
+      </Text>
+      <Text
+        style={[
+          styles.marketRowDesc,
+          compact && { marginBottom: 20 },
+          isDesktop && { fontSize: 17.5, lineHeight: 28 },
+        ]}
+      >
+        {cat.description}
+      </Text>
+
+      <Text style={[styles.marketRowFindLabel, isDesktop && { fontSize: 13 }]}>WHAT YOU'LL FIND</Text>
+      <View style={styles.marketRowTags}>
+        {cat.tags.map((tag) => (
+          <View key={tag} style={[styles.marketRowTag, isDesktop && styles.marketRowTagDesktop]}>
+            <Text style={[styles.marketRowTagText, isDesktop && { fontSize: 15 }]}>{tag}</Text>
+          </View>
+        ))}
+      </View>
+    </>
   );
-  const heroImgHeight = heroImgWidth / 1.7;
 
   return (
     <View style={styles.screen}>
@@ -362,63 +379,27 @@ export default function GuestLanding() {
         <View
           style={[
             styles.hero,
-            { minHeight: isDesktop ? ("100vh" as any) : isMobile ? 480 : 560 },
+            { minHeight: isDesktop ? 640 : isMobile ? 480 : 560 },
           ]}
         >
-          {/* Market photo background */}
-          <Image
-            source={require("../assets/Ka_Domeng_background.png")}
-            style={[styles.heroBlueprintBg, isTablet && { opacity: 0.25 }]}
-            resizeMode="cover"
-          />
-          {/* Dark-green gradient overlay */}
+          {/* Solid dark-green base + a faint diagonal mesh grid and a soft
+              glow accent — an abstract, tech-forward feel per the reference,
+              replacing the real market photo the hero used to bleed in from
+              the right. Web-only (gradients aren't a real style prop). */}
           <View
             style={[
-              styles.heroOverlay,
+              StyleSheet.absoluteFill,
               Platform.OS === "web"
                 ? ({
-                    backgroundImage:
-                      "linear-gradient(to right, rgba(10,31,26,0.90) 40%, rgba(10,31,26,0.35) 100%)",
-                    backgroundColor: undefined,
+                    backgroundImage: `
+                      repeating-linear-gradient(120deg, rgba(76,175,120,0.10) 0px, rgba(76,175,120,0.10) 1px, transparent 1px, transparent 64px),
+                      repeating-linear-gradient(60deg, rgba(76,175,120,0.10) 0px, rgba(76,175,120,0.10) 1px, transparent 1px, transparent 64px),
+                      radial-gradient(circle at 84% 18%, rgba(76,175,120,0.30), transparent 45%)
+                    `,
                   } as any)
                 : null,
             ]}
           />
-
-          {/* Produce bag photo — bleeds off the right edge like the reference.
-              Vertically centered via top:0/bottom:0 (see heroProduceImg) rather than a
-              fixed pixel offset, so it stays correctly positioned at any monitor height —
-              a fixed `bottom` value tuned against a tall screen clipped the top of the
-              circle off on shorter common laptop resolutions like 1366x768. */}
-          {isDesktop && (
-            <View
-              style={[
-                styles.heroProduceImg,
-                {
-                  width: heroImgWidth,
-                  alignItems: "center",
-                  justifyContent: "center",
-                },
-              ]}
-            >
-              {/* Circular "card" — image is clipped inside it, not just floating on top */}
-              <View
-                style={{
-                  width: heroImgHeight * 0.9,
-                  height: heroImgHeight * 0.9,
-                  borderRadius: (heroImgHeight * 0.9) / 2,
-                  backgroundColor: PRIMARY,
-                  overflow: "hidden",
-                }}
-              >
-                <Image
-                  source={require("../assets/fruits and vegetable on a bag.png")}
-                  style={{ width: "100%", height: "100%" }}
-                  resizeMode="cover"
-                />
-              </View>
-            </View>
-          )}
 
           <View
             style={[
@@ -427,30 +408,27 @@ export default function GuestLanding() {
                 paddingHorizontal: heroPadH,
                 paddingVertical: isDesktop ? 0 : isMobile ? 40 : 60,
                 justifyContent: "center",
-                flexDirection: isTablet ? "row" : "column",
-                alignItems: isTablet ? "center" : undefined,
-                gap: isTablet ? 40 : undefined,
+                alignItems: "center",
               },
             ]}
           >
-            <View
-              style={{
-                maxWidth: isDesktop ? desktopTextWidth : isTablet ? "52%" : "100%",
-                gap: isMobile ? 0 : 16,
-                width: isTablet ? "52%" : "100%",
-                marginLeft: isDesktop ? 48 : 0,
-              }}
-            >
-              <Text style={[styles.heroEyebrow, isMobile && { fontSize: 12, marginBottom: 8 }]}>
+            <View style={{ maxWidth: 720, alignItems: "center", gap: isMobile ? 0 : 16 }}>
+              <Text
+                style={[
+                  styles.heroEyebrow,
+                  { textAlign: "center" },
+                  isMobile && { fontSize: 12, marginBottom: 8 },
+                ]}
+              >
                 Ka Domeng Talipapa Market
               </Text>
               <Text
                 style={[
                   styles.heroHeadline,
                   {
+                    textAlign: "center",
                     fontSize: heroFontSize,
                     lineHeight: heroFontSize * (isMobile ? 1.1 : 1.15),
-                    maxWidth: isMobile ? 320 : undefined,
                   },
                   isMobile && { marginBottom: 16 },
                 ]}
@@ -460,7 +438,7 @@ export default function GuestLanding() {
               <Text
                 style={[
                   styles.heroSubtext,
-                  { fontSize: isMobile ? 14 : 16 },
+                  { textAlign: "center", fontSize: isMobile ? 14 : 16, maxWidth: 520 },
                   isMobile && { marginBottom: 24, maxWidth: 340 },
                 ]}
                 numberOfLines={isMobile ? 2 : undefined}
@@ -499,51 +477,17 @@ export default function GuestLanding() {
                 </TouchableOpacity>
               </View>
             </View>
-
-            {!isDesktop && (
-              <View
-                style={{
-                  width: isTablet ? tabletCircleSize : mobileCircleSize,
-                  height: isTablet ? tabletCircleSize : mobileCircleSize,
-                  borderRadius: (isTablet ? tabletCircleSize : mobileCircleSize) / 2,
-                  backgroundColor: PRIMARY,
-                  overflow: "hidden",
-                  alignSelf: "center",
-                  marginTop: isTablet ? 0 : isMobile ? 32 : 24,
-                }}
-              >
-                <Image
-                  source={require("../assets/fruits and vegetable on a bag.png")}
-                  style={{ width: "100%", height: "100%" }}
-                  resizeMode="cover"
-                />
-              </View>
-            )}
           </View>
         </View>
 
-        {/* ── About header ─────────────────────────────────────────────────── */}
-        <View
-          style={[
-            styles.section,
-            { backgroundColor: BG, paddingVertical: secPad, paddingHorizontal: hPad, overflow: "hidden" },
-          ]}
-          {...({ className: "rw-reveal" } as any)}
-        >
-          <View style={{ alignItems: "center" }}>
-            <Text style={[styles.sectionTitle, { fontSize: isMobile ? 24 : 40 }]}>
-              Your One-Stop Public Market
-            </Text>
-            <Text
-              style={[styles.sectionDesc, { maxWidth: isMobile ? "100%" : 600, marginBottom: 0 }]}
-            >
-              Ka Domeng Talipapa is a thriving community market offering fresh
-              produce, dry goods, and household essentials all under one roof.
-            </Text>
-          </View>
-        </View>
-
-        {/* ── Category pinned crossfade (all breakpoints) ────────────────────── */}
+        {/* ── Market sections (numbered, alternating image/text) ─────────────── */}
+        {/* Pinned scroll-crossfade now runs at every breakpoint -- only the
+            inner layout changes (side-by-side on desktop, stacked on
+            tablet/phone, matching each one's own available width). The
+            "Your One-Stop Public Market" title is repeated inside each
+            category panel's own content instead of living as a separate
+            shared header above them -- that read as its own floating card
+            with a gap under it, rather than being part of the categories. */}
         <View
           style={{ height: CATEGORY_SCROLL_LENGTH * CATEGORIES.length }}
           onLayout={(e) => {
@@ -558,49 +502,139 @@ export default function GuestLanding() {
               Platform.OS === "web" ? ({ position: "sticky", top: 0 } as any) : null,
             ]}
           >
-            {CATEGORIES.map((cat, i) => (
-              <View
-                key={cat.slug}
-                ref={(el) => {
-                  catPanelRefs.current[i] = el;
-                }}
-                style={[
-                  styles.catPinPanel,
-                  { opacity: i === 0 ? 1 : 0, zIndex: activeCatIndex === i ? 2 : 1 },
-                ]}
-                pointerEvents={activeCatIndex === i ? "auto" : "none"}
-                {...({
-                  className: `rw-pin-panel${activeCatIndex === i ? " rw-pin-active" : ""}`,
-                } as any)}
-              >
-                <Image source={cat.image} style={styles.catPinImg} resizeMode="cover" />
+            {CATEGORIES.map((cat, i) => {
+              const reversed = i % 2 === 1;
+
+              let imgW: number;
+              let imgH: number;
+              if (isDesktop) {
+                imgH = Math.min(PIN_H * 0.56, 460);
+                // Capped by the actual available width too, not just PIN_H
+                // -- a laptop-height screen at a narrow "just barely
+                // desktop" width (or an unmaximized browser window) could
+                // otherwise ask for an image wider than there's room for
+                // next to a readable text column, squeezing it to nothing.
+                const rowContentWidth = Math.min(width - hPad * 2, 1180);
+                const TEXT_MIN_WIDTH = 320;
+                const IMAGE_TEXT_GAP = 56;
+                const maxImgWByWidth = Math.max(240, rowContentWidth - TEXT_MIN_WIDTH - IMAGE_TEXT_GAP);
+                imgW = Math.min(PIN_H * 0.74, 540, maxImgWByWidth);
+              } else {
+                // Explicit pixel width/height instead of the stylesheet's
+                // `aspectRatio` -- that wasn't reliably respected by these
+                // source photos on web (each rendered at its own real,
+                // sometimes very tall portrait-phone-photo aspect instead
+                // of the intended box).
+                imgW = (width - hPad * 2) * 0.85;
+                imgH = imgW / 1.05;
+              }
+              const insetW = imgW * 0.4;
+              const insetH = insetW * 0.84;
+              const insetPokeOut = insetH * 0.4;
+
+              return (
                 <View
+                  key={cat.slug}
+                  ref={(el) => {
+                    catPanelRefs.current[i] = el;
+                  }}
                   style={[
-                    styles.catPinOverlay,
-                    Platform.OS === "web"
-                      ? ({
-                          backgroundImage:
-                            "linear-gradient(to top, rgba(10,31,26,0.92) 15%, rgba(10,31,26,0.2) 65%)",
-                          backgroundColor: undefined,
-                        } as any)
-                      : null,
+                    styles.catPinPanel,
+                    { opacity: i === 0 ? 1 : 0, zIndex: activeCatIndex === i ? 2 : 1 },
                   ]}
-                />
-                <Text
-                  style={[
-                    styles.catPinTitleTop,
-                    { fontSize: isMobile ? 26 : isTablet ? 36 : 46, top: isMobile ? 32 : 56 },
-                  ]}
+                  pointerEvents={activeCatIndex === i ? "auto" : "none"}
+                  {...({
+                    className: `rw-pin-panel${activeCatIndex === i ? " rw-pin-active" : ""}`,
+                  } as any)}
                 >
-                  {cat.title}
-                </Text>
-                <CategoryCarousel
-                  cards={cat.cards}
-                  panelWidth={width}
-                  bottomText={cat.teaser}
-                />
-              </View>
-            ))}
+                  {(() => {
+                    const content = (
+                      <>
+                        <Text
+                          style={[
+                            styles.sectionTitle,
+                            { fontSize: isMobile ? 18 : 24, paddingHorizontal: hPad },
+                          ]}
+                        >
+                          Your One-Stop Public Market
+                        </Text>
+                        <View
+                          style={[
+                            styles.pinRowInner,
+                            isDesktop
+                              ? { flexDirection: reversed ? "row-reverse" : "row", paddingHorizontal: hPad }
+                              : { flexDirection: "column", paddingHorizontal: hPad },
+                          ]}
+                        >
+                        <View style={{ width: imgW, position: "relative", marginLeft: isDesktop ? 0 : 32 }}>
+                          <Image
+                            ref={(el) => {
+                              catImageRefs.current[i] = el;
+                            }}
+                            source={cat.image}
+                            style={{ width: imgW, height: imgH, borderRadius: 20 }}
+                            resizeMode="cover"
+                          />
+                          {cat.secondaryImage && (
+                            <Image
+                              source={cat.secondaryImage}
+                              style={[
+                                styles.catCollageInset,
+                                { width: insetW, height: insetH, bottom: -insetPokeOut, left: -insetW * 0.2 },
+                              ]}
+                              resizeMode="cover"
+                            />
+                          )}
+                        </View>
+
+                        <View
+                          ref={(el) => {
+                            catTextRefs.current[i] = el;
+                          }}
+                          style={[
+                            styles.marketRowTextCol,
+                            isDesktop
+                              ? reversed
+                                ? { marginRight: 56 }
+                                : { marginLeft: 56 }
+                              : {
+                                  flex: 0,
+                                  width: "100%",
+                                  maxWidth: "100%",
+                                  marginTop: 28 + (cat.secondaryImage ? insetPokeOut : 0),
+                                },
+                          ]}
+                        >
+                          {renderCategoryText(cat, true)}
+                        </View>
+                      </View>
+                      </>
+                    );
+
+                    // Safety net for short phone/tablet viewports: stacked
+                    // image + full text block (heading, description, up to
+                    // 6 tag chips) can end up taller than what's left of
+                    // PIN_H once the title above it is accounted for. Rather
+                    // than trust every device to have enough room and let
+                    // overflow:hidden silently clip whatever doesn't fit, a
+                    // scroll view lets it still all be reachable. Desktop's
+                    // side-by-side layout uses far less vertical space, so
+                    // it keeps the plain (non-scrolling) centered box.
+                    return isDesktop ? (
+                      content
+                    ) : (
+                      <ScrollView
+                        style={{ width: "100%", height: "100%" }}
+                        contentContainerStyle={{ flexGrow: 1, justifyContent: "center", alignItems: "center" }}
+                        showsVerticalScrollIndicator={false}
+                      >
+                        {content}
+                      </ScrollView>
+                    );
+                  })()}
+                </View>
+              );
+            })}
           </View>
         </View>
 
@@ -642,20 +676,18 @@ export default function GuestLanding() {
 
         {/* ── 2D Market View (embedded, no separate page) ─────────────────────── */}
         <View
-          style={[styles.section, { backgroundColor: BG, paddingVertical: secPad, paddingHorizontal: hPad }]}
+          style={[styles.section, { backgroundColor: PRIMARY_TINT, paddingVertical: secPad, paddingHorizontal: hPad }]}
           onLayout={(e) => {
             marketMapSectionY.current = e.nativeEvent.layout.y;
           }}
           {...({ className: "rw-reveal" } as any)}
         >
-          <Text style={[styles.sectionTitle, { fontSize: isMobile ? 24 : isTablet ? 32 : 40 }]}>
-            2D Market View
-          </Text>
-          <Text style={[styles.sectionDesc, { maxWidth: isMobile ? "100%" : 560 }]}>
-            Tap any stall to see its status, or check what's vacant right now.
-          </Text>
-
-          <MarketMapEmbed maxWidth={980} />
+          <MarketMapEmbed
+            maxWidth={760}
+            eyebrow="2D MARKET VIEW"
+            title="Market Blueprint"
+            description="Tap any stall to see its status, or check what's vacant right now."
+          />
         </View>
 
         {/* ── Find Us (Mapbox) ─────────────────────────────────────────────── */}
@@ -798,20 +830,6 @@ export default function GuestLanding() {
           </Text>
         </View>
       </ScrollView>
-
-      {/* ── Back to top ──────────────────────────────────────────────────── */}
-      {scrollY > 500 && (
-        <TouchableOpacity
-          style={[
-            styles.backToTop,
-            Platform.OS === "web" ? ({ position: "fixed" } as any) : null,
-          ]}
-          onPress={() => scrollRef.current?.scrollTo({ y: 0, animated: true })}
-          {...({ className: "rw-back-top" } as any)}
-        >
-          <Ionicons name="arrow-up" size={20} color={WHITE} />
-        </TouchableOpacity>
-      )}
     </View>
   );
 }
@@ -828,32 +846,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     overflow: "hidden",
   },
-  heroBlueprintBg: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    width: "100%",
-    height: "100%",
-    opacity: 0.5,
-  },
-  heroOverlay: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: "rgba(10,31,26,0.8)",
-  },
   heroContent: {
     flex: 1,
-  },
-  heroProduceImg: {
-    position: "absolute",
-    right: -60,
-    top: 0,
-    bottom: 0,
   },
   heroEyebrow: {
     color: PRIMARY,
@@ -932,39 +926,86 @@ const styles = StyleSheet.create({
     maxWidth: 1100,
   },
 
-  // Pinned category crossfade
+  // Market sections (numbered, alternating image/text)
   catPinWrap: {
     position: "relative",
     width: "100%",
     overflow: "hidden",
-    backgroundColor: HERO_DARK,
+    backgroundColor: CATEGORY_BG,
   },
   catPinPanel: {
     position: "absolute",
     top: 0, left: 0, right: 0, bottom: 0,
     overflow: "hidden",
+    justifyContent: "center",
   },
-  catPinImg: {
-    position: "absolute",
-    top: 0, left: 0, right: 0, bottom: 0,
+  pinRowInner: {
     width: "100%",
-    height: "100%",
+    maxWidth: 1180,
+    alignSelf: "center",
+    alignItems: "center",
   },
-  catPinOverlay: {
+  // Small overlapping inset photo -- only rendered when a category has a
+  // real secondaryImage set.
+  catCollageInset: {
     position: "absolute",
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: "rgba(10,31,26,0.75)",
+    bottom: -20,
+    left: -20,
+    borderRadius: 14,
+    borderWidth: 4,
+    borderColor: WHITE,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 14,
+    elevation: 6,
   },
-  catPinTitleTop: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    textAlign: "center",
-    color: WHITE,
-    fontWeight: "800",
-    letterSpacing: -0.5,
-    zIndex: 2,
+  marketRowTextCol: {
+    flex: 1,
+    maxWidth: 560,
   },
+  marketRowEyebrow: {
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 1.5,
+    color: TEXT_MUTED,
+    marginBottom: 14,
+    textTransform: "uppercase",
+  },
+  marketRowHeading: {
+    fontFamily: "Inter_800ExtraBold",
+    color: TEXT_DARK,
+    marginBottom: 16,
+  },
+  marketRowDesc: {
+    fontSize: 15.5,
+    lineHeight: 25,
+    color: TEXT_MUTED,
+    marginBottom: 28,
+    maxWidth: 460,
+  },
+  marketRowFindLabel: {
+    fontSize: 11.5,
+    fontWeight: "700",
+    letterSpacing: 1.4,
+    color: PRIMARY_DARK,
+    marginBottom: 12,
+  },
+  marketRowTags: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  marketRowTag: {
+    backgroundColor: CREAM_TAG_BG,
+    borderWidth: 1,
+    borderColor: CREAM_LINE,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  marketRowTagDesktop: { paddingHorizontal: 18, paddingVertical: 10 },
+  marketRowTagText: { fontSize: 13.5, fontWeight: "600", color: TEXT_DARK },
   // Stat cards
   statIconCircle: {
     width: 52,
@@ -1106,21 +1147,4 @@ const styles = StyleSheet.create({
   },
 
   // Back to top
-  backToTop: {
-    position: "absolute",
-    bottom: 28,
-    right: 28,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: PRIMARY,
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 14,
-    elevation: 8,
-    zIndex: 300,
-  },
 });
