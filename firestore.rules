@@ -157,6 +157,29 @@ service cloud.firestore {
       allow read, update, delete: if false;
     }
 
+    // Unauthenticated by design (public contact form) -- same validated-shape
+    // approach as arPlacementEvents above. Staff review submissions; no
+    // client, including the submitter, can read, edit, or delete them after
+    // the fact (there's no account tied to a guest submission to scope a
+    // read to in the first place).
+    match /contactMessages/{messageId} {
+      allow create: if
+        request.resource.data.keys().hasOnly(["firstName", "lastName", "email", "phone", "message", "createdAt"])
+        && request.resource.data.firstName is string
+        && request.resource.data.firstName.size() > 0 && request.resource.data.firstName.size() < 60
+        && request.resource.data.lastName is string
+        && request.resource.data.lastName.size() > 0 && request.resource.data.lastName.size() < 60
+        && request.resource.data.email is string
+        && request.resource.data.email.size() > 0 && request.resource.data.email.size() < 200
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() < 30
+        && request.resource.data.message is string
+        && request.resource.data.message.size() > 0 && request.resource.data.message.size() < 2000
+        && request.resource.data.createdAt == request.time;
+      allow read, delete: if isStaff();
+      allow update: if false;
+    }
+
     // ── archives / dailyReports (owner + admin only) ───────────────────
     match /archives/{archiveId} {
       allow read, write: if isStaff();

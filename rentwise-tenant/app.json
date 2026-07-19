@@ -30,7 +30,9 @@
           "style": "dark",
           "enforceContrast": false
         }
-      ]
+      ],
+      "@react-native-firebase/app",
+      "@react-native-firebase/app-check"
     ],
     "version": "1.0.0",
     "orientation": "portrait",

@@ -14,6 +14,7 @@ import React, { useRef, useState } from "react";
 import NavigableMap from "../shared/components/NavigableMap";
 import MarketMapEmbed from "../shared/components/MarketMapEmbed";
 import { useBreakpoints } from "../shared/hooks/useBreakpoints";
+import { submitContactMessage } from "../services/contactService";
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const PRIMARY = "#0E7C5A";
@@ -106,6 +107,65 @@ export default function GuestLanding() {
   const marketMapSectionY = useRef(0);
   const contactSectionY = useRef(0);
   const [activeCatIndex, setActiveCatIndex] = useState(0);
+
+  // ── Contact form ──────────────────────────────────────────────────────────
+  const [contactFirstName, setContactFirstName] = useState("");
+  const [contactLastName, setContactLastName] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [contactMessage, setContactMessage] = useState("");
+  const [contactSubmitting, setContactSubmitting] = useState(false);
+  const [contactStatus, setContactStatus] = useState<"idle" | "success" | "error">("idle");
+  const [contactError, setContactError] = useState("");
+
+  const handleContactSubmit = async () => {
+    const firstName = contactFirstName.trim();
+    const lastName = contactLastName.trim();
+    const email = contactEmail.trim();
+    const message = contactMessage.trim();
+
+    if (!firstName || !lastName) {
+      setContactStatus("error");
+      setContactError("Please enter your first and last name.");
+      return;
+    }
+    // Simple, deliberately permissive shape check -- this only needs to catch
+    // "clearly not an email", not validate every RFC 5322 edge case.
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setContactStatus("error");
+      setContactError("Please enter a valid email address.");
+      return;
+    }
+    if (!message) {
+      setContactStatus("error");
+      setContactError("Please let us know how we can help.");
+      return;
+    }
+
+    setContactSubmitting(true);
+    setContactStatus("idle");
+    try {
+      await submitContactMessage({
+        firstName,
+        lastName,
+        email,
+        phone: contactPhone.trim(),
+        message,
+      });
+      setContactStatus("success");
+      setContactFirstName("");
+      setContactLastName("");
+      setContactEmail("");
+      setContactPhone("");
+      setContactMessage("");
+    } catch (err) {
+      console.error("[Contact] failed to submit message:", err);
+      setContactStatus("error");
+      setContactError("Something went wrong sending your message. Please try again.");
+    } finally {
+      setContactSubmitting(false);
+    }
+  };
 
   // Panel crossfade — eased by hand every frame, since CSS transitions on
   // toggled opacity weren't reliably animating in this RN-Web setup.
@@ -787,11 +847,17 @@ export default function GuestLanding() {
                   style={[styles.contactInput, { flex: 1 }]}
                   placeholder="First name"
                   placeholderTextColor={TEXT_MUTED}
+                  value={contactFirstName}
+                  onChangeText={setContactFirstName}
+                  maxLength={60}
                 />
                 <TextInput
                   style={[styles.contactInput, { flex: 1 }]}
                   placeholder="Last name"
                   placeholderTextColor={TEXT_MUTED}
+                  value={contactLastName}
+                  onChangeText={setContactLastName}
+                  maxLength={60}
                 />
               </View>
               <TextInput
@@ -799,12 +865,19 @@ export default function GuestLanding() {
                 placeholder="Your email"
                 placeholderTextColor={TEXT_MUTED}
                 keyboardType="email-address"
+                autoCapitalize="none"
+                value={contactEmail}
+                onChangeText={setContactEmail}
+                maxLength={200}
               />
               <TextInput
                 style={styles.contactInput}
                 placeholder="Phone number"
                 placeholderTextColor={TEXT_MUTED}
                 keyboardType="phone-pad"
+                value={contactPhone}
+                onChangeText={setContactPhone}
+                maxLength={30}
               />
               <TextInput
                 style={[styles.contactInput, styles.contactTextarea]}
@@ -812,10 +885,29 @@ export default function GuestLanding() {
                 placeholderTextColor={TEXT_MUTED}
                 multiline
                 numberOfLines={4}
+                value={contactMessage}
+                onChangeText={setContactMessage}
+                maxLength={2000}
               />
 
-              <TouchableOpacity style={styles.contactSubmitBtn} {...({ className: "rw-btn-primary" } as any)}>
-                <Text style={styles.contactSubmitBtnText}>Submit</Text>
+              {contactStatus === "error" && (
+                <Text style={styles.contactStatusError}>{contactError}</Text>
+              )}
+              {contactStatus === "success" && (
+                <Text style={styles.contactStatusSuccess}>
+                  Message sent — we'll get back to you soon.
+                </Text>
+              )}
+
+              <TouchableOpacity
+                style={[styles.contactSubmitBtn, contactSubmitting && { opacity: 0.6 }]}
+                onPress={handleContactSubmit}
+                disabled={contactSubmitting}
+                {...({ className: "rw-btn-primary" } as any)}
+              >
+                <Text style={styles.contactSubmitBtnText}>
+                  {contactSubmitting ? "Sending…" : "Submit"}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1126,6 +1218,8 @@ const styles = StyleSheet.create({
     minHeight: 100,
     textAlignVertical: "top",
   },
+  contactStatusError: { color: "#C0392B", fontSize: 13.5, fontWeight: "600" },
+  contactStatusSuccess: { color: PRIMARY_DARK, fontSize: 13.5, fontWeight: "600" },
   contactSubmitBtn: {
     backgroundColor: PRIMARY,
     borderRadius: 24,

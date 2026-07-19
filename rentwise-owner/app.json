@@ -68,7 +68,9 @@
           "style": "dark",
           "enforceContrast": false
         }
-      ]
+      ],
+      "@react-native-firebase/app",
+      "@react-native-firebase/app-check"
     ],
     "extra": {
       "router": {},
