@@ -599,7 +599,12 @@ export default function ARView() {
             pointerEvents="none"
           >
             <Text style={styles.measurementLabelText}>
-              L: {measurement.widthM.toFixed(2)}m × W: {measurement.depthM.toFixed(2)}m × H:{" "}
+              {/* Length is always the longer of the two horizontal
+                  measurements, Width the shorter -- a fixed axis (always
+                  "X is length") only happened to be right for one model's
+                  orientation and was wrong for others. */}
+              L: {Math.max(measurement.widthM, measurement.depthM).toFixed(2)}m × W:{" "}
+              {Math.min(measurement.widthM, measurement.depthM).toFixed(2)}m × H:{" "}
               {measurement.heightM.toFixed(2)}m
             </Text>
           </View>
