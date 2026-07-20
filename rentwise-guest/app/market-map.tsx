@@ -17,7 +17,7 @@ import { MARKET_LAYOUT, normalizeStallName } from "../shared/constants/marketLay
 
 // Matches the blueprint's real pixel size (assets/market-2Dlayout.png) so hotspot
 // percentages line up correctly regardless of screen width.
-const BLUEPRINT_ASPECT_RATIO = 1056 / 672;
+const BLUEPRINT_ASPECT_RATIO = 1053 / 708;
 // The blueprint's rendered size fills the available screen space (so there's no big empty
 // margin), but stays within a sensible range: never smaller than 700 wide (below that,
 // individual stalls get too small to tap — horizontal scroll takes over instead of shrinking

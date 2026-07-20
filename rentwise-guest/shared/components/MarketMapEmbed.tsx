@@ -21,10 +21,10 @@ import { MARKET_LAYOUT, normalizeStallName } from "../constants/marketLayout";
 // Same blueprint asset/geometry as app/market-map.tsx, but sized to sit inline
 // inside a page section instead of filling the whole screen — no header/back
 // button, no viewport-height fitting, just a responsive width-based render.
-// Must match assets/market-2Dlayout.png's real pixel dimensions (1048x672) —
+// Must match assets/market-2Dlayout.png's real pixel dimensions (1053x708) —
 // any mismatch here makes resizeMode="contain" letterbox the image inside
 // the container instead of filling it, showing up as a gap on the sides.
-const BLUEPRINT_ASPECT_RATIO = 1048 / 672;
+const BLUEPRINT_ASPECT_RATIO = 1053 / 708;
 const MIN_BLUEPRINT_WIDTH = 700;
 const HOTSPOT_SHRINK = 0.94;
 const MAP_CARD_BORDER_WIDTH = 1;
