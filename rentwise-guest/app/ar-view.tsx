@@ -599,8 +599,8 @@ export default function ARView() {
             pointerEvents="none"
           >
             <Text style={styles.measurementLabelText}>
-              W: {measurement.widthM.toFixed(2)}m × L: {measurement.heightM.toFixed(2)}m × H:{" "}
-              {measurement.depthM.toFixed(2)}m
+              L: {measurement.depthM.toFixed(2)}m × W: {measurement.widthM.toFixed(2)}m × H:{" "}
+              {measurement.heightM.toFixed(2)}m
             </Text>
           </View>
         )}
