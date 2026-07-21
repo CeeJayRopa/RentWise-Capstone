@@ -232,7 +232,8 @@ export default function Building() {
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+    // Moved right after "home" (was last) -- see financials.tsx for why.
+    { key: "fab", ref: fabRef, title: "Updates report", description: "Shows recent changes awaiting your review, organized by building, financials, and accounts.", edgeInset: "bottom", round: true, nudgeY: 0 },
     { key: "building", ref: buildingDropdownRef, title: "Building filter", description: "Switch between buildings to see only that building's stalls.", edgeInset: "top" },
     { key: "status", ref: statusDropdownRef, title: "Status filter", description: "Narrow the list to occupied or unoccupied stalls.", edgeInset: "top" },
     { key: "list", ref: listRef, title: "Stall list", description: "Register a tenant into a vacant stall, or manage and edit rental info for an occupied one.", edgeInset: "top" },
@@ -244,7 +245,6 @@ export default function Building() {
   if (firstUnoccupiedIndex !== -1) {
     tourSteps.push({ key: "register", ref: registerBtnRef, title: "Register", description: "Registers a new tenant into this vacant stall.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(registerBtnRef) });
   }
-  tourSteps.push({ key: "fab", ref: fabRef, title: "Updates report", description: "Shows recent changes awaiting your review, organized by building, financials, and accounts.", edgeInset: "bottom", round: true, nudgeY: 5 });
 
   if (checking) {
     return (

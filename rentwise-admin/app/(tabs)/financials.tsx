@@ -592,7 +592,12 @@ export default function Financials() {
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+    // Moved right after "home" (was last) -- placing it right before the
+    // "view" step specifically triggered a visual glitch on transition (a
+    // stray highlight briefly appearing over the previous target) that
+    // reordering sidesteps entirely, since nothing transitions INTO fab
+    // from a scrolled list row anymore.
+    { key: "fab", ref: fabRef, title: "Updates report", description: "Shows recent changes awaiting your review, organized by building, financials, and accounts.", edgeInset: "bottom", round: true, nudgeY: 0 },
     { key: "summary", ref: summaryRef, title: "Spaces / Paid / Unpaid", description: "Total stalls tracked here, and how many tenants have paid vs. are still unpaid this period.", edgeInset: "top" },
     { key: "filter", ref: filterRef, title: "Status filter", description: "Narrow the list to only paid or only unpaid tenants.", edgeInset: "top" },
     { key: "list", ref: listRef, title: "Tenant list", description: "Paid/Unpaid badges show status at a glance. Unpaid tenants show a Set Paid button to record their payment; pending online payments show Confirm instead.", edgeInset: "top" },
@@ -600,7 +605,6 @@ export default function Financials() {
   if (filteredRows.length > 0) {
     tourSteps.push({ key: "view", ref: viewBtnRef, title: "View", description: "Opens this tenant's full payment details and history.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(viewBtnRef) });
   }
-  tourSteps.push({ key: "fab", ref: fabRef, title: "Updates report", description: "Shows recent changes awaiting your review, organized by building, financials, and accounts.", edgeInset: "bottom", round: true, nudgeY: 5 });
 
   if (checking) {
     return (

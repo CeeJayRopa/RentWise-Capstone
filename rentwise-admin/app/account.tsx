@@ -80,14 +80,12 @@ export default function Account() {
 
   const tourSteps: HelpStep[] = isCreate
     ? [
-        { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
         { key: "stall", ref: stallPillRef, title: "Stall", description: "The stall this tenant will be registered to.", edgeInset: "top" },
         { key: "details", ref: detailsRef, title: "Tenant details", description: "Enter the new tenant's name, contact number, and personal email — used to log in and reset their own password.", edgeInset: "top" },
         { key: "password", ref: passwordNoteRef, title: "Default password", description: "The tenant signs in with this password the first time, then sets their own.", edgeInset: "top" },
         { key: "create", ref: createBtnRef, title: "Create Account", description: "Creates the tenant's account and assigns them to this stall.", edgeInset: "top" },
       ]
     : [
-        { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
         { key: "stall", ref: stallPillRef, title: "Stall", description: "The stall this tenant currently occupies.", edgeInset: "top" },
         { key: "info", ref: infoCardRef, title: "Tenant info", description: "The current tenant's name, email, and contact number.", edgeInset: "top" },
         { key: "move", ref: moveBtnRef, title: "Move Location", description: "Relocate this active tenant to a different stall, without archiving them first.", edgeInset: "top" },

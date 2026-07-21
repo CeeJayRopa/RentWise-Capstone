@@ -450,7 +450,6 @@ export default function TenantPreview() {
   }, [progressPct]);
 
   const tourSteps: HelpStep[] = [
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
     { key: "notify", ref: notifyRef, title: "Notify", description: "Sends this tenant a reminder notification about their payment status.", edgeInset: "top" },
     { key: "payment", ref: paymentCardRef, title: "Rental payment", description: "This tenant's remaining bill this month, how much they've paid, and their current payment status.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(paymentCardRef) },
     { key: "history", ref: historyCardRef, title: "Monthly payment history", description: "Every payment this tenant has made. Tap one with a receipt to view it.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(historyCardRef) },

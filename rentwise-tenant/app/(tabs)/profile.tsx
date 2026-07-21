@@ -91,7 +91,6 @@ export default function Profile() {
     });
 
   const tourSteps: HelpStep[] = [
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
     { key: "identity", ref: identityRef, title: "Your space", description: "Your space ID and how long you've been a tenant.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(identityRef) },
     { key: "category", ref: categoryRef, title: "Market category", description: "The kind of goods sold at your stall. Tap Edit Profile to change it — updates here sync with the admin's records too.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(categoryRef) },
     { key: "form", ref: formRef, endRef: emailSectionRef, title: "Your details", description: "Your name, contact number, and personal email — the email enables self-service password reset without needing the admin, once verified. Didn't get the verification email? Resend it here.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(formRef) },

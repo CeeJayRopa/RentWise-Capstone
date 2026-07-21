@@ -16,15 +16,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Defs, Mask, Rect as SvgRect, Circle as SvgCircle } from "react-native-svg";
 import { colors, fontFamily, fontSize, radius, spacing } from "../../shared/theme";
 
-// Hoisted to module scope -- react-native-svg's Animated integration pattern
-// (see their docs) requires wrapping each primitive with
-// Animated.createAnimatedComponent exactly once. Calling it inside the
-// component body would create a brand-new component type on every render,
-// forcing a full remount of the SVG node (and losing any in-flight
-// animation) instead of just updating its animated props.
-const AnimatedSvgRect = Animated.createAnimatedComponent(SvgRect);
-const AnimatedSvgCircle = Animated.createAnimatedComponent(SvgCircle);
-
 export type HelpStep = {
   key: string;
   ref: React.RefObject<View | null>;
@@ -89,9 +80,21 @@ export type HelpStep = {
 type Rect = { x: number; y: number; width: number; height: number };
 
 const PADDING = 6;
-// How long the spotlight + tooltip glide from the previous step's position
-// to the next step's, once it's measured.
-const TRANSITION_MS = 280;
+// Safety margin the dim background is deliberately oversized by on every
+// edge -- useWindowDimensions() can report a slightly-too-small value on
+// the very first render (before it settles to the real screen size) or
+// after a Modal reopen, and undersizing the dim rect to match exactly
+// leaves a visible uncovered strip. Overhanging past the real screen edges
+// has no visual downside (nothing to see out there), so erring oversized
+// is strictly safer than erring exact.
+const DIM_OVERSIZE = 200;
+// How long the title/description/step-counter text keeps showing the
+// PREVIOUS step after the card has already faded back in at the new
+// position -- deliberately independent of the card's own reveal timing
+// (150ms hidden-dwell + 180ms fade-in, ~330ms total), so the text visibly
+// lags a beat behind the card rather than switching in lockstep with it.
+// Tune this one constant to change just the text's delay.
+const TEXT_REVEAL_DELAY_MS = 100;
 
 // First-paint fallback only: real placement switches to the tooltip card's
 // own measured height (via onLayout, see tooltipHeight state below) almost
@@ -172,8 +175,15 @@ export default function HelpTour({
   // has settled to its real size on some devices), so tooltip placement math built on it
   // could end up using the wrong screen height for that specific device, making the
   // tooltip overlap page content instead of clearing it.
-  const { height: screenHeight } = useWindowDimensions();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+
+  // Diagnostic only: the Modal's own actual rendered container height, via
+  // onLayout, compared against screenHeight (from useWindowDimensions) in
+  // the debug readout below -- if these disagree, particularly on a REOPEN
+  // of an already-shown tour, that would point to the Modal reusing a
+  // stale/undersized native container instead of the real full screen.
+  const [containerHeight, setContainerHeight] = useState<number | null>(null);
 
   // Real rendered height of the tooltip card, captured via onLayout below.
   // Deliberately NOT reset to null on step change -- a stale-but-real height
@@ -191,25 +201,90 @@ export default function HelpTour({
   const stepsRef = useRef(steps);
   stepsRef.current = steps;
 
-  // Animated position of the spotlight (mask cutout + visible border) and
-  // the tooltip card. Driven imperatively (see the effect below) rather than
-  // just used as plain numbers, so moving from one step's target to the
-  // next glides instead of snapping straight there.
-  const animX = useRef(new Animated.Value(0)).current;
-  const animY = useRef(new Animated.Value(0)).current;
-  const animWidth = useRef(new Animated.Value(0)).current;
-  const animHeight = useRef(new Animated.Value(0)).current;
-  const animTooltipTop = useRef(new Animated.Value(screenHeight / 2 - 80)).current;
-  // True until the very first real measurement of a freshly-opened tour --
-  // that first placement should snap straight there (there's no previous
-  // position to glide from), only step-to-step moves within an already-open
-  // tour should animate.
-  const isFirstMeasureRef = useRef(true);
+  // The most recently successful measurement, and which step/index/endRect it
+  // belongs to -- kept separate from `rect` (which goes null while a fresh
+  // measurement is in flight) so the spotlight/tooltip keep rendering at
+  // their last KNOWN GOOD position+text while faded out, instead of jumping
+  // to a fallback/partial value that would flash visibly for a frame. Updated
+  // below once `step` is in scope.
+  const lastGoodRef = useRef<{ rect: Rect; endRect: Rect | null; step: HelpStep; stepIndex: number } | null>(null);
+
+  // The title/description/counter text specifically -- deliberately a
+  // SEPARATE snapshot from lastGoodRef (which drives the spotlight's
+  // position and the card's own fade/pop timing, unchanged). Updated on its
+  // own delay below (TEXT_REVEAL_DELAY_MS), independent of when the card
+  // itself repositions/reappears, so the description can lag a beat behind
+  // the card instead of switching in lockstep with it.
+  const [displayedText, setDisplayedText] = useState<{
+    title: string;
+    description: string;
+    stepIndex: number;
+  } | null>(null);
+
+  // Fade-and-pop instead of a sliding/morphing glide -- the dim+hole fades as
+  // one piece, while the spotlight BORDER and TOOLTIP additionally scale in
+  // from slightly smaller, all while a fresh measurement is in flight, then
+  // reverse once it resolves. Driven off `rect` itself (goes null while
+  // remeasuring, see the measurement effect below). Since the displayed
+  // content always reads through lastGoodRef (a fully resolved snapshot),
+  // it's never visible at a wrong/hybrid position -- only ever fully faded
+  // out, or showing a fully-consistent step. The scale is deliberately only
+  // applied to the border/tooltip, NOT the full-screen dim rect -- scaling
+  // something meant to always fill the screen would open a visible gap at
+  // the edges mid-animation.
+  const contentOpacity = useRef(new Animated.Value(0)).current;
+  const popScale = contentOpacity.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] });
+  useEffect(() => {
+    if (!rect) {
+      // Snappier exit than the entrance -- the card should disappear fast
+      // the moment Next is tapped, well before the next step's measurement
+      // (which takes >=240ms, see measureStable) resolves and swaps the
+      // text, so the description is never visibly changing while any of
+      // the card is still showing.
+      Animated.timing(contentOpacity, {
+        toValue: 0,
+        duration: 60,
+        easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
+      }).start();
+      return;
+    }
+    // Extra pause fully hidden before revealing the new step, on top of the
+    // fade-out + remeasurement time already elapsed -- gives any transient
+    // visual artifact tied to the previous step's target (e.g. a lingering
+    // native touch/ripple highlight) more time to clear before anything
+    // becomes visible again, instead of revealing the instant the new
+    // measurement resolves.
+    const timer = setTimeout(() => {
+      Animated.timing(contentOpacity, {
+        toValue: 1,
+        duration: 180,
+        easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
+      }).start();
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [rect]);
+
+  // Text swap, on its own separate delay from the card's reveal above -- see
+  // TEXT_REVEAL_DELAY_MS. Reads stepIndex fresh via stepsRef (current as of
+  // the render that set rect) rather than relying on a variable computed
+  // later in this function (past the early-return point below, so it can't
+  // be a dependency here).
+  useEffect(() => {
+    if (!rect) return;
+    const timer = setTimeout(() => {
+      const currentStep = stepsRef.current[stepIndex];
+      if (!currentStep) return;
+      setDisplayedText({ title: currentStep.title, description: currentStep.description, stepIndex });
+    }, TEXT_REVEAL_DELAY_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rect]);
 
   useEffect(() => {
     if (!visible) return;
     setStepIndex(0);
-    isFirstMeasureRef.current = true;
   }, [visible]);
 
   useEffect(() => {
@@ -217,18 +292,10 @@ export default function HelpTour({
     const step = stepsRef.current[stepIndex];
     if (!step) return;
 
-    // Deliberately NOT clearing `rect` here -- doing so used to blank the
-    // spotlight/tooltip back to their "nothing measured yet" fallback
-    // (screen-center) for the ~150-300ms this step's target takes to
-    // measure, which is exactly what produced the "jumps to center, then
-    // jumps again to the real spot" flicker on every Next tap. Keeping the
-    // previous step's rect visible until the new one resolves means there's
-    // always a real position on screen, so the animated glide below has an
-    // actual start point instead of a center-screen detour.
-    // `endRect` is safe to clear immediately, unlike `rect` -- a step
-    // without its own endRef would otherwise keep using a stale one left
-    // over from an earlier step that had one, corrupting its height calc.
-    if (!step.endRef) setEndRect(null);
+    // Clears the old spotlight immediately so a stale box from the previous
+    // step is never shown while the new one is still being measured.
+    setRect(null);
+    setEndRect(null);
 
     let cancelled = false;
     Promise.resolve(step.onBeforeMeasure?.()).then(() => {
@@ -248,10 +315,25 @@ export default function HelpTour({
     };
   }, [visible, stepIndex]);
 
-  const step = steps[stepIndex];
-  const isLast = !!step && stepIndex === steps.length - 1;
+  if (!visible || steps.length === 0) return null;
 
-  const spot: Rect = step && rect
+  const step = steps[stepIndex];
+  const isLast = stepIndex === steps.length - 1;
+
+  // Freeze a full snapshot (rect + the step/endRect it belongs to) the
+  // instant a fresh measurement lands -- read through THIS everywhere below
+  // instead of the raw (possibly-null-mid-remeasure) rect/step/endRect, so
+  // the displayed spotlight/tooltip only ever shows a fully-consistent,
+  // fully-measured combination, never a half-updated hybrid.
+  if (rect) {
+    lastGoodRef.current = { rect, endRect, step, stepIndex };
+  }
+  const displayRect = lastGoodRef.current?.rect ?? null;
+  const displayEndRect = lastGoodRef.current?.endRect ?? null;
+  const displayStep = lastGoodRef.current?.step ?? step;
+  const displayStepIndex = lastGoodRef.current?.stepIndex ?? stepIndex;
+
+  const spot: Rect = displayRect
     ? (() => {
         // The Modal is statusBarTranslucent, so measureInWindow's coordinate
         // space is shifted from the real screen by ~insets.top -- confirmed
@@ -268,24 +350,26 @@ export default function HelpTour({
         // too high.
         const EDGE_MARGIN = 0;
         const y =
-          rect.y - PADDING + insets.top + EDGE_MARGIN +
-          (step.nudgeY ?? 0) +
-          screenHeight * (step.nudgeYPercent ?? 0);
+          displayRect.y - PADDING + insets.top + EDGE_MARGIN +
+          (displayStep.nudgeY ?? 0) +
+          screenHeight * (displayStep.nudgeYPercent ?? 0);
         // When endRef is set and measured, the box's bottom tracks that
         // element's real position instead of rect's own height -- correct
         // regardless of screen size or how much taller the content grows.
         const rawHeight = Math.max(
           0,
-          (endRect ? Math.max(0, endRect.y + endRect.height - rect.y) + PADDING * 2 : rect.height + PADDING * 2) -
-            (step.heightTrim ?? 0) -
-            rect.height * (step.heightTrimPercent ?? 0),
+          (displayEndRect
+            ? Math.max(0, displayEndRect.y + displayEndRect.height - displayRect.y) + PADDING * 2
+            : displayRect.height + PADDING * 2) -
+            (displayStep.heightTrim ?? 0) -
+            displayRect.height * (displayStep.heightTrimPercent ?? 0),
         );
-        const maxHeight = step.clipBottom != null ? screenHeight - step.clipBottom - y : rawHeight;
-        const insetX = rect.width * (step.insetXPercent ?? 0);
+        const maxHeight = displayStep.clipBottom != null ? screenHeight - displayStep.clipBottom - y : rawHeight;
+        const insetX = displayRect.width * (displayStep.insetXPercent ?? 0);
         return {
-          x: rect.x - PADDING + insetX,
+          x: displayRect.x - PADDING + insetX,
           y,
-          width: Math.max(0, rect.width + PADDING * 2 - insetX * 2),
+          width: Math.max(0, displayRect.width + PADDING * 2 - insetX * 2),
           height: Math.max(0, Math.min(rawHeight, maxHeight)),
         };
       })()
@@ -298,8 +382,8 @@ export default function HelpTour({
   // is what actually distinguishes usable space from a reserved 3-button nav
   // bar, and insets.top is what distinguishes it from under the status bar.
   const spaceBelow = screenHeight - insets.bottom - (spot.y + spot.height);
-  const showBelow = !rect || spaceBelow > measuredTooltipHeight + 14;
-  const idealTooltipTop = rect
+  const showBelow = !displayRect || spaceBelow > measuredTooltipHeight + 14;
+  const idealTooltipTop = displayRect
     ? showBelow
       ? spot.y + spot.height + 14
       : spot.y - 20 - measuredTooltipHeight
@@ -317,40 +401,6 @@ export default function HelpTour({
     Math.max(safeTop, safeBottom - measuredTooltipHeight),
   );
 
-  // Drives the actual glide: whenever this step's real target position
-  // changes (a fresh measurement resolved), animate every animated value to
-  // it together. The very first placement of a freshly-opened tour snaps
-  // instead -- there's no earlier position for it to glide from.
-  useEffect(() => {
-    if (!visible || !step || !rect) return;
-
-    if (isFirstMeasureRef.current) {
-      isFirstMeasureRef.current = false;
-      animX.setValue(spot.x);
-      animY.setValue(spot.y);
-      animWidth.setValue(spot.width);
-      animHeight.setValue(spot.height);
-      animTooltipTop.setValue(tooltipTop);
-      return;
-    }
-
-    const config = { duration: TRANSITION_MS, easing: Easing.out(Easing.cubic), useNativeDriver: false };
-    Animated.parallel([
-      Animated.timing(animX, { ...config, toValue: spot.x }),
-      Animated.timing(animY, { ...config, toValue: spot.y }),
-      Animated.timing(animWidth, { ...config, toValue: spot.width }),
-      Animated.timing(animHeight, { ...config, toValue: spot.height }),
-      Animated.timing(animTooltipTop, { ...config, toValue: tooltipTop }),
-    ]).start();
-    // Only the actual target numbers should retrigger the glide -- animX/Y/etc
-    // are stable refs, and including the full `spot`/`step` objects would
-    // fire on every render (they're rebuilt each time) instead of only when
-    // the target position genuinely changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, spot.x, spot.y, spot.width, spot.height, tooltipTop]);
-
-  if (!visible || steps.length === 0 || !step) return null;
-
   return (
     <Modal
       visible={visible}
@@ -359,79 +409,120 @@ export default function HelpTour({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <View style={[StyleSheet.absoluteFill, styles.overlayRoot]}>
-        {rect ? (
-          <>
-            <Svg width="100%" height="100%" style={StyleSheet.absoluteFill}>
-              <Defs>
-                <Mask id="spotlightMask">
-                  <SvgRect x="0" y="0" width="100%" height="100%" fill="#fff" />
-                  {step.round ? (
-                    <AnimatedSvgCircle
-                      cx={Animated.add(animX, Animated.divide(animWidth, 2))}
-                      cy={Animated.add(animY, Animated.divide(animHeight, 2))}
-                      r={Animated.divide(animWidth, 2)}
-                      fill="#000"
+      <View
+        style={[StyleSheet.absoluteFill, styles.overlayRoot]}
+        onLayout={(e) => setContainerHeight(e.nativeEvent.layout.height)}
+      >
+        {displayRect ? (
+          <Animated.View style={[StyleSheet.absoluteFill, { opacity: contentOpacity }]}>
+            {/* Explicit pixel width/height (from useWindowDimensions), not
+                "100%" -- a percentage here depends on this Svg's own
+                container reporting the correct size, which a Modal can get
+                wrong on reopen (reusing a stale/undersized native container
+                instead of remeasuring against the real screen). Sizing
+                directly off screenWidth/screenHeight can't inherit that.
+                Also deliberately oversized by DIM_OVERSIZE on every edge (and
+                shifted to stay centered on the real screen) so even a
+                slightly-too-small screenWidth/screenHeight reading still
+                fully covers the true screen with margin to spare -- an
+                oversized dim has no visual downside (nothing exists past the
+                real edges to reveal), unlike an undersized one. The hole's
+                own coordinates below are offset by +DIM_OVERSIZE to land in
+                the same true position despite this shift; the spotlight
+                border (a sibling below, not inside this shifted wrapper)
+                doesn't need any such adjustment. */}
+            <View
+              style={{
+                position: "absolute",
+                left: -DIM_OVERSIZE,
+                top: -DIM_OVERSIZE,
+                width: screenWidth + DIM_OVERSIZE * 2,
+                height: screenHeight + DIM_OVERSIZE * 2,
+              }}
+            >
+              <Svg width={screenWidth + DIM_OVERSIZE * 2} height={screenHeight + DIM_OVERSIZE * 2}>
+                <Defs>
+                  <Mask id="spotlightMask">
+                    <SvgRect
+                      x={0}
+                      y={0}
+                      width={screenWidth + DIM_OVERSIZE * 2}
+                      height={screenHeight + DIM_OVERSIZE * 2}
+                      fill="#fff"
                     />
-                  ) : (
-                    <AnimatedSvgRect
-                      x={animX}
-                      y={animY}
-                      width={animWidth}
-                      height={animHeight}
-                      rx={radius.lg - 2}
-                      fill="#000"
-                    />
+                    {displayStep.round ? (
+                      <SvgCircle
+                        cx={spot.x + spot.width / 2 + DIM_OVERSIZE}
+                        cy={spot.y + spot.height / 2 + DIM_OVERSIZE}
+                        r={spot.width / 2}
+                        fill="#000"
+                      />
+                    ) : (
+                      <SvgRect
+                        x={spot.x + DIM_OVERSIZE}
+                        y={spot.y + DIM_OVERSIZE}
+                        width={spot.width}
+                        height={spot.height}
+                        rx={radius.lg - 2}
+                        fill="#000"
+                      />
                   )}
                 </Mask>
               </Defs>
               <SvgRect
-                x="0"
-                y="0"
-                width="100%"
-                height="100%"
+                x={0}
+                y={0}
+                width={screenWidth + DIM_OVERSIZE * 2}
+                height={screenHeight + DIM_OVERSIZE * 2}
                 fill={colors.overlay}
                 mask="url(#spotlightMask)"
               />
             </Svg>
+            </View>
             <Animated.View
               pointerEvents="none"
               style={[
                 styles.spotlightBorder,
                 {
-                  top: animY,
-                  left: animX,
-                  width: animWidth,
-                  height: animHeight,
-                  borderRadius: step.round ? Animated.divide(animWidth, 2) : radius.lg - 2,
+                  top: spot.y,
+                  left: spot.x,
+                  width: spot.width,
+                  height: spot.height,
+                  borderRadius: displayStep.round ? spot.width / 2 : radius.lg - 2,
+                  transform: [{ scale: popScale }],
                 },
               ]}
             />
-          </>
+          </Animated.View>
         ) : (
           <View style={[styles.dim, StyleSheet.absoluteFill]} />
         )}
 
         <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
 
-        <Animated.View style={[styles.tooltip, { top: animTooltipTop }]} pointerEvents="box-none">
+        <Animated.View
+          style={[styles.tooltip, { top: tooltipTop, opacity: contentOpacity, transform: [{ scale: popScale }] }]}
+          pointerEvents="box-none"
+        >
           <View
             style={styles.tooltipCard}
             onLayout={(e) => setTooltipHeight(e.nativeEvent.layout.height)}
           >
             <Text style={styles.stepCount}>
-              Step {stepIndex + 1} of {steps.length}
+              Step {(displayedText?.stepIndex ?? displayStepIndex) + 1} of {steps.length}
             </Text>
-            <Text style={styles.tooltipTitle}>{step.title}</Text>
-            <Text style={styles.tooltipDesc}>{step.description}</Text>
+            <Text style={styles.tooltipTitle}>{displayedText?.title ?? displayStep.title}</Text>
+            <Text style={styles.tooltipDesc}>{displayedText?.description ?? displayStep.description}</Text>
             {__DEV__ && (
               // Temporary calibration readout -- remove once the spotlight
               // offset is confirmed correct across devices. Screenshot this
               // to report exact numbers instead of eyeballing pixel gaps.
               <Text style={styles.debugText} selectable>
-                rect.y={Math.round(rect?.y ?? -1)} rect.h={Math.round(rect?.height ?? -1)}{"\n"}
-                insets.top={Math.round(insets.top)} insets.bottom={Math.round(insets.bottom)}{"\n"}
-                spot.y={Math.round(spot.y)} screenH={Math.round(screenHeight)}
+                step={displayStep.key} rect.x={Math.round(displayRect?.x ?? -1)} rect.y={Math.round(displayRect?.y ?? -1)}{"\n"}
+                rect.w={Math.round(displayRect?.width ?? -1)} rect.h={Math.round(displayRect?.height ?? -1)}{"\n"}
+                spot.x={Math.round(spot.x)} spot.y={Math.round(spot.y)} spot.w={Math.round(spot.width)}{"\n"}
+                insets.top={Math.round(insets.top)} insets.bottom={Math.round(insets.bottom)} screenH={Math.round(screenHeight)}{"\n"}
+                containerH={containerHeight != null ? Math.round(containerHeight) : -1}
               </Text>
             )}
             <View style={styles.tooltipActions}>

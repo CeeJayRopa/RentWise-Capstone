@@ -280,7 +280,6 @@ export default function PaymentsScreen() {
     remainingBill <= 0 || hasPendingThisMonth || hasPaidForCurrentSpecificPeriod || beforeSemiMonthlyDueDate;
 
   const tourSteps: HelpStep[] = [
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
     { key: "history", ref: historyRef, title: "Payment history", description: "View past payments and download receipts.", edgeInset: "top", round: true },
     { key: "balance", ref: balanceRef, title: "Total balance due", description: "What you currently owe for this billing period, after any payments already made.", edgeInset: "top" },
     ...(!hasPaidCurrentPeriod

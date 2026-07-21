@@ -82,7 +82,6 @@ export default function PaymentHistoryScreen() {
     });
 
   const tourSteps: HelpStep[] = [
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
     { key: "search", ref: searchRef, title: "Search", description: "Find a transaction by amount, date, or payment method.", edgeInset: "top", round: true },
     { key: "summary", ref: summaryRef, title: "Monthly total", description: "How much you've paid this month, and your progress toward the full month's charge.", edgeInset: "top", insetXPercent: 0.045 },
     { key: "picker", ref: pickerRef, title: "Month & year", description: "Switch to a different month or year to see that period's transactions.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(pickerRef) },

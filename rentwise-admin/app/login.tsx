@@ -205,7 +205,21 @@ export default function Login() {
       await resetLockout(identifier);
       await setRememberMe(rememberMe);
       router.replace("/welcome");
-    } catch {
+    } catch (err: any) {
+      // Network/infra failures aren't proof of a wrong password -- counting
+      // them against the lockout would lock out someone with a bad
+      // connection just as fast as someone actually guessing wrong.
+      const code = err?.code ?? "";
+      const isConnectivityIssue =
+        code === "auth/network-request-failed" ||
+        code === "functions/unavailable" ||
+        code === "functions/internal" ||
+        code === "functions/deadline-exceeded";
+      if (isConnectivityIssue) {
+        setError("Connection problem. Check your internet and try again.");
+        return;
+      }
+
       const { lockoutUntil: newLockout, remainingAttempts, lockoutLevel } =
         await recordFailedAttempt(identifier);
       if (newLockout) {
@@ -303,7 +317,7 @@ export default function Login() {
               </LinearGradient>
             </Animated.View>
             <Animated.Text style={[styles.appName, slideIn(logoAnim)]}>
-              Admin portal
+              Admin Portal
             </Animated.Text>
           </LinearGradient>
 
@@ -313,7 +327,7 @@ export default function Login() {
             {/* Heading group */}
             <Animated.View style={slideIn(headingAnim)}>
               <Text style={styles.heading}>Welcome back</Text>
-              <Text style={styles.subheading}>Sign in to manage your platform</Text>
+              <Text style={styles.subheading}>Sign in to manage the market</Text>
             </Animated.View>
 
             {/* Email field */}
@@ -502,13 +516,14 @@ const styles = StyleSheet.create({
   topSection: {
     alignItems: "center",
     justifyContent: "center",
-    paddingBottom: 32,
+    paddingBottom: 32 + 40,
   },
 
   logoGroup: {
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
+    marginTop: 12,
   },
 
   pulseRing: {
@@ -537,6 +552,7 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: fontSize.xxl + 2,
     fontFamily: fontFamily.bold,
+    marginTop: 4,
   },
 
   card: {
@@ -544,7 +560,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     borderTopLeftRadius: radius.xl + 4,
     borderTopRightRadius: radius.xl + 4,
-    marginTop: -(radius.xl + 4),
+    marginTop: -(radius.xl + 4) - 8,
     paddingHorizontal: spacing.xxl + 4,
     paddingTop: spacing.xxl + 4,
   },

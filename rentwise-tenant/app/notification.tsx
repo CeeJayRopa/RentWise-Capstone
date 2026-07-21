@@ -99,7 +99,6 @@ export default function Notification() {
   const firstCardRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
     { key: "markAllRead", ref: markAllRef, title: "Mark all read", description: "Marks every notification in your list as read, in one tap.", edgeInset: "top" },
     { key: "clearAll", ref: clearAllRef, title: "Clear all", description: "Removes every notification from your list. This can't be undone.", edgeInset: "top" },
     { key: "list", ref: listRef, endRef: firstCardRef, title: "Notifications", description: "Rent reminders, payment updates, and other alerts. Tap one to mark it read.", edgeInset: "top" },

@@ -166,7 +166,6 @@ export default function ReportsHistory() {
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
     { key: "summary", ref: summaryRef, title: "Pending / Approved", description: "How many of your submitted reports are still pending the owner's review, and how many were approved this week.", edgeInset: "top", insetXPercent: 0.03, heightTrimPercent: 0.108, nudgeYPercent: 0.018 },
     { key: "list", ref: listRef, title: "Report history", description: "Every update report you've submitted to the owner, grouped by date, with its current approval status.", edgeInset: "top", clipBottom: 15, nudgeYPercent: 0.05 },
   ];

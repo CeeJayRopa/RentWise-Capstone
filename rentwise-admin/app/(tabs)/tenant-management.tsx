@@ -61,10 +61,10 @@ export default function TenantManagement() {
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
+    // Moved right after "home" (was last) -- see financials.tsx for why.
+    { key: "fab", ref: fabRef, title: "Updates report", description: "Shows recent changes awaiting your review, organized by building, financials, and accounts.", edgeInset: "bottom", round: true, nudgeY: 0 },
     { key: "list", ref: listRef, title: "Active tenants", description: "Every tenant currently renting a stall.", edgeInset: "top" },
     { key: "archive", ref: archiveBtnRef, title: "Archive", description: "Archives this tenant, freeing up their stall. You'll be asked to confirm before it happens.", edgeInset: "top" },
-    { key: "fab", ref: fabRef, title: "Updates report", description: "Shows recent changes awaiting your review, organized by building, financials, and accounts.", edgeInset: "bottom", round: true, nudgeY: 5 },
   ];
 
   const fetchData = useCallback(async () => {

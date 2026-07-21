@@ -92,7 +92,6 @@ export default function EditRentalInfo() {
   const modifyBtnRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
     { key: "stall", ref: stallPillRef, title: "Stall", description: "The stall whose rental info you're editing.", edgeInset: "top" },
     { key: "category", ref: categoryRef, title: "Market category", description: "The kind of goods sold at this stall.", edgeInset: "top" },
     { key: "dimensions", ref: dimensionsRef, title: "Length & width", description: "The stall's physical dimensions, in meters.", edgeInset: "top" },

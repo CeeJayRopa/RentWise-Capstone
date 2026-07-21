@@ -71,7 +71,6 @@ export default function AdminProfile() {
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
     { key: "fields", ref: fieldsRef, title: "Your details", description: "Your last name, first name, and contact number.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(fieldsRef), heightTrimPercent: 0.05 },
     { key: "edit", ref: editBtnRef, title: "Edit Profile", description: "Unlocks your name and contact number so you can update them.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(editBtnRef), heightTrimPercent: 0.12, nudgeYPercent: 0.01 },
     { key: "logout", ref: logoutBtnRef, title: "Logout", description: "Signs you out of your admin account.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(logoutBtnRef), heightTrimPercent: 0.02, nudgeYPercent: 0.01 },

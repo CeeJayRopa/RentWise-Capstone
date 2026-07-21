@@ -255,7 +255,21 @@ export default function Login() {
       await resetLockout(identifier);
       await setRememberMe(rememberMe);
       router.replace({ pathname: "/welcome" });
-    } catch (error) {
+    } catch (err: any) {
+      // Network/infra failures aren't proof of a wrong password -- counting
+      // them against the lockout would lock out someone with a bad
+      // connection just as fast as someone actually guessing wrong.
+      const code = err?.code ?? "";
+      const isConnectivityIssue =
+        code === "auth/network-request-failed" ||
+        code === "functions/unavailable" ||
+        code === "functions/internal" ||
+        code === "functions/deadline-exceeded";
+      if (isConnectivityIssue) {
+        setErrorMsg("Connection problem. Check your internet and try again.");
+        return;
+      }
+
       const { lockoutUntil: newLockout, remainingAttempts, lockoutLevel } =
         await recordFailedAttempt(identifier);
       if (newLockout) {
@@ -515,12 +529,13 @@ const styles = StyleSheet.create({
   topSection: {
     alignItems: "center",
     justifyContent: "center",
-    paddingBottom: 32,
+    paddingBottom: 32 + 40,
   },
   logoGroup: {
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
+    marginTop: 12,
   },
   pulseRing: {
     position: "absolute",
@@ -545,13 +560,14 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: fontSize.xxl + 2,
     fontFamily: fontFamily.bold,
+    marginTop: 4,
   },
   card: {
     flex: 1,
     backgroundColor: colors.white,
     borderTopLeftRadius: radius.xl + 4,
     borderTopRightRadius: radius.xl + 4,
-    marginTop: -(radius.xl + 4),
+    marginTop: -(radius.xl + 4) - 8,
     paddingHorizontal: spacing.xxl + 4,
     paddingTop: spacing.xxl + 4,
   },
