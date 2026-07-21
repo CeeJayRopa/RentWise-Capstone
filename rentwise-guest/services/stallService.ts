@@ -22,6 +22,7 @@ export async function getStalls(){
       name: data.name,
       status: data.status,
       buildingNumber: data.buildingNumber,
+      category: data.category,
       width: data.width,
       length: data.length,
       price: data.price,

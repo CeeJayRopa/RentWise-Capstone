@@ -8,15 +8,16 @@ import {
   ActivityIndicator,
   useWindowDimensions,
   Platform,
+  Animated,
 } from "react-native";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import StallDetails from "../../app/stall-details";
 import StallPopup from "./StallPopup";
 import { getStalls } from "../../services/stallService";
-import { MARKET_LAYOUT, normalizeStallName } from "../constants/marketLayout";
+import { MARKET_LAYOUT, normalizeStallName, StallHotspot } from "../constants/marketLayout";
 
 // Same blueprint asset/geometry as app/market-map.tsx, but sized to sit inline
 // inside a page section instead of filling the whole screen — no header/back
@@ -30,12 +31,16 @@ const HOTSPOT_SHRINK = 0.94;
 const MAP_CARD_BORDER_WIDTH = 1;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 3;
+// Desired on-screen breathing room between the hover tooltip's bottom
+// (caret tip) and the stall it's pointing at, at any zoom level.
+const HOVER_TOOLTIP_GAP = 12;
 
 interface Stall {
   id: string;
   name?: string;
   status?: string;
   buildingNumber?: string;
+  category?: string;
   spaceDimension?: string;
   width?: number;
   length?: number;
@@ -80,6 +85,53 @@ export default function MarketMapEmbed({ maxWidth = 620, eyebrow, title, descrip
   const [stalls, setStalls] = useState<Stall[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedStall, setSelectedStall] = useState<Stall | null>(null);
+
+  // Mouse-hover tooltip (web only — native has no hover concept, so
+  // hoveredStall simply never gets set on those platforms since the
+  // onMouseEnter/onMouseLeave handlers below are only attached on web).
+  const [hoveredStall, setHoveredStall] = useState<{
+    hotspot: StallHotspot;
+    stall: Stall | null;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const hoverAnim = useRef(new Animated.Value(0)).current;
+  // Live pan/zoom transform (positionX/Y + scale) from TransformWrapper below.
+  // Trying to keep the tooltip INSIDE the zoomed content and counter-scale
+  // its own offsets to compensate kept drifting off-position in subtle,
+  // zoom-dependent ways (percentage-based CSS transforms don't resolve the
+  // way you'd expect once a scale is layered on top). The robust fix used by
+  // real map libraries: render the tooltip OUTSIDE the zoomed/panned content
+  // entirely (as a sibling of the reset-zoom button below, which already
+  // proves that positioning works unaffected by zoom), and compute its
+  // screen position ourselves from the hotspot's local blueprint-pixel
+  // coordinates using this same transform math the library applies:
+  // screen = position + local * scale.
+  const [mapTransform, setMapTransform] = useState({ positionX: 0, positionY: 0, scale: 1 });
+  // Real rendered size of the tooltip card, measured via onLayout below, so
+  // the centering/lift offsets are computed from its true size instead of a
+  // guess.
+  const [tooltipSize, setTooltipSize] = useState({ width: 148, height: 96 });
+
+  const handleHoverIn = (
+    hotspot: StallHotspot,
+    stall: Stall | null,
+    left: number,
+    top: number,
+    width: number,
+    height: number
+  ) => {
+    setHoveredStall({ hotspot, stall, left, top, width, height });
+    hoverAnim.stopAnimation();
+    Animated.timing(hoverAnim, { toValue: 1, duration: 160, useNativeDriver: true }).start();
+  };
+  const handleHoverOut = () => {
+    Animated.timing(hoverAnim, { toValue: 0, duration: 120, useNativeDriver: true }).start(({ finished }) => {
+      if (finished) setHoveredStall(null);
+    });
+  };
 
   useEffect(() => {
     getStalls()
@@ -132,21 +184,112 @@ export default function MarketMapEmbed({ maxWidth = 620, eyebrow, title, descrip
                   transform: hotspot.rotationDeg ? [{ rotate: `${hotspot.rotationDeg}deg` }] : undefined,
                   backgroundColor:
                     isVacant === true
-                      ? "rgba(76,175,80,0.35)"
+                      ? "rgba(76,175,80,0.55)"
                       : isVacant === false
-                      ? "rgba(198,40,40,0.35)"
-                      : "rgba(120,120,120,0.25)",
+                      ? "rgba(198,40,40,0.55)"
+                      : "rgba(120,120,120,0.4)",
                 },
               ]}
               onPress={() =>
                 setSelectedStall(stall ?? { id: hotspot.name, name: hotspot.name, status: "Unknown" })
               }
+              {...(Platform.OS === "web"
+                ? {
+                    onMouseEnter: () => handleHoverIn(hotspot, stall ?? null, left, top, width, height),
+                    onMouseLeave: handleHoverOut,
+                  }
+                : {})}
             />
           );
         })
       )}
     </View>
   );
+
+  // Rendered as a sibling of TransformComponent (outside the zoomed/panned
+  // content), positioned via computed screen coordinates -- see the
+  // mapTransform comment above for why it doesn't live inside blueprintContent.
+  const hoverTooltip = hoveredStall && (() => {
+    const hs = hoveredStall.stall;
+    const isVac = hs ? hs.status?.toLowerCase() !== "occupied" : null;
+    const statusColor = isVac === true ? "#0E7C5A" : isVac === false ? "#C0392B" : "#787878";
+    const statusTint = isVac === true ? "#E4F3EC" : isVac === false ? "#FBEAE8" : "#EFEFEF";
+    const statusLabel = isVac === true ? "Vacant" : isVac === false ? "Occupied" : "Unknown";
+
+    // Most stalls open their tooltip above them (placement "top", the
+    // default) -- anchored at the stall's own top edge, card lifted fully
+    // above it. The diagonal row sits right at the blueprint's top edge
+    // though, so those are flagged "bottom": anchored at the stall's BOTTOM
+    // edge instead, with the card dropping down below it.
+    const placement = hoveredStall.hotspot.tooltipPlacement ?? "top";
+    const anchorTop = placement === "bottom" ? hoveredStall.top + hoveredStall.height : hoveredStall.top;
+
+    const localX = ((hoveredStall.left + hoveredStall.width / 2) / 100) * blueprintWidth;
+    const localY = (anchorTop / 100) * blueprintHeight;
+    const screenX = mapTransform.positionX + localX * mapTransform.scale;
+    const screenY = mapTransform.positionY + localY * mapTransform.scale;
+
+    return (
+      <View
+        pointerEvents="none"
+        style={[
+          styles.hoverTooltipAnchor,
+          {
+            left: screenX,
+            top: screenY,
+            transform: [
+              { translateX: -(tooltipSize.width / 2) },
+              placement === "bottom"
+                ? { translateY: HOVER_TOOLTIP_GAP }
+                : { translateY: -(tooltipSize.height + HOVER_TOOLTIP_GAP) },
+            ],
+          },
+        ]}
+      >
+        <Animated.View
+          onLayout={(e) => {
+            const { width, height } = e.nativeEvent.layout;
+            if (width && height && (width !== tooltipSize.width || height !== tooltipSize.height)) {
+              setTooltipSize({ width, height });
+            }
+          }}
+          style={[
+            styles.hoverCardWrap,
+            {
+              opacity: hoverAnim,
+              transform: [
+                { translateY: hoverAnim.interpolate({ inputRange: [0, 1], outputRange: [6, 0] }) },
+                { scale: hoverAnim.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }) },
+              ],
+            },
+          ]}
+        >
+          {placement === "bottom" && <View style={styles.hoverCaretUp} />}
+          <View style={styles.hoverCard}>
+            <View style={[styles.hoverStatusPill, { backgroundColor: statusTint }]}>
+              <View style={[styles.hoverStatusDot, { backgroundColor: statusColor }]} />
+              <Text style={[styles.hoverStatusText, { color: statusColor }]}>{statusLabel}</Text>
+            </View>
+
+            <Text style={styles.hoverCategory}>{hs?.category || "—"}</Text>
+
+            <View style={styles.hoverDimsRow}>
+              <View style={styles.hoverDimsItem}>
+                <Text style={styles.hoverDimsLabel}>LENGTH</Text>
+                <Text style={styles.hoverDimsValue}>{hs?.length ?? "—"}</Text>
+              </View>
+              <View style={styles.hoverDimsDivider} />
+              <View style={styles.hoverDimsItem}>
+                <Text style={styles.hoverDimsLabel}>WIDTH</Text>
+                <Text style={styles.hoverDimsValue}>{hs?.width ?? "—"}</Text>
+              </View>
+            </View>
+          </View>
+          {placement !== "bottom" && <View style={styles.hoverCaret} />}
+        </Animated.View>
+      </View>
+    );
+  })();
 
   const actions = (
     <View style={styles.actionCol}>
@@ -194,6 +337,14 @@ export default function MarketMapEmbed({ maxWidth = 620, eyebrow, title, descrip
               minScale={MIN_ZOOM}
               maxScale={MAX_ZOOM}
               centerOnInit
+              // Without this, panning while zoomed in and then zooming back
+              // out leaves the content at its old panned position instead of
+              // re-centering — since limitToBounds only clamps DURING a
+              // gesture, not retroactively once the content becomes smaller
+              // than the viewport again, the map ends up stuck off-center
+              // with empty space on one side and content clipped on the
+              // other. This re-centers it whenever zoomed out.
+              centerZoomedOut
               limitToBounds
               // Without this, the library allows dragging up to 100% of the
               // wrapper size PAST the content's real edge (an elastic
@@ -206,6 +357,9 @@ export default function MarketMapEmbed({ maxWidth = 620, eyebrow, title, descrip
               wheel={{ step: 0.2 }}
               pinch={{ step: 5 }}
               panning={{ velocityDisabled: true }}
+              onTransform={(_ref, state) =>
+                setMapTransform({ positionX: state.positionX, positionY: state.positionY, scale: state.scale })
+              }
             >
               {({ resetTransform }) => (
                 <>
@@ -240,6 +394,8 @@ export default function MarketMapEmbed({ maxWidth = 620, eyebrow, title, descrip
                   >
                     <Ionicons name="refresh" size={16} color="#0E7C5A" />
                   </TouchableOpacity>
+
+                  {hoverTooltip}
                 </>
               )}
             </TransformWrapper>
@@ -304,7 +460,7 @@ const styles = StyleSheet.create({
   wrap: { width: "100%", alignItems: "center" },
   card: {
     width: "100%",
-    maxWidth: 1180,
+    maxWidth: 1500,
     backgroundColor: "#FFFFFF",
     borderRadius: 28,
     borderWidth: 1,
@@ -420,6 +576,84 @@ const styles = StyleSheet.create({
   hotspot: {
     position: "absolute",
   },
+
+  /* Hover tooltip (web only) — rendered outside the zoomed map content, at a
+     computed screen pixel position (see the hoverTooltip block above), so
+     left/top/transform are all plain numbers set inline, not percentages. */
+  hoverTooltipAnchor: {
+    position: "absolute",
+    zIndex: 60,
+  },
+  hoverCardWrap: { alignItems: "center" },
+  hoverCard: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    minWidth: 138,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  hoverCaret: {
+    width: 0,
+    height: 0,
+    marginTop: -1,
+    borderLeftWidth: 7,
+    borderRightWidth: 7,
+    borderTopWidth: 8,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
+    borderTopColor: "#fff",
+  },
+  // Same triangle, pointing up instead — used for "bottom" placement
+  // tooltips (the diagonal row), where the card sits below the stall and
+  // the caret needs to point back up at it instead of down away from it.
+  hoverCaretUp: {
+    width: 0,
+    height: 0,
+    marginBottom: -1,
+    borderLeftWidth: 7,
+    borderRightWidth: 7,
+    borderBottomWidth: 8,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
+    borderBottomColor: "#fff",
+  },
+  hoverStatusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    marginBottom: 8,
+  },
+  hoverStatusDot: { width: 6, height: 6, borderRadius: 3 },
+  hoverStatusText: { fontSize: 10.5, fontWeight: "800", letterSpacing: 0.3 },
+  hoverCategory: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#171A19",
+    marginBottom: 10,
+    textAlign: "center",
+  },
+  hoverDimsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FAFAF8",
+    borderRadius: 10,
+    paddingVertical: 7,
+    width: "100%",
+  },
+  hoverDimsItem: { flex: 1, alignItems: "center" },
+  hoverDimsDivider: { width: 1, height: 22, backgroundColor: "#E7E5DE" },
+  hoverDimsLabel: { fontSize: 8.5, fontWeight: "700", color: "#8A928C", letterSpacing: 0.5, marginBottom: 2 },
+  hoverDimsValue: { fontSize: 13, fontWeight: "800", color: "#171A19" },
+
   resetZoomBtn: {
     position: "absolute",
     top: 10,

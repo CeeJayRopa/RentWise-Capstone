@@ -7,13 +7,15 @@ import {
   ScrollView,
   ActivityIndicator,
   useWindowDimensions,
+  Animated,
+  Platform,
 } from "react-native";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { router } from "expo-router";
 import StallDetails from "./stall-details";
 import StallPopup from "../shared/components/StallPopup";
 import { getStalls } from "../services/stallService";
-import { MARKET_LAYOUT, normalizeStallName } from "../shared/constants/marketLayout";
+import { MARKET_LAYOUT, normalizeStallName, StallHotspot } from "../shared/constants/marketLayout";
 
 // Matches the blueprint's real pixel size (assets/market-2Dlayout.png) so hotspot
 // percentages line up correctly regardless of screen width.
@@ -41,7 +43,10 @@ interface Stall {
   name?: string;
   status?: string;
   buildingNumber?: string;
+  category?: string;
   spaceDimension?: string;
+  width?: number;
+  length?: number;
   price?: number;
 }
 
@@ -61,6 +66,37 @@ export default function MarketMap() {
   const [stalls, setStalls] = useState<Stall[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedStall, setSelectedStall] = useState<Stall | null>(null);
+
+  // Mouse-hover tooltip (web only — native has no hover concept, so
+  // hoveredStall simply never gets set on those platforms since the
+  // onMouseEnter/onMouseLeave handlers below are only attached on web).
+  const [hoveredStall, setHoveredStall] = useState<{
+    hotspot: StallHotspot;
+    stall: Stall | null;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const hoverAnim = useRef(new Animated.Value(0)).current;
+
+  const handleHoverIn = (
+    hotspot: StallHotspot,
+    stall: Stall | null,
+    left: number,
+    top: number,
+    width: number,
+    height: number
+  ) => {
+    setHoveredStall({ hotspot, stall, left, top, width, height });
+    hoverAnim.stopAnimation();
+    Animated.timing(hoverAnim, { toValue: 1, duration: 160, useNativeDriver: true }).start();
+  };
+  const handleHoverOut = () => {
+    Animated.timing(hoverAnim, { toValue: 0, duration: 120, useNativeDriver: true }).start(({ finished }) => {
+      if (finished) setHoveredStall(null);
+    });
+  };
 
   useEffect(() => {
     getStalls()
@@ -130,19 +166,91 @@ export default function MarketMap() {
                         transform: hotspot.rotationDeg ? [{ rotate: `${hotspot.rotationDeg}deg` }] : undefined,
                         backgroundColor:
                           isVacant === true
-                            ? "rgba(76,175,80,0.35)"
+                            ? "rgba(76,175,80,0.55)"
                             : isVacant === false
-                            ? "rgba(198,40,40,0.35)"
-                            : "rgba(120,120,120,0.25)",
+                            ? "rgba(198,40,40,0.55)"
+                            : "rgba(120,120,120,0.4)",
                       },
                     ]}
                     onPress={() =>
                       setSelectedStall(stall ?? { id: hotspot.name, name: hotspot.name, status: "Unknown" })
                     }
+                    {...(Platform.OS === "web"
+                      ? {
+                          onMouseEnter: () => handleHoverIn(hotspot, stall ?? null, left, top, width, height),
+                          onMouseLeave: handleHoverOut,
+                        }
+                      : {})}
                   />
                 );
               })
             )}
+
+            {hoveredStall && (() => {
+              const hs = hoveredStall.stall;
+              const isVac = hs ? hs.status?.toLowerCase() !== "occupied" : null;
+              const statusColor = isVac === true ? "#0E7C5A" : isVac === false ? "#C0392B" : "#787878";
+              const statusTint = isVac === true ? "#E4F3EC" : isVac === false ? "#FBEAE8" : "#EFEFEF";
+              const statusLabel = isVac === true ? "Vacant" : isVac === false ? "Occupied" : "Unknown";
+              // Most stalls open their tooltip above them (placement "top", the
+              // default). The diagonal row sits right at the blueprint's top
+              // edge though, so those are flagged "bottom": anchored at the
+              // stall's BOTTOM edge instead, card dropping down below it.
+              const placement = hoveredStall.hotspot.tooltipPlacement ?? "top";
+              const anchorTop = placement === "bottom" ? hoveredStall.top + hoveredStall.height : hoveredStall.top;
+              return (
+                <View
+                  pointerEvents="none"
+                  style={[
+                    styles.hoverTooltipAnchor,
+                    {
+                      left: `${hoveredStall.left + hoveredStall.width / 2}%`,
+                      top: `${anchorTop}%`,
+                      transform:
+                        placement === "bottom"
+                          ? [{ translateX: "-50%" as any }, { translateY: 12 }]
+                          : [{ translateX: "-50%" as any }, { translateY: "-100%" as any }, { translateY: -12 }],
+                    },
+                  ]}
+                >
+                  <Animated.View
+                    style={[
+                      styles.hoverCardWrap,
+                      {
+                        opacity: hoverAnim,
+                        transform: [
+                          { translateY: hoverAnim.interpolate({ inputRange: [0, 1], outputRange: [6, 0] }) },
+                          { scale: hoverAnim.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }) },
+                        ],
+                      },
+                    ]}
+                  >
+                    {placement === "bottom" && <View style={styles.hoverCaretUp} />}
+                    <View style={styles.hoverCard}>
+                      <View style={[styles.hoverStatusPill, { backgroundColor: statusTint }]}>
+                        <View style={[styles.hoverStatusDot, { backgroundColor: statusColor }]} />
+                        <Text style={[styles.hoverStatusText, { color: statusColor }]}>{statusLabel}</Text>
+                      </View>
+
+                      <Text style={styles.hoverCategory}>{hs?.category || "—"}</Text>
+
+                      <View style={styles.hoverDimsRow}>
+                        <View style={styles.hoverDimsItem}>
+                          <Text style={styles.hoverDimsLabel}>LENGTH</Text>
+                          <Text style={styles.hoverDimsValue}>{hs?.length ?? "—"}</Text>
+                        </View>
+                        <View style={styles.hoverDimsDivider} />
+                        <View style={styles.hoverDimsItem}>
+                          <Text style={styles.hoverDimsLabel}>WIDTH</Text>
+                          <Text style={styles.hoverDimsValue}>{hs?.width ?? "—"}</Text>
+                        </View>
+                      </View>
+                    </View>
+                    {placement !== "bottom" && <View style={styles.hoverCaret} />}
+                  </Animated.View>
+                </View>
+              );
+            })()}
           </View>
         </ScrollView>
       </ScrollView>
@@ -211,6 +319,82 @@ const styles = StyleSheet.create({
   hotspot: {
     position: "absolute",
   },
+
+  /* Hover tooltip (web only) — transform (position + placement) computed
+     inline per-render, see the hoveredStall block above. */
+  hoverTooltipAnchor: {
+    position: "absolute",
+    zIndex: 60,
+  },
+  hoverCardWrap: { alignItems: "center" },
+  hoverCard: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    minWidth: 138,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  hoverCaret: {
+    width: 0,
+    height: 0,
+    marginTop: -1,
+    borderLeftWidth: 7,
+    borderRightWidth: 7,
+    borderTopWidth: 8,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
+    borderTopColor: "#fff",
+  },
+  // Same triangle, pointing up instead — used for "bottom" placement
+  // tooltips (the diagonal row), where the card sits below the stall and
+  // the caret needs to point back up at it instead of down away from it.
+  hoverCaretUp: {
+    width: 0,
+    height: 0,
+    marginBottom: -1,
+    borderLeftWidth: 7,
+    borderRightWidth: 7,
+    borderBottomWidth: 8,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
+    borderBottomColor: "#fff",
+  },
+  hoverStatusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    marginBottom: 8,
+  },
+  hoverStatusDot: { width: 6, height: 6, borderRadius: 3 },
+  hoverStatusText: { fontSize: 10.5, fontWeight: "800", letterSpacing: 0.3 },
+  hoverCategory: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#171A19",
+    marginBottom: 10,
+    textAlign: "center",
+  },
+  hoverDimsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FAFAF8",
+    borderRadius: 10,
+    paddingVertical: 7,
+    width: "100%",
+  },
+  hoverDimsItem: { flex: 1, alignItems: "center" },
+  hoverDimsDivider: { width: 1, height: 22, backgroundColor: "#E7E5DE" },
+  hoverDimsLabel: { fontSize: 8.5, fontWeight: "700", color: "#8A928C", letterSpacing: 0.5, marginBottom: 2 },
+  hoverDimsValue: { fontSize: 13, fontWeight: "800", color: "#171A19" },
 
   /* Popups */
   popupOverlay: {

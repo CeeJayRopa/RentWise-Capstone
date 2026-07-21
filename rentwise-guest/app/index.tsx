@@ -743,7 +743,7 @@ export default function GuestLanding() {
           {...({ className: "rw-reveal" } as any)}
         >
           <MarketMapEmbed
-            maxWidth={760}
+            maxWidth={1100}
             eyebrow="2D MARKET VIEW"
             title="Market Blueprint"
             description="Tap any stall to see its status, or check what's vacant right now."
