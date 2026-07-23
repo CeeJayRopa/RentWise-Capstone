@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "RentWise",
-    "slug": "rentwise-owner",
+    "slug": "rentwiseeeee",
     "scheme": "rentwiseowner",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -74,10 +74,14 @@
     ],
     "extra": {
       "router": {},
+      "expo-navigation-bar": {
+        "enforceContrast": false,
+        "style": "dark"
+      },
       "eas": {
-        "projectId": "e7e22044-7e7d-4988-a9f6-05bd29bbc5ac"
+        "projectId": "b0c4a169-6b33-4972-b872-963933c5155b"
       }
     },
-    "owner": "rentwiseee"
+    "owner": "rentwiseeeeeee"
   }
 }
