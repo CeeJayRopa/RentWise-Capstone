@@ -11,6 +11,7 @@ import {
   StyleSheet,
   Alert,
   RefreshControl,
+  Animated,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { LinearGradient } from "expo-linear-gradient";
@@ -29,13 +30,19 @@ import {
   where,
 } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { House, HelpCircle, Users, Wallet, Receipt as ReceiptIcon, CheckCircle2, Eye, Clock } from "lucide-react-native";
+import { House, HelpCircle, Users, Wallet, Receipt as ReceiptIcon, CheckCircle2, Eye, Clock, ArrowRight } from "lucide-react-native";
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
 import { logDetailedUpdate } from "../../shared/services/updatesService";
 import UpdatesReportFAB, { FAB_CLEARANCE } from "../components/UpdatesReportFAB";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
+import {
+  getReminderSchedule,
+  setReminderSchedule,
+  DEFAULT_REMINDER_HOUR,
+  DEFAULT_REMINDER_MINUTE,
+} from "../../shared/services/reminderSchedule";
 import { Badge } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import * as Print from "expo-print";
@@ -133,6 +140,10 @@ function periodUnitLabel(schedule: string, count: number): string {
   return plural ? "months" : "month";
 }
 
+// Matches ampmTrack/ampmPill below: track is 68 tall with 3px padding on
+// each side, so each half (and the pill sliding between them) is 31 tall.
+const AMPM_PILL_HEIGHT = 31;
+
 export default function Financials() {
   const insets = useSafeAreaInsets();
 
@@ -155,6 +166,19 @@ export default function Financials() {
   const [selectedOnlinePayment, setSelectedOnlinePayment] = useState<any>(null);
   const [tourVisible, setTourVisible] = useState(false);
 
+  const [reminderHour, setReminderHour] = useState(DEFAULT_REMINDER_HOUR);
+  const [reminderMinute, setReminderMinute] = useState(DEFAULT_REMINDER_MINUTE);
+  const [showReminderModal, setShowReminderModal] = useState(false);
+  const [savingReminder, setSavingReminder] = useState(false);
+  // Draft values edited inside the modal -- only committed to
+  // reminderHour/reminderMinute (and Firestore) on Save, so Cancel discards
+  // any in-progress stepper taps.
+  const [draftHour12, setDraftHour12] = useState(2);
+  const [draftMinute, setDraftMinute] = useState(30);
+  const [draftIsPM, setDraftIsPM] = useState(true);
+  // Drives the sliding AM/PM pill -- 0 = AM, 1 = PM.
+  const ampmSlideAnim = useRef(new Animated.Value(1)).current;
+
   const userDocsRef = useRef<any[]>([]);
   const stallMapRef = useRef<Map<string, StallInfo>>(new Map());
   const paymentsRef = useRef<any[]>([]);
@@ -163,6 +187,7 @@ export default function Financials() {
   const helpRef = useRef<View>(null);
   const summaryRef = useRef<View>(null);
   const filterRef = useRef<View>(null);
+  const reminderTimeRef = useRef<View>(null);
   const listRef = useRef<View>(null);
   const viewBtnRef = useRef<View>(null);
   const fabRef = useRef<View>(null);
@@ -197,6 +222,66 @@ export default function Financials() {
     });
     return unsub;
   }, []);
+
+  useEffect(() => {
+    if (checking) return;
+    getReminderSchedule()
+      .then(({ hour, minute }) => {
+        setReminderHour(hour);
+        setReminderMinute(minute);
+      })
+      .catch((err) => {
+        // Falls back to the defaults already in state (14:30) -- most likely
+        // cause is the settings/reminderSchedule Firestore rule not being
+        // deployed yet, or the doc not existing yet.
+        console.error("GET REMINDER SCHEDULE ERROR:", err);
+      });
+  }, [checking]);
+
+  function openReminderModal() {
+    const isPM = reminderHour >= 12;
+    const hour12 = reminderHour % 12 === 0 ? 12 : reminderHour % 12;
+    setDraftHour12(hour12);
+    setDraftMinute(reminderMinute);
+    setDraftIsPM(isPM);
+    // Snap instantly to the right side on open -- this is initializing the
+    // modal's state, not a user-driven toggle, so it shouldn't animate.
+    ampmSlideAnim.setValue(isPM ? 1 : 0);
+    setShowReminderModal(true);
+  }
+
+  function toggleAmPm(isPM: boolean) {
+    setDraftIsPM(isPM);
+    Animated.timing(ampmSlideAnim, {
+      toValue: isPM ? 1 : 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start();
+  }
+
+  async function saveReminderTime() {
+    const hour24 = draftIsPM
+      ? (draftHour12 % 12) + 12
+      : draftHour12 % 12;
+    setSavingReminder(true);
+    try {
+      await setReminderSchedule({ hour: hour24, minute: draftMinute });
+      setReminderHour(hour24);
+      setReminderMinute(draftMinute);
+      setShowReminderModal(false);
+    } catch (err) {
+      console.error("SAVE REMINDER TIME ERROR:", err);
+      Alert.alert("Error", "Failed to save reminder time. Please try again.");
+    } finally {
+      setSavingReminder(false);
+    }
+  }
+
+  function formatReminderTime(hour24: number, minute: number): string {
+    const isPM = hour24 >= 12;
+    const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+    return `${hour12}:${minute.toString().padStart(2, "0")} ${isPM ? "PM" : "AM"}`;
+  }
 
   // selectedTenant is a one-time snapshot taken when a modal opens (e.g.
   // "Set Paid" / cash payment) -- rows keeps updating live in the
@@ -600,6 +685,7 @@ export default function Financials() {
     { key: "fab", ref: fabRef, title: "Updates report", description: "Shows recent changes awaiting your review, organized by building, financials, and accounts.", edgeInset: "bottom", round: true, nudgeY: 0 },
     { key: "summary", ref: summaryRef, title: "Spaces / Paid / Unpaid", description: "Total stalls tracked here, and how many tenants have paid vs. are still unpaid this period.", edgeInset: "top" },
     { key: "filter", ref: filterRef, title: "Status filter", description: "Narrow the list to only paid or only unpaid tenants.", edgeInset: "top" },
+    { key: "reminderTime", ref: reminderTimeRef, title: "Reminder time", description: "Set what time tenants get their daily payment reminder.", edgeInset: "top" },
     { key: "list", ref: listRef, title: "Tenant list", description: "Paid/Unpaid badges show status at a glance. Unpaid tenants show a Set Paid button to record their payment; pending online payments show Confirm instead.", edgeInset: "top" },
   ];
   if (filteredRows.length > 0) {
@@ -671,7 +757,8 @@ export default function Financials() {
         </View>
 
         {/* STATUS FILTER */}
-        <View style={styles.filterRow} ref={filterRef} collapsable={false}>
+        <View style={styles.filterRow}>
+          <View style={styles.filterStatusGroup} ref={filterRef} collapsable={false}>
           <Text style={styles.filterLabel}>Status</Text>
           <View style={styles.segmentTrack}>
             {(["All", "Paid", "Unpaid"] as StatusFilter[]).map((opt) => (
@@ -686,6 +773,19 @@ export default function Financials() {
                 </Text>
               </TouchableOpacity>
             ))}
+          </View>
+          </View>
+          <View ref={reminderTimeRef} collapsable={false} style={{ transform: [{ translateX: 8 }] }}>
+            <TouchableOpacity
+              style={styles.reminderTimeBtn}
+              onPress={openReminderModal}
+              activeOpacity={0.7}
+            >
+              <Clock size={13} color={colors.emerald} style={{ marginRight: 5 }} />
+              <Text style={styles.reminderTimeBtnText}>
+                {formatReminderTime(reminderHour, reminderMinute)}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -1285,6 +1385,128 @@ export default function Financials() {
       </Modal>
 
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
+
+      {/* REMINDER TIME MODAL */}
+      <Modal
+        visible={showReminderModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!savingReminder) setShowReminderModal(false); }}
+      >
+        <View style={styles.modalBg}>
+          <View style={styles.reminderModalBox}>
+            <View style={styles.reminderModalTitleRow}>
+              <View style={styles.reminderIconCircle}>
+                <Clock size={20} color={colors.emerald} />
+              </View>
+              <View>
+                <Text style={styles.reminderModalEyebrow}>DAILY</Text>
+                <Text style={styles.reminderModalTitle}>Reminder Time</Text>
+              </View>
+            </View>
+
+            <View style={styles.reminderPickerBox}>
+              <View style={styles.timeStepperRow}>
+                <View style={styles.stepperColumn}>
+                  <TouchableOpacity
+                    style={styles.stepperBtn}
+                    onPress={() => setDraftHour12((h) => (h % 12) + 1)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.stepperBtnText}>+</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.stepperValue}>{draftHour12.toString().padStart(2, "0")}</Text>
+                  <TouchableOpacity
+                    style={styles.stepperBtn}
+                    onPress={() => setDraftHour12((h) => ((h + 10) % 12) + 1)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.stepperBtnText}>−</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={styles.stepperColon}>:</Text>
+
+                <View style={styles.stepperColumn}>
+                  <TouchableOpacity
+                    style={styles.stepperBtn}
+                    onPress={() => setDraftMinute((m) => (m + 5) % 60)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.stepperBtnText}>+</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.stepperValue}>{draftMinute.toString().padStart(2, "0")}</Text>
+                  <TouchableOpacity
+                    style={styles.stepperBtn}
+                    onPress={() => setDraftMinute((m) => (m - 5 + 60) % 60)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.stepperBtnText}>−</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.ampmTrack}>
+                  <Animated.View
+                    style={[
+                      styles.ampmPill,
+                      {
+                        transform: [
+                          {
+                            translateY: ampmSlideAnim.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [0, AMPM_PILL_HEIGHT],
+                            }),
+                          },
+                        ],
+                      },
+                    ]}
+                  />
+                  <TouchableOpacity
+                    style={styles.ampmBtn}
+                    onPress={() => toggleAmPm(false)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.ampmBtnText, !draftIsPM && styles.ampmBtnTextActive]}>AM</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.ampmBtn}
+                    onPress={() => toggleAmPm(true)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.ampmBtnText, draftIsPM && styles.ampmBtnTextActive]}>PM</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.reminderModalButtons}>
+              <TouchableOpacity
+                style={styles.reminderCancelBtn}
+                onPress={() => setShowReminderModal(false)}
+                disabled={savingReminder}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.reminderCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.reminderSaveBtn, savingReminder && { opacity: 0.6 }]}
+                onPress={saveReminderTime}
+                disabled={savingReminder}
+                activeOpacity={0.8}
+              >
+                {savingReminder ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <>
+                    <Text style={styles.reminderSaveBtnText}>Save reminder</Text>
+                    <ArrowRight size={15} color={colors.white} style={{ marginLeft: 4 }} />
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1434,8 +1656,13 @@ const styles = StyleSheet.create({
   filterRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm + 2,
     marginBottom: spacing.lg,
+  },
+
+  filterStatusGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm + 2,
   },
   filterLabel: { fontSize: fontSize.base, fontFamily: fontFamily.semibold, color: colors.ink },
   segmentTrack: {
@@ -1925,6 +2152,189 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.bold,
     color: colors.white,
     textAlign: "center",
+  },
+
+  // ── Reminder time button + modal ─────────────────────────────────────────
+
+  reminderTimeBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.emeraldSoft,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    marginLeft: "auto",
+  },
+
+  reminderTimeBtnText: {
+    color: colors.emerald,
+    fontSize: fontSize.xs + 1,
+    fontFamily: fontFamily.semibold,
+  },
+
+  reminderModalBox: {
+    width: "100%",
+    maxWidth: 320,
+    backgroundColor: colors.white,
+    borderRadius: radius.xl,
+    padding: spacing.xl,
+    ...shadow.raised,
+  },
+
+  reminderModalTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+  },
+
+  reminderIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.emeraldSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  reminderModalEyebrow: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.textMuted,
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+
+  reminderModalTitle: {
+    fontSize: fontSize.lg + 2,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    marginTop: 2,
+  },
+
+  reminderPickerBox: {
+    backgroundColor: colors.parchment,
+    borderRadius: radius.lg,
+    paddingVertical: spacing.xl,
+    marginTop: spacing.xl,
+  },
+
+  timeStepperRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.md,
+  },
+
+  stepperColumn: {
+    alignItems: "center",
+  },
+
+  stepperBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.emeraldSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  stepperBtnText: {
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.bold,
+    color: colors.emerald,
+    lineHeight: fontSize.lg + 2,
+  },
+
+  stepperValue: {
+    fontSize: fontSize.xxl + 6,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    marginVertical: spacing.sm,
+    minWidth: 54,
+    textAlign: "center",
+  },
+
+  stepperColon: {
+    fontSize: fontSize.xxl + 6,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+  },
+
+  ampmTrack: {
+    width: 44,
+    height: 68,
+    borderRadius: radius.pill,
+    backgroundColor: colors.mist,
+    padding: 3,
+    flexDirection: "column",
+    position: "relative",
+    marginLeft: spacing.sm,
+  },
+
+  ampmPill: {
+    position: "absolute",
+    top: 3,
+    left: 3,
+    width: 38,
+    height: AMPM_PILL_HEIGHT,
+    borderRadius: radius.pill,
+    backgroundColor: colors.emerald,
+  },
+
+  ampmBtn: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  ampmBtnText: {
+    fontSize: fontSize.xs + 1,
+    fontFamily: fontFamily.semibold,
+    color: colors.textSecondary,
+  },
+
+  ampmBtnTextActive: {
+    color: colors.white,
+  },
+
+  reminderModalButtons: {
+    flexDirection: "row",
+    gap: spacing.sm + 2,
+    marginTop: spacing.xl,
+  },
+
+  reminderCancelBtn: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    paddingVertical: spacing.md - 1,
+  },
+
+  reminderCancelBtnText: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.semibold,
+    color: colors.textSecondary,
+  },
+
+  reminderSaveBtn: {
+    flex: 1.4,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+    backgroundColor: colors.ink,
+    paddingVertical: spacing.md - 1,
+    ...shadow.button,
+  },
+
+  reminderSaveBtnText: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+    color: colors.white,
   },
 
 });

@@ -8,6 +8,9 @@ import {
   ScrollView,
   Animated,
   Easing,
+  Modal,
+  TouchableOpacity,
+  ActivityIndicator,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -36,6 +39,7 @@ export default function Profile() {
   const [personalEmail, setPersonalEmail] = useState("");
   const [emailVerified, setEmailVerified] = useState(false);
   const [resendingVerification, setResendingVerification] = useState(false);
+  const [showSpamReminder, setShowSpamReminder] = useState(false);
   const [stallId, setStallId] = useState("");
   const [memberSince, setMemberSince] = useState("");
   const [category, setCategory] = useState<MarketCategory | "">("");
@@ -173,6 +177,7 @@ export default function Profile() {
     try {
       await sendEmailVerification(user);
       Alert.alert("Verification email sent", "Check your inbox and tap the link to confirm your email.");
+      setTimeout(() => setShowSpamReminder(true), 5000);
     } catch {
       Alert.alert("Error", "Couldn't send the verification email. Please try again later.");
     } finally {
@@ -259,10 +264,19 @@ export default function Profile() {
     ]).start(() => setShowToast(false));
   }
 
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
   async function handleSignOut() {
-    await logoutUser();
-    await setRememberMe(false);
-    router.replace("/login");
+    setLoggingOut(true);
+    try {
+      await logoutUser();
+      await setRememberMe(false);
+      router.replace("/login");
+    } finally {
+      setLoggingOut(false);
+      setShowLogoutConfirm(false);
+    }
   }
 
   async function saveProfile() {
@@ -604,7 +618,7 @@ export default function Profile() {
             styles.signOutButton,
             pressed && { backgroundColor: colors.errorSoft },
           ]}
-          onPress={handleSignOut}
+          onPress={() => setShowLogoutConfirm(true)}
         >
           <LogOut size={16} color={colors.error} />
           <Text style={styles.signOutText}>Sign out</Text>
@@ -629,6 +643,86 @@ export default function Profile() {
           scrollRef.current?.scrollTo({ y: 0, animated: true });
         }}
       />
+
+      {/* LOGOUT CONFIRMATION MODAL */}
+      <Modal
+        visible={showLogoutConfirm}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!loggingOut) setShowLogoutConfirm(false); }}
+      >
+        <View style={styles.alertOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => { if (!loggingOut) setShowLogoutConfirm(false); }}
+          />
+          <View style={styles.alertCard}>
+            <View style={styles.alertBody}>
+              <Text style={styles.alertTitle}>Logout</Text>
+              <Text style={styles.alertMessage}>Are you sure you want to logout?</Text>
+            </View>
+            <View style={styles.alertDivider} />
+            <View style={styles.alertBtnRow}>
+              <TouchableOpacity
+                style={styles.alertBtn}
+                onPress={() => setShowLogoutConfirm(false)}
+                activeOpacity={0.6}
+                disabled={loggingOut}
+              >
+                <Text style={styles.alertBtnCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <View style={styles.alertBtnDivider} />
+              <TouchableOpacity
+                style={styles.alertBtn}
+                onPress={handleSignOut}
+                activeOpacity={0.6}
+                disabled={loggingOut}
+              >
+                {loggingOut ? (
+                  <ActivityIndicator color={colors.emerald} size="small" />
+                ) : (
+                  <Text style={styles.alertBtnConfirmText}>Confirm</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* SPAM FOLDER REMINDER MODAL */}
+      <Modal
+        visible={showSpamReminder}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowSpamReminder(false)}
+      >
+        <View style={styles.alertOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setShowSpamReminder(false)}
+          />
+          <View style={styles.alertCard}>
+            <View style={styles.alertBody}>
+              <Text style={styles.alertTitleNeutral}>Check your spam folder</Text>
+              <Text style={styles.alertMessage}>
+                Didn't see the email? It sometimes lands in spam or junk instead of your main inbox.
+              </Text>
+            </View>
+            <View style={styles.alertDivider} />
+            <View style={styles.alertBtnRow}>
+              <TouchableOpacity
+                style={styles.alertBtn}
+                onPress={() => setShowSpamReminder(false)}
+                activeOpacity={0.6}
+              >
+                <Text style={styles.alertBtnConfirmText}>Got it</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1048,5 +1142,87 @@ const styles = StyleSheet.create({
     color: colors.error,
     fontSize: fontSize.base,
     fontFamily: fontFamily.semibold,
+  },
+
+  // ── Logout confirmation alert ────────────────────────────────────────────
+
+  alertOverlay: {
+    flex: 1,
+    backgroundColor: colors.overlay,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: spacing.xxl,
+  },
+
+  alertCard: {
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    width: 270,
+    overflow: "hidden",
+    ...shadow.raised,
+  },
+
+  alertBody: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.lg,
+    alignItems: "center",
+  },
+
+  alertTitle: {
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
+    color: colors.error,
+    textAlign: "center",
+  },
+
+  alertTitleNeutral: {
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    textAlign: "center",
+  },
+
+  alertMessage: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    color: colors.ink,
+    textAlign: "center",
+    marginTop: spacing.sm,
+    lineHeight: 19,
+  },
+
+  alertDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+  },
+
+  alertBtnRow: {
+    flexDirection: "row",
+  },
+
+  alertBtn: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 44,
+  },
+
+  alertBtnDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+  },
+
+  alertBtnCancelText: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.regular,
+    color: colors.textMuted,
+  },
+
+  alertBtnConfirmText: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
   },
 });

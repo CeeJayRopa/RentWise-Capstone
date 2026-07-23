@@ -11,6 +11,7 @@ import {
   StyleSheet,
   Alert,
   ScrollView,
+  Modal,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
@@ -175,10 +176,19 @@ export default function AdminProfile() {
     }
   };
 
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
   const handleLogout = async () => {
-    await logoutUser();
-    await setRememberMe(false);
-    router.replace("/");
+    setLoggingOut(true);
+    try {
+      await logoutUser();
+      await setRememberMe(false);
+      router.replace("/");
+    } finally {
+      setLoggingOut(false);
+      setShowLogoutConfirm(false);
+    }
   };
 
   if (loading) {
@@ -323,7 +333,7 @@ export default function AdminProfile() {
         <View ref={logoutBtnRef} collapsable={false}>
         <Pressable
           style={({ pressed }) => [styles.logoutBtn, pressed && styles.logoutBtnPressed]}
-          onPress={handleLogout}
+          onPress={() => setShowLogoutConfirm(true)}
         >
           <LogOut size={18} color={colors.error} style={{ marginRight: spacing.sm + 2 }} />
           <Text style={styles.logoutBtnText}>Logout Account</Text>
@@ -351,6 +361,52 @@ export default function AdminProfile() {
           scrollRef.current?.scrollTo({ y: 0, animated: true });
         }}
       />
+
+      {/* LOGOUT CONFIRMATION MODAL */}
+      <Modal
+        visible={showLogoutConfirm}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!loggingOut) setShowLogoutConfirm(false); }}
+      >
+        <View style={styles.alertOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => { if (!loggingOut) setShowLogoutConfirm(false); }}
+          />
+          <View style={styles.alertCard}>
+            <View style={styles.alertBody}>
+              <Text style={styles.alertTitle}>Logout</Text>
+              <Text style={styles.alertMessage}>Are you sure you want to logout?</Text>
+            </View>
+            <View style={styles.alertDivider} />
+            <View style={styles.alertBtnRow}>
+              <TouchableOpacity
+                style={styles.alertBtn}
+                onPress={() => setShowLogoutConfirm(false)}
+                activeOpacity={0.6}
+                disabled={loggingOut}
+              >
+                <Text style={styles.alertBtnCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <View style={styles.alertBtnDivider} />
+              <TouchableOpacity
+                style={styles.alertBtn}
+                onPress={handleLogout}
+                activeOpacity={0.6}
+                disabled={loggingOut}
+              >
+                {loggingOut ? (
+                  <ActivityIndicator color={colors.emerald} size="small" />
+                ) : (
+                  <Text style={styles.alertBtnConfirmText}>Confirm</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -604,5 +660,80 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: fontSize.md,
     fontFamily: fontFamily.semibold,
+  },
+
+  // ── Logout confirmation alert ────────────────────────────────────────────
+
+  alertOverlay: {
+    flex: 1,
+    backgroundColor: colors.overlay,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: spacing.xxl,
+  },
+
+  alertCard: {
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    width: 270,
+    overflow: "hidden",
+    ...shadow.raised,
+  },
+
+  alertBody: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.lg,
+    alignItems: "center",
+  },
+
+  alertTitle: {
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
+    color: colors.error,
+    textAlign: "center",
+  },
+
+  alertMessage: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    color: colors.ink,
+    textAlign: "center",
+    marginTop: spacing.sm,
+    lineHeight: 19,
+  },
+
+  alertDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+  },
+
+  alertBtnRow: {
+    flexDirection: "row",
+  },
+
+  alertBtn: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 44,
+  },
+
+  alertBtnDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+  },
+
+  alertBtnCancelText: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.regular,
+    color: colors.textMuted,
+  },
+
+  alertBtnConfirmText: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
   },
 });

@@ -3,18 +3,25 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { sendSMSWithRetry } from './smsService';
 import { isPaymentDue, hasReminderBeenSent } from './paymentChecker';
 
+// The admin-configurable send time (rentwise-admin/app/(tabs)/financials.tsx
+// writes this doc). Cloud Scheduler's cron is fixed at deploy time -- there's
+// no API for the app to change it live -- so instead this function runs every
+// minute and immediately exits unless the current Manila time matches the
+// configured hour/minute. Falls back to the original default (2:30 PM) if
+// the admin has never set one.
+const DEFAULT_REMINDER_HOUR = 14;
+const DEFAULT_REMINDER_MINUTE = 30;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PAYMENT REMINDER SCHEDULER
 //
-// Runs daily at 2:30 PM Asia/Manila (Philippine Time).
-// Firebase Cloud Scheduler resolves the cron in the given timezone natively —
-// no manual UTC offset calculation is needed.
-//
-// Cron: "30 14 * * *"  →  minute=30, hour=14 (2:30 PM), every day
+// Ticks every minute, Asia/Manila (Philippine Time), but only actually sends
+// reminders once a day, during the single minute that matches the admin's
+// configured time (see settings/reminderSchedule below).
 // ─────────────────────────────────────────────────────────────────────────────
 export const sendPaymentReminders = onSchedule(
   {
-    schedule: '30 14 * * *',
+    schedule: '* * * * *',
     timeZone: 'Asia/Manila',
     maxInstances: 1,
   },
@@ -22,6 +29,22 @@ export const sendPaymentReminders = onSchedule(
     // ── Top-level guard ───────────────────────────────────────────────────────
     try {
       const db = getFirestore();
+
+      // ── Gate: only proceed during the admin's configured minute ─────────────
+      const configSnap = await db.doc('settings/reminderSchedule').get();
+      const configuredHour = configSnap.data()?.hour ?? DEFAULT_REMINDER_HOUR;
+      const configuredMinute = configSnap.data()?.minute ?? DEFAULT_REMINDER_MINUTE;
+
+      const nowManila = new Date(
+        new Date().toLocaleString('en-US', { timeZone: 'Asia/Manila' }),
+      );
+      if (
+        nowManila.getHours() !== configuredHour ||
+        nowManila.getMinutes() !== configuredMinute
+      ) {
+        return;
+      }
+
       const tenantsSnap = await db
         .collection('users')
         .where('role', '==', 'tenant')

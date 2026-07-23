@@ -180,6 +180,13 @@ service cloud.firestore {
       allow update: if false;
     }
 
+    // ── settings (admin-configurable app settings, e.g. reminder time) ─
+    // Read/write requires admin -- the reminder Cloud Function itself uses
+    // the Admin SDK and bypasses these rules, so this only gates the client.
+    match /settings/{settingId} {
+      allow read, write: if isAdmin();
+    }
+
     // ── archives / dailyReports (owner + admin only) ───────────────────
     match /archives/{archiveId} {
       allow read, write: if isStaff();
