@@ -32,7 +32,7 @@ import {
 
 import { db } from "../shared/services/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Bell, Check, FileText, Info, TrendingUp, CalendarClock, HelpCircle } from "lucide-react-native";
+import { ArrowLeft, Bell, Check, FileText, Info, TrendingUp, CalendarClock, HelpCircle, ChevronUp, ChevronDown } from "lucide-react-native";
 import { Card, Badge, Avatar, Button } from "../shared/components/ui";
 import HelpTour, { HelpStep } from "./components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
@@ -208,6 +208,7 @@ export default function TenantPreview() {
   const [generatingReceipt, setGeneratingReceipt] = useState(false);
   const [imageViewerUrl, setImageViewerUrl] = useState<string | null>(null);
   const [digitalReceipt, setDigitalReceipt] = useState<any>(null);
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
 
   const [tourVisible, setTourVisible] = useState(false);
   const helpRef = useRef<View>(null);
@@ -238,6 +239,12 @@ export default function TenantPreview() {
   useEffect(() => {
     loadTenant();
   }, []);
+
+  // Collapse the Breakdown dropdown again each time a different receipt is
+  // opened, so it doesn't stay expanded from whatever the last one left it at.
+  useEffect(() => {
+    setBreakdownOpen(false);
+  }, [digitalReceipt]);
 
   // Auto-opens the guided tour the first time the admin ever lands on this
   // page — never again after that, since it flips a persisted per-device
@@ -792,18 +799,34 @@ export default function TenantPreview() {
 
             {receiptBreakdown.length > 0 && (
               <View style={styles.breakdownSection}>
-                <Text style={styles.breakdownTitle}>Breakdown</Text>
-                {receiptBreakdown.map((line, i) => (
-                  <View key={i} style={styles.breakdownRow}>
-                    <Text style={styles.breakdownLabel}>{line.label}</Text>
-                    <Text style={styles.breakdownValue}>₱{line.amount.toLocaleString()}</Text>
-                  </View>
-                ))}
-                <View style={styles.breakdownDivider} />
-                <View style={styles.breakdownRow}>
-                  <Text style={styles.breakdownTotalLabel}>Total</Text>
-                  <Text style={styles.breakdownTotalValue}>₱{receiptAmountPaid.toLocaleString()}</Text>
-                </View>
+                <TouchableOpacity
+                  style={styles.breakdownHeader}
+                  onPress={() => setBreakdownOpen((v) => !v)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.breakdownTitle}>Breakdown</Text>
+                  {breakdownOpen ? (
+                    <ChevronUp size={16} color={colors.emerald} />
+                  ) : (
+                    <ChevronDown size={16} color={colors.emerald} />
+                  )}
+                </TouchableOpacity>
+
+                {breakdownOpen && (
+                  <ScrollView style={styles.breakdownScroll} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+                    {receiptBreakdown.map((line, i) => (
+                      <View key={i} style={styles.breakdownRow}>
+                        <Text style={styles.breakdownLabel}>{line.label}</Text>
+                        <Text style={styles.breakdownValue}>₱{line.amount.toLocaleString()}</Text>
+                      </View>
+                    ))}
+                    <View style={styles.breakdownDivider} />
+                    <View style={styles.breakdownRow}>
+                      <Text style={styles.breakdownTotalLabel}>Total</Text>
+                      <Text style={styles.breakdownTotalValue}>₱{receiptAmountPaid.toLocaleString()}</Text>
+                    </View>
+                  </ScrollView>
+                )}
               </View>
             )}
 
@@ -1302,11 +1325,24 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
   },
 
+  breakdownHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+
   breakdownTitle: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.bold,
     color: colors.ink,
-    marginBottom: spacing.sm,
+  },
+
+  // Caps the list to roughly 3 rows tall (each row is ~28px) so a long
+  // breakdown scrolls inside its own area instead of pushing the rest of
+  // the modal (buttons included) further down the screen.
+  breakdownScroll: {
+    maxHeight: 90,
+    marginTop: spacing.sm,
   },
 
   breakdownRow: {

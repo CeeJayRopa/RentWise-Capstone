@@ -100,12 +100,12 @@ export default function Dashboard() {
 
   const tourSteps: HelpStep[] = [
     { key: "bell", ref: bellRef, title: "Notifications", description: "Updates from the admin, like payment confirmations and account changes.", edgeInset: "top", round: true },
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
     { key: "payment", ref: paymentCardRef, title: "Rental payment", description: "Your remaining bill this month, how much you've paid, and what's currently due.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(paymentCardRef) },
     { key: "schedule", ref: scheduleRef, title: "Upcoming schedule", description: "Your next rent installments and when they're due.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(scheduleRef) },
     { key: "navhome", ref: bottomNavRefs.home, title: "Home", description: "Your dashboard — rental payment status and upcoming schedule.", edgeInset: "bottom" },
     { key: "navpayments", ref: bottomNavRefs.payments, title: "Payments", description: "Pay your rent online, and view your payment and receipt history.", edgeInset: "bottom" },
     { key: "navprofile", ref: bottomNavRefs.profile, title: "Profile", description: "View and edit your account details, and sign out.", edgeInset: "bottom" },
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
   ];
 
   // Auto-opens the guided tour the very first time this device ever lands

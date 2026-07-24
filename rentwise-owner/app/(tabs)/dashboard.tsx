@@ -97,7 +97,6 @@ export default function Dashboard() {
   const tourSteps: HelpStep[] = [
     { key: "profile", ref: profileRef, title: "Profile", description: "View and edit your owner account details.", edgeInset: "top", round: true },
     { key: "bell", ref: bellRef, title: "Notifications", description: "Shows admin updates waiting for your review, like payments and building changes.", edgeInset: "top", round: true },
-    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
     { key: "market", ref: marketChartRef, title: "Market overview", description: "How many stalls are occupied vs. unoccupied right now.", edgeInset: "top" },
     { key: "finance", ref: financeChartRef, title: "Financial performance", description: "Amount collected today and this month, compared against the prior period.", edgeInset: "top" },
     { key: "collected", ref: collectedRef, title: "Payment status", description: "How many active tenants have paid this month vs. are still unpaid.", edgeInset: "top" },
@@ -106,6 +105,7 @@ export default function Dashboard() {
     { key: "navadmins", ref: bottomNavRefs.admins, title: "Admins", description: "Manage the market admin's profile and login password.", edgeInset: "bottom" },
     { key: "navarchives", ref: bottomNavRefs.archives, title: "Archives", description: "View archived tenant accounts, and restore or permanently delete them.", edgeInset: "bottom" },
     { key: "navreports", ref: bottomNavRefs.reports, title: "Reports", description: "Download a daily PDF report of every update the admin made and you acknowledged.", edgeInset: "bottom" },
+    { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
   ];
 
   useEffect(() => {

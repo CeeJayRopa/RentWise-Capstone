@@ -12,6 +12,7 @@ import {
   Alert,
   RefreshControl,
   Animated,
+  Easing,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { LinearGradient } from "expo-linear-gradient";
@@ -179,6 +180,11 @@ export default function Financials() {
   // Drives the sliding AM/PM pill -- 0 = AM, 1 = PM.
   const ampmSlideAnim = useRef(new Animated.Value(1)).current;
 
+  const [reminderSaved, setReminderSaved] = useState(false);
+  const [reminderSavedText, setReminderSavedText] = useState("");
+  const reminderToastFade = useRef(new Animated.Value(0)).current;
+  const reminderToastTranslateY = useRef(new Animated.Value(20)).current;
+
   const userDocsRef = useRef<any[]>([]);
   const stallMapRef = useRef<Map<string, StallInfo>>(new Map());
   const paymentsRef = useRef<any[]>([]);
@@ -238,6 +244,23 @@ export default function Financials() {
       });
   }, [checking]);
 
+  useEffect(() => {
+    if (!reminderSaved) return;
+    reminderToastFade.setValue(0);
+    reminderToastTranslateY.setValue(20);
+    Animated.sequence([
+      Animated.parallel([
+        Animated.timing(reminderToastFade, { toValue: 1, duration: 450, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+        Animated.timing(reminderToastTranslateY, { toValue: 0, duration: 450, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      ]),
+      Animated.delay(1000),
+      Animated.parallel([
+        Animated.timing(reminderToastFade, { toValue: 0, duration: 450, easing: Easing.in(Easing.back(1.5)), useNativeDriver: true }),
+        Animated.timing(reminderToastTranslateY, { toValue: -10, duration: 450, easing: Easing.in(Easing.back(1.5)), useNativeDriver: true }),
+      ]),
+    ]).start(() => setReminderSaved(false));
+  }, [reminderSaved]);
+
   function openReminderModal() {
     const isPM = reminderHour >= 12;
     const hour12 = reminderHour % 12 === 0 ? 12 : reminderHour % 12;
@@ -269,6 +292,8 @@ export default function Financials() {
       setReminderHour(hour24);
       setReminderMinute(draftMinute);
       setShowReminderModal(false);
+      setReminderSavedText(formatReminderTime(hour24, draftMinute));
+      setReminderSaved(true);
     } catch (err) {
       console.error("SAVE REMINDER TIME ERROR:", err);
       Alert.alert("Error", "Failed to save reminder time. Please try again.");
@@ -900,12 +925,18 @@ export default function Financials() {
       <Modal visible={paymentModal} transparent animationType="fade">
         <View style={styles.modalBg}>
           <View style={styles.payModalBox}>
-            <View style={styles.payModalTitleRow}>
+            <LinearGradient
+              colors={[colors.emerald, colors.ink]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.payModalTitleRow}
+            >
               <View style={styles.payModalBadge}>
                 <Text style={styles.payModalBadgeText}>₱</Text>
               </View>
               <Text style={styles.payModalTitle}>Payment Confirmation</Text>
-            </View>
+            </LinearGradient>
+            <View style={styles.payModalBody}>
             <View style={styles.payModalRow}>
               <Text style={styles.payModalLabel}>Tenant Name</Text>
               <Text style={styles.modalValue}>{selectedTenant?.name}</Text>
@@ -1050,6 +1081,7 @@ export default function Financials() {
                   {processing ? "Saving..." : "Generate Receipt"}
                 </Text>
               </TouchableOpacity>
+            </View>
             </View>
           </View>
         </View>
@@ -1315,12 +1347,17 @@ export default function Financials() {
               style={styles.receiptHeader}
             >
               <View style={styles.receiptHeaderIcon}>
-                <ReceiptIcon size={20} color={colors.emerald} />
+                <Text style={styles.receiptHeaderIconText}>₱</Text>
               </View>
               <Text style={styles.receiptHeaderTitle}>Payment Receipt</Text>
-              {!!receiptData?.receiptNo && (
-                <Text style={styles.receiptHeaderNo}>#{receiptData.receiptNo}</Text>
-              )}
+              <View style={styles.receiptHeaderMetaCol}>
+                {!!receiptData?.receiptNo && (
+                  <Text style={styles.receiptHeaderNo}>#{receiptData.receiptNo}</Text>
+                )}
+                {!!receiptData?.status && (
+                  <Text style={styles.receiptHeaderStatus}>{receiptData.status}</Text>
+                )}
+              </View>
             </LinearGradient>
 
             <View style={styles.receiptBody}>
@@ -1357,28 +1394,23 @@ export default function Financials() {
                 <Text style={styles.receiptTotalValue}>₱{receiptData?.payment}</Text>
               </View>
 
-              <View style={styles.receiptStatusBadge}>
-                <CheckCircle2 size={13} color={colors.emerald} style={{ marginRight: 5 }} />
-                <Text style={styles.receiptStatusText}>{receiptData?.status}</Text>
+              <View style={styles.payModalButtons}>
+                <TouchableOpacity
+                  style={styles.payModalBtnSecondary}
+                  onPress={() => {
+                    setReceiptModal(false);
+                  }}
+                >
+                  <Text style={styles.payModalBtnSecondaryText}>Close</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.payModalBtnPrimary}
+                  onPress={downloadReceipt}
+                >
+                  <Text style={styles.payModalBtnPrimaryText}>Download Receipt</Text>
+                </TouchableOpacity>
               </View>
-            </View>
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={styles.modalBtnSecondary}
-                onPress={() => {
-                  setReceiptModal(false);
-                }}
-              >
-                <Text style={styles.modalBtnSecondaryText}>Close</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.modalBtnPrimary}
-                onPress={downloadReceipt}
-              >
-                <Text style={styles.modalBtnPrimaryText}>Download Receipt</Text>
-              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -1507,6 +1539,18 @@ export default function Financials() {
           </View>
         </View>
       </Modal>
+
+      {/* REMINDER SAVED TOAST */}
+      {reminderSaved && (
+        <Animated.View style={[styles.reminderToastOverlay, { opacity: reminderToastFade }]}>
+          <Animated.View style={[styles.reminderToastCard, { transform: [{ translateY: reminderToastTranslateY }] }]}>
+            <CheckCircle2 size={18} color={colors.emeraldBright} />
+            <Text style={styles.reminderToastText}>
+              The reminder has been set daily every {reminderSavedText}
+            </Text>
+          </Animated.View>
+        </Animated.View>
+      )}
     </View>
   );
 }
@@ -1780,10 +1824,17 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: colors.goldSoft,
+    backgroundColor: colors.white,
     alignItems: "center",
     justifyContent: "center",
     marginRight: spacing.sm + 2,
+  },
+  receiptHeaderIconText: {
+    fontSize: fontSize.xxl,
+    fontFamily: fontFamily.extrabold,
+    color: colors.ink,
+    marginTop: -6,
+    marginLeft: 2,
   },
   receiptHeaderTitle: {
     flex: 1,
@@ -1791,10 +1842,23 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.bold,
     color: colors.white,
   },
+  receiptHeaderMetaCol: {
+    alignItems: "flex-end",
+    gap: 2,
+  },
   receiptHeaderNo: {
     fontSize: fontSize.xs,
     fontFamily: fontFamily.medium,
     color: colors.emeraldSoft,
+    transform: [{ translateY: 8 }],
+  },
+  receiptHeaderStatus: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.bold,
+    color: colors.white,
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+    transform: [{ translateY: 8 }],
   },
   receiptBody: {
     padding: spacing.xl,
@@ -1807,11 +1871,9 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs + 2,
   },
   receiptLabel: {
-    fontSize: fontSize.xs + 1,
-    fontFamily: fontFamily.semibold,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.medium,
     color: colors.textSecondary,
-    textTransform: "uppercase",
-    letterSpacing: 0.3,
   },
   receiptValue: {
     fontSize: fontSize.sm,
@@ -1823,7 +1885,6 @@ const styles = StyleSheet.create({
   },
   receiptDivider: {
     borderTopWidth: 1,
-    borderStyle: "dashed",
     borderTopColor: colors.border,
     marginVertical: spacing.sm + 2,
   },
@@ -1844,24 +1905,7 @@ const styles = StyleSheet.create({
   receiptTotalValue: {
     fontSize: fontSize.xl,
     fontFamily: fontFamily.extrabold,
-    color: colors.gold,
-  },
-  receiptStatusBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    alignSelf: "flex-start",
-    backgroundColor: colors.successSoft,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 1,
-    marginTop: spacing.lg,
-  },
-  receiptStatusText: {
-    fontSize: fontSize.xs + 1,
-    fontFamily: fontFamily.bold,
     color: colors.emerald,
-    textTransform: "uppercase",
-    letterSpacing: 0.3,
   },
   modalRow: {
     flexDirection: "row",
@@ -2074,33 +2118,39 @@ const styles = StyleSheet.create({
     width: "85%",
     backgroundColor: colors.white,
     borderRadius: radius.xl + 4,
-    padding: spacing.xl,
+    overflow: "hidden",
     ...shadow.raised,
+  },
+  payModalBody: {
+    padding: spacing.xl,
   },
   payModalTitleRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
-    marginBottom: spacing.lg,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.lg,
   },
   payModalBadge: {
     width: 44,
     height: 44,
     borderRadius: radius.pill,
-    backgroundColor: colors.ink,
+    backgroundColor: colors.white,
     alignItems: "center",
     justifyContent: "center",
   },
   payModalBadgeText: {
-    fontSize: fontSize.lg,
+    fontSize: fontSize.lg + 8,
     fontFamily: fontFamily.extrabold,
-    color: colors.white,
+    color: colors.ink,
+    marginTop: -6,
+    marginLeft: 2,
   },
   payModalTitle: {
     flex: 1,
     fontSize: fontSize.lg,
     fontFamily: fontFamily.extrabold,
-    color: colors.ink,
+    color: colors.white,
     lineHeight: 22,
   },
   payModalRow: {
@@ -2335,6 +2385,34 @@ const styles = StyleSheet.create({
     fontSize: fontSize.base,
     fontFamily: fontFamily.bold,
     color: colors.white,
+  },
+
+  reminderToastOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: colors.overlay,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  reminderToastCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    backgroundColor: colors.white,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.md,
+    ...shadow.raised,
+  },
+
+  reminderToastText: {
+    color: colors.ink,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
   },
 
 });
