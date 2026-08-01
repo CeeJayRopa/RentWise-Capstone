@@ -4,12 +4,14 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   ActivityIndicator,
   StyleSheet,
   ScrollView,
   Alert,
   Animated,
   Easing,
+  Modal,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
@@ -29,9 +31,6 @@ import { Avatar, Card } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 
 const cloudFunctions = getFunctions(firebaseApp);
-
-const FIELD_MINT = "#C7E3C2";
-const FIELD_MINT_DARK = "#A9CBA1";
 
 type AdminDoc = {
   uid: string;
@@ -59,13 +58,20 @@ export default function ManageAdmin() {
   const [usernameError, setUsernameError] = useState("");
   const [contactNoError, setContactNoError] = useState("");
 
+  // Fully separate from `isEditing` (the profile-fields toggle) -- this
+  // section unlocks independently via its own "Change Password" button.
+  const [pwEditing, setPwEditing] = useState(false);
+  const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showOldPass, setShowOldPass] = useState(false);
   const [showNewPass, setShowNewPass] = useState(false);
   const [showConfirmPass, setShowConfirmPass] = useState(false);
+  const [oldPwError, setOldPwError] = useState("");
   const [pwError, setPwError] = useState("");
   const [confirmError, setConfirmError] = useState("");
   const [changingPw, setChangingPw] = useState(false);
+  const [showPwConfirm, setShowPwConfirm] = useState(false);
 
   const [focusedField, setFocusedField] = useState<string | null>(null);
 
@@ -200,6 +206,41 @@ export default function ManageAdmin() {
     return valid;
   };
 
+  function handleCancelEditProfile() {
+    setFirstName(original.firstName);
+    setLastName(original.lastName);
+    setUsername(original.username);
+    setContactNo(original.contactNo);
+    setFirstNameError("");
+    setLastNameError("");
+    setUsernameError("");
+    setContactNoError("");
+    setIsEditing(false);
+  }
+
+  function handleCancelPasswordEdit() {
+    setOldPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+    setOldPwError("");
+    setPwError("");
+    setConfirmError("");
+    setPwEditing(false);
+  }
+
+  // Only one of the two sections can be in edit mode at a time -- opening
+  // one closes the other (discarding whatever was unsaved there), same as
+  // if Cancel had been pressed on it.
+  function handleStartEditProfile() {
+    handleCancelPasswordEdit();
+    setIsEditing(true);
+  }
+
+  function handleStartEditPassword() {
+    handleCancelEditProfile();
+    setPwEditing(true);
+  }
+
   const handleSave = async () => {
     if (!admin) return;
     if (!auth.currentUser?.uid) return;
@@ -233,6 +274,13 @@ export default function ManageAdmin() {
     const pwRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
     let valid = true;
 
+    if (!oldPassword) {
+      setOldPwError("Please enter the admin's current password.");
+      valid = false;
+    } else {
+      setOldPwError("");
+    }
+
     if (!pwRegex.test(newPassword)) {
       setPwError("8–12 characters with at least 1 uppercase letter, number & special character.");
       valid = false;
@@ -257,8 +305,10 @@ export default function ManageAdmin() {
     try {
       const resetFn = httpsCallable(cloudFunctions, "ownerResetAdminPassword");
       await resetFn({ uid: admin.uid, newPassword });
+      setOldPassword("");
       setNewPassword("");
       setConfirmPassword("");
+      setPwEditing(false);
       showToast("Password updated!");
     } catch (err) {
       console.error(err);
@@ -377,7 +427,7 @@ export default function ManageAdmin() {
               style={[
                 styles.rowField,
                 focusedField === "username" && isEditing && styles.rowFieldFocused,
-                !isEditing && styles.rowFieldReadOnly,
+                !isEditing && styles.profileFieldReadOnly,
                 !!usernameError && styles.inputErrorBorder,
               ]}
             >
@@ -405,7 +455,7 @@ export default function ManageAdmin() {
                 style={[
                   styles.phoneInputWrap,
                   focusedField === "contactNo" && isEditing && styles.rowFieldFocused,
-                  !isEditing && styles.rowFieldReadOnly,
+                  !isEditing && styles.profileFieldReadOnly,
                   !!contactNoError && styles.inputErrorBorder,
                 ]}
               >
@@ -427,19 +477,49 @@ export default function ManageAdmin() {
           </Card>
           </View>
 
-          {/* Edit / Save Button */}
+          {/* Edit / Cancel + Save Button */}
           <View ref={saveBtnRef} collapsable={false} style={{ width: "100%" }}>
-            <TouchableOpacity
-              style={[styles.saveBtn, isEditing && (saving || hasEmptyField || !profileChanged) && styles.btnDisabled]}
-              onPress={isEditing ? handleSave : () => setIsEditing(true)}
-              disabled={isEditing && (saving || hasEmptyField || !profileChanged)}
-              activeOpacity={0.8}
-            >
-              {saving
-                ? <ActivityIndicator color={colors.white} size="small" />
-                : <Text style={styles.saveBtnText}>{isEditing ? "Save changes" : "Edit Profile"}</Text>
-              }
-            </TouchableOpacity>
+            {isEditing ? (
+              <View style={styles.pwActionsRow}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.pwCancelBtn,
+                    pressed && { backgroundColor: colors.error, borderColor: colors.error },
+                  ]}
+                  onPress={handleCancelEditProfile}
+                  disabled={saving}
+                >
+                  {({ pressed }) => (
+                    <Text style={[styles.pwCancelBtnText, pressed && styles.pwCancelBtnTextPressed]}>Cancel</Text>
+                  )}
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.saveBtn,
+                    styles.pwUpdateBtn,
+                    (saving || hasEmptyField || !profileChanged) && styles.btnDisabled,
+                    pressed && !(saving || hasEmptyField || !profileChanged) && styles.saveBtnPressed,
+                  ]}
+                  onPress={handleSave}
+                  disabled={saving || hasEmptyField || !profileChanged}
+                >
+                  {({ pressed }) =>
+                    saving
+                      ? <ActivityIndicator color={colors.white} size="small" />
+                      : <Text style={[styles.saveBtnText, styles.pwUpdateBtnText, pressed && styles.saveBtnTextPressed]}>Save changes</Text>
+                  }
+                </Pressable>
+              </View>
+            ) : (
+              <Pressable
+                style={({ pressed }) => [styles.saveBtn, pressed && styles.saveBtnPressed]}
+                onPress={handleStartEditProfile}
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.saveBtnText, pressed && styles.saveBtnTextPressed]}>Edit Profile</Text>
+                )}
+              </Pressable>
+            )}
           </View>
 
           {/* PASSWORD CARD */}
@@ -447,8 +527,26 @@ export default function ManageAdmin() {
             <Text style={styles.sectionTitle}>Change Password</Text>
 
             <View ref={pwFieldsRef} collapsable={false} style={{ width: "100%" }}>
+            <Text style={styles.fieldLabel}>Current password</Text>
+            <View style={[styles.pwField, !pwEditing && styles.rowFieldReadOnly, !!oldPwError && styles.inputErrorBorder]}>
+              <TextInput
+                style={styles.rowInput}
+                value={oldPassword}
+                onChangeText={(t) => { setOldPassword(t); setOldPwError(""); }}
+                secureTextEntry={!showOldPass}
+                placeholder="Current password"
+                placeholderTextColor={colors.textMuted}
+                autoCapitalize="none"
+                editable={pwEditing}
+              />
+              <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowOldPass((v) => !v)} activeOpacity={0.7}>
+                {showOldPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+              </TouchableOpacity>
+            </View>
+            {!!oldPwError && <Text style={styles.fieldError}>{oldPwError}</Text>}
+
             <Text style={styles.fieldLabel}>New password</Text>
-            <View style={[styles.pwField, !isEditing && styles.rowFieldReadOnly, !!pwError && styles.inputErrorBorder]}>
+            <View style={[styles.pwField, !pwEditing && styles.rowFieldReadOnly, !!pwError && styles.inputErrorBorder]}>
               <TextInput
                 style={styles.rowInput}
                 value={newPassword}
@@ -458,7 +556,7 @@ export default function ManageAdmin() {
                 placeholderTextColor={colors.textMuted}
                 autoCapitalize="none"
                 maxLength={12}
-                editable={isEditing}
+                editable={pwEditing}
               />
               <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowNewPass((v) => !v)} activeOpacity={0.7}>
                 {showNewPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
@@ -468,7 +566,7 @@ export default function ManageAdmin() {
             <Text style={styles.hint}>Min. 8 characters with a capital letter, a number, and a special character.</Text>
 
             <Text style={styles.fieldLabel}>Confirm password</Text>
-            <View style={[styles.pwField, !isEditing && styles.rowFieldReadOnly, !!confirmError && styles.inputErrorBorder]}>
+            <View style={[styles.pwField, !pwEditing && styles.rowFieldReadOnly, !!confirmError && styles.inputErrorBorder]}>
               <TextInput
                 style={styles.rowInput}
                 value={confirmPassword}
@@ -478,7 +576,7 @@ export default function ManageAdmin() {
                 placeholderTextColor={colors.textMuted}
                 autoCapitalize="none"
                 maxLength={12}
-                editable={isEditing}
+                editable={pwEditing}
               />
               <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowConfirmPass((v) => !v)} activeOpacity={0.7}>
                 {showConfirmPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
@@ -487,22 +585,57 @@ export default function ManageAdmin() {
             {!!confirmError && <Text style={styles.fieldError}>{confirmError}</Text>}
             </View>
 
-            {/* Update Password Button */}
-            {isEditing && (
+            {/* Change Password / Cancel + Update Password */}
             <View ref={updatePwBtnRef} collapsable={false} style={{ width: "100%" }}>
-              <TouchableOpacity
-                style={[styles.updatePwBtn, (changingPw || newPassword.length < 8 || confirmPassword.length < 8) && styles.btnDisabled]}
-                onPress={handleChangePassword}
-                disabled={changingPw || newPassword.length < 8 || confirmPassword.length < 8}
-                activeOpacity={0.8}
-              >
-                {changingPw
-                  ? <ActivityIndicator color={colors.white} size="small" />
-                  : <Text style={styles.saveBtnText}>Update Password</Text>
-                }
-              </TouchableOpacity>
+              {pwEditing ? (
+                <View style={styles.pwActionsRow}>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.pwCancelBtn,
+                      pressed && { backgroundColor: colors.error, borderColor: colors.error },
+                    ]}
+                    onPress={handleCancelPasswordEdit}
+                    disabled={changingPw}
+                  >
+                    {({ pressed }) => (
+                      <Text style={[styles.pwCancelBtnText, pressed && styles.pwCancelBtnTextPressed]}>Cancel</Text>
+                    )}
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.updatePwBtn,
+                      styles.pwUpdateBtn,
+                      (changingPw || !oldPassword || newPassword.length < 8 || confirmPassword.length < 8) &&
+                        styles.btnDisabled,
+                      pressed &&
+                        !(changingPw || !oldPassword || newPassword.length < 8 || confirmPassword.length < 8) &&
+                        styles.saveBtnPressed,
+                    ]}
+                    onPress={() => setShowPwConfirm(true)}
+                    disabled={changingPw || !oldPassword || newPassword.length < 8 || confirmPassword.length < 8}
+                  >
+                    {({ pressed }) =>
+                      changingPw
+                        ? <ActivityIndicator color={colors.white} size="small" />
+                        : (
+                          <Text style={[styles.saveBtnText, styles.pwUpdateBtnText, pressed && styles.saveBtnTextPressed]}>
+                            Update Password
+                          </Text>
+                        )
+                    }
+                  </Pressable>
+                </View>
+              ) : (
+                <Pressable
+                  style={({ pressed }) => [styles.updatePwBtn, pressed && styles.saveBtnPressed]}
+                  onPress={handleStartEditPassword}
+                >
+                  {({ pressed }) => (
+                    <Text style={[styles.saveBtnText, pressed && styles.saveBtnTextPressed]}>Change Password</Text>
+                  )}
+                </Pressable>
+              )}
             </View>
-            )}
           </Card>
         </ScrollView>
       )}
@@ -526,6 +659,55 @@ export default function ManageAdmin() {
           scrollRef.current?.scrollTo({ y: 0, animated: true });
         }}
       />
+
+      {/* UPDATE PASSWORD CONFIRMATION MODAL */}
+      <Modal
+        visible={showPwConfirm}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!changingPw) setShowPwConfirm(false); }}
+      >
+        <View style={styles.alertOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => { if (!changingPw) setShowPwConfirm(false); }}
+          />
+          <View style={styles.alertCard}>
+            <View style={styles.alertBody}>
+              <Text style={styles.alertTitleNeutral}>Update password?</Text>
+              <Text style={styles.alertMessage}>
+                Are you sure you want to change this admin's password? They'll need to use the new password the next time they log in.
+              </Text>
+            </View>
+            <View style={styles.alertDivider} />
+            <View style={styles.alertBtnRow}>
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && styles.alertBtnCancelPressed]}
+                onPress={() => setShowPwConfirm(false)}
+                disabled={changingPw}
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.alertBtnCancelText, pressed && styles.alertBtnCancelTextPressed]}>Cancel</Text>
+                )}
+              </Pressable>
+              <View style={styles.alertBtnDivider} />
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && styles.alertBtnConfirmPressed]}
+                onPress={() => {
+                  setShowPwConfirm(false);
+                  handleChangePassword();
+                }}
+                disabled={changingPw}
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.alertBtnConfirmText, pressed && styles.alertBtnConfirmTextPressed]}>Continue</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -650,8 +832,8 @@ const styles = StyleSheet.create({
   },
 
   inputReadOnly: {
-    backgroundColor: FIELD_MINT,
-    borderColor: FIELD_MINT,
+    backgroundColor: colors.white,
+    borderColor: colors.border,
     borderRadius: radius.xl,
     color: colors.ink,
   },
@@ -680,8 +862,14 @@ const styles = StyleSheet.create({
   },
 
   rowFieldReadOnly: {
-    backgroundColor: FIELD_MINT,
-    borderColor: FIELD_MINT,
+    backgroundColor: colors.white,
+    borderColor: colors.border,
+    borderRadius: radius.xl,
+  },
+
+  profileFieldReadOnly: {
+    backgroundColor: colors.white,
+    borderColor: colors.border,
     borderRadius: radius.xl,
   },
 
@@ -725,7 +913,9 @@ const styles = StyleSheet.create({
   },
 
   phonePrefixReadOnly: {
-    backgroundColor: FIELD_MINT_DARK,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
 
   phonePrefixText: {
@@ -792,11 +982,19 @@ const styles = StyleSheet.create({
 
   btnDisabled: { opacity: 0.45 },
 
+  saveBtnPressed: {
+    backgroundColor: colors.white,
+  },
+
   saveBtnText: {
     color: colors.white,
     fontSize: fontSize.md,
     fontFamily: fontFamily.bold,
     textAlign: "center",
+  },
+
+  saveBtnTextPressed: {
+    color: colors.ink,
   },
 
   updatePwBtn: {
@@ -808,6 +1006,46 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: spacing.md,
     ...shadow.button,
+  },
+
+  // ── Change Password: Cancel / Update row ─────────
+  pwActionsRow: {
+    flexDirection: "row",
+    gap: spacing.md,
+    marginTop: spacing.md,
+  },
+
+  pwCancelBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    paddingVertical: 10,
+    backgroundColor: colors.white,
+    ...shadow.card,
+  },
+
+  pwCancelBtnText: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.bold,
+    color: colors.textSecondary,
+  },
+
+  pwCancelBtnTextPressed: {
+    color: colors.white,
+  },
+
+  pwUpdateBtn: {
+    flex: 1,
+    marginTop: 0,
+    paddingVertical: 10,
+  },
+
+  pwUpdateBtnText: {
+    fontSize: fontSize.sm,
   },
 
   overlay: {
@@ -834,5 +1072,95 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: fontSize.md,
     fontFamily: fontFamily.semibold,
+  },
+
+  // ── Update password confirmation modal ───────────────────────────────────
+  alertOverlay: {
+    flex: 1,
+    backgroundColor: colors.overlay,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: spacing.xxl,
+  },
+
+  alertCard: {
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    width: 280,
+    overflow: "hidden",
+    ...shadow.raised,
+  },
+
+  alertBody: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.lg,
+    alignItems: "center",
+  },
+
+  alertTitleNeutral: {
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    textAlign: "center",
+  },
+
+  alertMessage: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    color: colors.ink,
+    textAlign: "center",
+    marginTop: spacing.sm,
+    lineHeight: 19,
+  },
+
+  alertDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+  },
+
+  alertBtnRow: {
+    flexDirection: "row",
+  },
+
+  alertBtn: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 44,
+  },
+
+  alertBtnDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+  },
+
+  alertBtnCancelPressed: {
+    backgroundColor: colors.error,
+  },
+
+  alertBtnCancelText: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.regular,
+    color: colors.textMuted,
+  },
+
+  alertBtnCancelTextPressed: {
+    color: colors.white,
+  },
+
+  alertBtnConfirmPressed: {
+    backgroundColor: colors.emerald,
+  },
+
+  alertBtnConfirmText: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
+  },
+
+  alertBtnConfirmTextPressed: {
+    color: colors.white,
   },
 });

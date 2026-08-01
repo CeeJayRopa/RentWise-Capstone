@@ -364,8 +364,10 @@ export default function Financials() {
       const u = d.data();
       const stall = stallMap.get(u.stallId);
       const tenantPayments = allPayments.filter((p) => p.userId === d.id);
-      const schedule = stall?.paymentSchedule ?? "monthly";
-      const dailyRate = stall?.price ?? 0;
+      // Billing terms live on the tenant, not the stall -- travels with
+      // them if relocated, instead of reflecting whoever's stall this is.
+      const schedule = u.paymentSchedule ?? "monthly";
+      const dailyRate = u.price ?? 0;
 
       const paidThisMonth = tenantPayments.reduce((sum, p) => {
         if (p.status !== "approved") return sum;
@@ -402,8 +404,8 @@ export default function Financials() {
         buildingNumber: stall?.buildingNumber ?? "",
         spaceId: stall?.spaceId ?? "",
         stallId: u.stallId ?? "",
-        rent: stall?.price ?? 0,
-        paymentSchedule: stall?.paymentSchedule ?? "monthly",
+        rent: u.price ?? 0,
+        paymentSchedule: u.paymentSchedule ?? "monthly",
         status: tenantStatus,
         paymentId,
         paymentDue,
@@ -865,7 +867,7 @@ export default function Financials() {
                           style={({ pressed }) => [
                             styles.setPaidBtn,
                             item.status === "online" && styles.setPaidBtnOnline,
-                            pressed && styles.btnPressed,
+                            pressed && (item.status === "online" ? styles.setPaidBtnOnlinePressed : styles.setPaidBtnPressed),
                           ]}
                           onPress={async () => {
                             if (item.status === "online") {
@@ -877,19 +879,24 @@ export default function Financials() {
                             }
                           }}
                         >
-                          <CheckCircle2
-                            size={14}
-                            color={item.status === "online" ? colors.warning : colors.white}
-                            style={styles.setPaidBtnIcon}
-                          />
-                          <Text
-                            style={[
-                              styles.setPaidBtnText,
-                              item.status === "online" && styles.setPaidBtnTextOnline,
-                            ]}
-                          >
-                            {item.status === "online" ? "Confirm" : "Set Paid"}
-                          </Text>
+                          {({ pressed }) => (
+                            <>
+                              <CheckCircle2
+                                size={14}
+                                color={item.status === "online" ? (pressed ? colors.white : colors.warning) : (pressed ? colors.emerald : colors.white)}
+                                style={styles.setPaidBtnIcon}
+                              />
+                              <Text
+                                style={[
+                                  styles.setPaidBtnText,
+                                  item.status === "online" && styles.setPaidBtnTextOnline,
+                                  pressed && (item.status === "online" ? styles.setPaidBtnTextOnlinePressed : styles.setPaidBtnTextPressed),
+                                ]}
+                              >
+                                {item.status === "online" ? "Confirm" : "Set Paid"}
+                              </Text>
+                            </>
+                          )}
                         </Pressable>
                       )}
 
@@ -898,7 +905,7 @@ export default function Financials() {
                       <Pressable
                         style={({ pressed }) => [
                           styles.viewInfoBtn,
-                          pressed && styles.btnPressed,
+                          pressed && styles.viewInfoBtnPressed,
                         ]}
                         onPress={() => {
                           router.push({
@@ -907,8 +914,12 @@ export default function Financials() {
                           });
                         }}
                       >
-                        <Eye size={14} color={colors.emerald} style={styles.setPaidBtnIcon} />
-                        <Text style={styles.viewInfoBtnText}>View</Text>
+                        {({ pressed }) => (
+                          <>
+                            <Eye size={14} color={pressed ? colors.white : colors.emerald} style={styles.setPaidBtnIcon} />
+                            <Text style={[styles.viewInfoBtnText, pressed && styles.viewInfoBtnTextPressed]}>View</Text>
+                          </>
+                        )}
                       </Pressable>
                       </View>
                     </View>
@@ -983,15 +994,17 @@ export default function Financials() {
               <Text style={styles.modalValue}>₱{change > 0 ? change : 0}</Text>
             </View>
             <View style={styles.payModalButtons}>
-              <TouchableOpacity
-                style={styles.payModalBtnSecondary}
+              <Pressable
+                style={({ pressed }) => [styles.payModalBtnSecondary, pressed && !processing && styles.payModalBtnSecondaryPressed]}
                 onPress={() => setPaymentModal(false)}
                 disabled={processing}
               >
-                <Text style={styles.payModalBtnSecondaryText}>Close</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.payModalBtnPrimary}
+                {({ pressed }) => (
+                  <Text style={[styles.payModalBtnSecondaryText, pressed && !processing && styles.payModalBtnSecondaryTextPressed]}>Close</Text>
+                )}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.payModalBtnPrimary, pressed && !processing && styles.payModalBtnPrimaryPressed]}
                 disabled={processing}
                 onPress={async () => {
                   if (!selectedTenant) return;
@@ -1077,10 +1090,12 @@ export default function Financials() {
                   }
                 }}
               >
-                <Text style={styles.payModalBtnPrimaryText}>
-                  {processing ? "Saving..." : "Generate Receipt"}
-                </Text>
-              </TouchableOpacity>
+                {({ pressed }) => (
+                  <Text style={[styles.payModalBtnPrimaryText, pressed && !processing && styles.payModalBtnPrimaryTextPressed]}>
+                    {processing ? "Saving..." : "Generate Receipt"}
+                  </Text>
+                )}
+              </Pressable>
             </View>
             </View>
           </View>
@@ -1159,15 +1174,17 @@ export default function Financials() {
             </View>
 
             <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={styles.modalBtnSecondary}
+              <Pressable
+                style={({ pressed }) => [styles.modalBtnSecondary, pressed && styles.modalBtnSecondaryPressed]}
                 onPress={() => setReceiptPreviewModal(false)}
               >
-                <Text style={styles.modalBtnSecondaryText}>Close</Text>
-              </TouchableOpacity>
+                {({ pressed }) => (
+                  <Text style={[styles.modalBtnSecondaryText, pressed && styles.modalBtnSecondaryTextPressed]}>Close</Text>
+                )}
+              </Pressable>
 
-              <TouchableOpacity
-                style={styles.modalBtnPrimary}
+              <Pressable
+                style={({ pressed }) => [styles.modalBtnPrimary, pressed && styles.modalBtnPrimaryPressed]}
                 onPress={() => {
                   setReceiptData({
                     tenantName: selectedTenant?.name,
@@ -1185,8 +1202,10 @@ export default function Financials() {
                   setReceiptModal(true);
                 }}
               >
-                <Text style={styles.modalBtnPrimaryText}>Download Receipt</Text>
-              </TouchableOpacity>
+                {({ pressed }) => (
+                  <Text style={[styles.modalBtnPrimaryText, pressed && styles.modalBtnPrimaryTextPressed]}>Download Receipt</Text>
+                )}
+              </Pressable>
             </View>
           </View>
         </View>
@@ -1278,17 +1297,19 @@ export default function Financials() {
             </ScrollView>
 
             <View style={styles.confirmButtonsRow}>
-              <TouchableOpacity
-                style={styles.confirmCloseBtn}
+              <Pressable
+                style={({ pressed }) => [styles.confirmCloseBtn, pressed && styles.confirmCloseBtnPressed]}
                 onPress={() => {
                   setOnlineConfirmModal(false);
                 }}
               >
-                <Text style={styles.confirmCloseBtnText}>Close</Text>
-              </TouchableOpacity>
+                {({ pressed }) => (
+                  <Text style={[styles.confirmCloseBtnText, pressed && styles.confirmCloseBtnTextPressed]}>Close</Text>
+                )}
+              </Pressable>
 
-              <TouchableOpacity
-                style={styles.confirmPrimaryBtn}
+              <Pressable
+                style={({ pressed }) => [styles.confirmPrimaryBtn, pressed && styles.confirmPrimaryBtnPressed]}
                 onPress={async () => {
                   if (!selectedTenant?.paymentId) return;
 
@@ -1328,8 +1349,10 @@ export default function Financials() {
                   setOnlineConfirmModal(false);
                 }}
               >
-                <Text style={styles.confirmPrimaryBtnText}>Confirm Payment</Text>
-              </TouchableOpacity>
+                {({ pressed }) => (
+                  <Text style={[styles.confirmPrimaryBtnText, pressed && styles.confirmPrimaryBtnTextPressed]}>Confirm Payment</Text>
+                )}
+              </Pressable>
             </View>
           </View>
         </View>
@@ -1395,21 +1418,25 @@ export default function Financials() {
               </View>
 
               <View style={styles.payModalButtons}>
-                <TouchableOpacity
-                  style={styles.payModalBtnSecondary}
+                <Pressable
+                  style={({ pressed }) => [styles.payModalBtnSecondary, pressed && styles.payModalBtnSecondaryPressed]}
                   onPress={() => {
                     setReceiptModal(false);
                   }}
                 >
-                  <Text style={styles.payModalBtnSecondaryText}>Close</Text>
-                </TouchableOpacity>
+                  {({ pressed }) => (
+                    <Text style={[styles.payModalBtnSecondaryText, pressed && styles.payModalBtnSecondaryTextPressed]}>Close</Text>
+                  )}
+                </Pressable>
 
-                <TouchableOpacity
-                  style={styles.payModalBtnPrimary}
+                <Pressable
+                  style={({ pressed }) => [styles.payModalBtnPrimary, pressed && styles.payModalBtnPrimaryPressed]}
                   onPress={downloadReceipt}
                 >
-                  <Text style={styles.payModalBtnPrimaryText}>Download Receipt</Text>
-                </TouchableOpacity>
+                  {({ pressed }) => (
+                    <Text style={[styles.payModalBtnPrimaryText, pressed && styles.payModalBtnPrimaryTextPressed]}>Download Receipt</Text>
+                  )}
+                </Pressable>
               </View>
             </View>
           </View>
@@ -1440,41 +1467,45 @@ export default function Financials() {
             <View style={styles.reminderPickerBox}>
               <View style={styles.timeStepperRow}>
                 <View style={styles.stepperColumn}>
-                  <TouchableOpacity
-                    style={styles.stepperBtn}
+                  <Pressable
+                    style={({ pressed }) => [styles.stepperBtn, pressed && styles.stepperBtnPressed]}
                     onPress={() => setDraftHour12((h) => (h % 12) + 1)}
-                    activeOpacity={0.7}
                   >
-                    <Text style={styles.stepperBtnText}>+</Text>
-                  </TouchableOpacity>
+                    {({ pressed }) => (
+                      <Text style={[styles.stepperBtnText, pressed && styles.stepperBtnTextPressed]}>+</Text>
+                    )}
+                  </Pressable>
                   <Text style={styles.stepperValue}>{draftHour12.toString().padStart(2, "0")}</Text>
-                  <TouchableOpacity
-                    style={styles.stepperBtn}
+                  <Pressable
+                    style={({ pressed }) => [styles.stepperBtn, pressed && styles.stepperBtnPressed]}
                     onPress={() => setDraftHour12((h) => ((h + 10) % 12) + 1)}
-                    activeOpacity={0.7}
                   >
-                    <Text style={styles.stepperBtnText}>−</Text>
-                  </TouchableOpacity>
+                    {({ pressed }) => (
+                      <Text style={[styles.stepperBtnText, pressed && styles.stepperBtnTextPressed]}>−</Text>
+                    )}
+                  </Pressable>
                 </View>
 
                 <Text style={styles.stepperColon}>:</Text>
 
                 <View style={styles.stepperColumn}>
-                  <TouchableOpacity
-                    style={styles.stepperBtn}
+                  <Pressable
+                    style={({ pressed }) => [styles.stepperBtn, pressed && styles.stepperBtnPressed]}
                     onPress={() => setDraftMinute((m) => (m + 5) % 60)}
-                    activeOpacity={0.7}
                   >
-                    <Text style={styles.stepperBtnText}>+</Text>
-                  </TouchableOpacity>
+                    {({ pressed }) => (
+                      <Text style={[styles.stepperBtnText, pressed && styles.stepperBtnTextPressed]}>+</Text>
+                    )}
+                  </Pressable>
                   <Text style={styles.stepperValue}>{draftMinute.toString().padStart(2, "0")}</Text>
-                  <TouchableOpacity
-                    style={styles.stepperBtn}
+                  <Pressable
+                    style={({ pressed }) => [styles.stepperBtn, pressed && styles.stepperBtnPressed]}
                     onPress={() => setDraftMinute((m) => (m - 5 + 60) % 60)}
-                    activeOpacity={0.7}
                   >
-                    <Text style={styles.stepperBtnText}>−</Text>
-                  </TouchableOpacity>
+                    {({ pressed }) => (
+                      <Text style={[styles.stepperBtnText, pressed && styles.stepperBtnTextPressed]}>−</Text>
+                    )}
+                  </Pressable>
                 </View>
 
                 <View style={styles.ampmTrack}>
@@ -1512,29 +1543,35 @@ export default function Financials() {
             </View>
 
             <View style={styles.reminderModalButtons}>
-              <TouchableOpacity
-                style={styles.reminderCancelBtn}
+              <Pressable
+                style={({ pressed }) => [styles.reminderCancelBtn, pressed && !savingReminder && styles.reminderCancelBtnPressed]}
                 onPress={() => setShowReminderModal(false)}
                 disabled={savingReminder}
-                activeOpacity={0.7}
               >
-                <Text style={styles.reminderCancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.reminderSaveBtn, savingReminder && { opacity: 0.6 }]}
+                {({ pressed }) => (
+                  <Text style={[styles.reminderCancelBtnText, pressed && !savingReminder && styles.reminderCancelBtnTextPressed]}>Cancel</Text>
+                )}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.reminderSaveBtn,
+                  savingReminder && { opacity: 0.6 },
+                  pressed && !savingReminder && styles.reminderSaveBtnPressed,
+                ]}
                 onPress={saveReminderTime}
                 disabled={savingReminder}
-                activeOpacity={0.8}
               >
-                {savingReminder ? (
-                  <ActivityIndicator color={colors.white} size="small" />
-                ) : (
-                  <>
-                    <Text style={styles.reminderSaveBtnText}>Save reminder</Text>
-                    <ArrowRight size={15} color={colors.white} style={{ marginLeft: 4 }} />
-                  </>
-                )}
-              </TouchableOpacity>
+                {({ pressed }) =>
+                  savingReminder ? (
+                    <ActivityIndicator color={colors.white} size="small" />
+                  ) : (
+                    <>
+                      <Text style={[styles.reminderSaveBtnText, pressed && styles.reminderSaveBtnTextPressed]}>Save reminder</Text>
+                      <ArrowRight size={15} color={pressed ? colors.ink : colors.white} style={{ marginLeft: 4 }} />
+                    </>
+                  )
+                }
+              </Pressable>
             </View>
           </View>
         </View>
@@ -1585,11 +1622,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
   },
+  viewInfoBtnPressed: {
+    backgroundColor: colors.emerald,
+    borderColor: colors.emerald,
+  },
   viewInfoBtnText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     color: colors.emerald,
     textAlign: "center",
+  },
+  viewInfoBtnTextPressed: {
+    color: colors.white,
   },
 
   headerGradient: {
@@ -1778,6 +1822,8 @@ const styles = StyleSheet.create({
   },
   setPaidBtnIcon: { marginRight: 6 },
   setPaidBtnOnline: { backgroundColor: colors.warningSoft },
+  setPaidBtnPressed: { backgroundColor: colors.white },
+  setPaidBtnOnlinePressed: { backgroundColor: colors.warning },
   setPaidBtnText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
@@ -1785,7 +1831,8 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   setPaidBtnTextOnline: { color: colors.warning },
-  btnPressed: { opacity: 0.8 },
+  setPaidBtnTextPressed: { color: colors.emerald },
+  setPaidBtnTextOnlinePressed: { color: colors.white },
 
   emptyBox: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60 },
   emptyIcon: { marginBottom: spacing.md - 2 },
@@ -2053,10 +2100,17 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     paddingVertical: spacing.md,
   },
+  confirmCloseBtnPressed: {
+    backgroundColor: colors.ink,
+    borderColor: colors.ink,
+  },
   confirmCloseBtnText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     color: colors.textSecondary,
+  },
+  confirmCloseBtnTextPressed: {
+    color: colors.white,
   },
   confirmPrimaryBtn: {
     flex: 1,
@@ -2067,10 +2121,16 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     ...shadow.button,
   },
+  confirmPrimaryBtnPressed: {
+    backgroundColor: colors.white,
+  },
   confirmPrimaryBtnText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.bold,
     color: colors.white,
+  },
+  confirmPrimaryBtnTextPressed: {
+    color: colors.emerald,
   },
   modalLabel: { fontSize: fontSize.sm, fontFamily: fontFamily.regular, color: colors.textSecondary },
   modalValue: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.ink },
@@ -2090,7 +2150,12 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm + 1,
     paddingHorizontal: spacing.lg + 2,
   },
+  modalBtnSecondaryPressed: {
+    backgroundColor: colors.ink,
+    borderColor: colors.ink,
+  },
   modalBtnSecondaryText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.textSecondary },
+  modalBtnSecondaryTextPressed: { color: colors.white },
   modalBtnPrimary: {
     backgroundColor: colors.emerald,
     borderRadius: radius.sm - 2,
@@ -2098,7 +2163,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg + 2,
     ...shadow.button,
   },
+  modalBtnPrimaryPressed: {
+    backgroundColor: colors.white,
+  },
   modalBtnPrimaryText: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.white },
+  modalBtnPrimaryTextPressed: { color: colors.emerald },
 
   cashInput: {
     borderRadius: radius.md,
@@ -2187,7 +2256,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
     backgroundColor: colors.white,
   },
+  payModalBtnSecondaryPressed: {
+    backgroundColor: colors.emerald,
+  },
   payModalBtnSecondaryText: { fontSize: fontSize.base, fontFamily: fontFamily.semibold, color: colors.emerald },
+  payModalBtnSecondaryTextPressed: { color: colors.white },
   payModalBtnPrimary: {
     flex: 1,
     alignItems: "center",
@@ -2197,11 +2270,17 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md - 1,
     ...shadow.button,
   },
+  payModalBtnPrimaryPressed: {
+    backgroundColor: colors.white,
+  },
   payModalBtnPrimaryText: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.bold,
     color: colors.white,
     textAlign: "center",
+  },
+  payModalBtnPrimaryTextPressed: {
+    color: colors.ink,
   },
 
   // ── Reminder time button + modal ─────────────────────────────────────────
@@ -2288,11 +2367,19 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
+  stepperBtnPressed: {
+    backgroundColor: colors.emerald,
+  },
+
   stepperBtnText: {
     fontSize: fontSize.lg,
     fontFamily: fontFamily.bold,
     color: colors.emerald,
     lineHeight: fontSize.lg + 2,
+  },
+
+  stepperBtnTextPressed: {
+    color: colors.white,
   },
 
   stepperValue: {
@@ -2364,10 +2451,19 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md - 1,
   },
 
+  reminderCancelBtnPressed: {
+    backgroundColor: colors.ink,
+    borderColor: colors.ink,
+  },
+
   reminderCancelBtnText: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.semibold,
     color: colors.textSecondary,
+  },
+
+  reminderCancelBtnTextPressed: {
+    color: colors.white,
   },
 
   reminderSaveBtn: {
@@ -2381,10 +2477,18 @@ const styles = StyleSheet.create({
     ...shadow.button,
   },
 
+  reminderSaveBtnPressed: {
+    backgroundColor: colors.white,
+  },
+
   reminderSaveBtnText: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.bold,
     color: colors.white,
+  },
+
+  reminderSaveBtnTextPressed: {
+    color: colors.ink,
   },
 
   reminderToastOverlay: {

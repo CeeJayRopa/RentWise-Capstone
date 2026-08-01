@@ -43,12 +43,20 @@ service cloud.firestore {
 
       // Self-updates (profile edits, mustChangePassword flag, push token)
       // may never change their own role/status -- otherwise a tenant could
-      // simply write role:"admin" on their own doc. Staff can update any
-      // tenant doc (archive/restore/relocate) without that restriction.
+      // simply write role:"admin" on their own doc. price/paymentSchedule
+      // are a tenant's actual billing terms (moved here from the stall doc
+      // so they travel with a tenant on relocation) and must stay
+      // admin-only even on the tenant's own doc, same reasoning -- a
+      // tenant could otherwise just set their own rent to ₱0. `category`
+      // stays self-editable (business type, not money). Staff can update
+      // any tenant doc (archive/restore/relocate) without any of these
+      // restrictions.
       allow update: if isStaff()
         || (isSignedIn() && request.auth.uid == userId
             && request.resource.data.role == resource.data.role
-            && request.resource.data.status == resource.data.status);
+            && request.resource.data.status == resource.data.status
+            && request.resource.data.price == resource.data.price
+            && request.resource.data.paymentSchedule == resource.data.paymentSchedule);
 
       allow delete: if isStaff();
     }

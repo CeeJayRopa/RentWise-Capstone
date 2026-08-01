@@ -282,31 +282,36 @@ export default function NotificationBell({ color = colors.emeraldSoft }: { color
                         ) : (
                         <View style={styles.itemActions}>
                           {r.kind === "passwordReset" && (
-                            <TouchableOpacity
-                              style={styles.goToTenantBtn}
+                            <Pressable
+                              style={({ pressed }) => [styles.goToTenantBtn, pressed && styles.goToTenantBtnPressed]}
                               onPress={() => goToTenant(r)}
                             >
-                              <Text style={styles.goToTenantBtnText}>
-                                Reset
-                              </Text>
-                            </TouchableOpacity>
+                              {({ pressed }) => (
+                                <Text style={[styles.goToTenantBtnText, pressed && styles.goToTenantBtnTextPressed]}>
+                                  Reset
+                                </Text>
+                              )}
+                            </Pressable>
                           )}
-                          <TouchableOpacity
-                            style={[
+                          <Pressable
+                            style={({ pressed }) => [
                               styles.resolveBtn,
                               resolvingId === r.id && styles.btnDisabled,
+                              pressed && resolvingId !== r.id && styles.resolveBtnPressed,
                             ]}
                             onPress={() => resolveItem(r)}
                             disabled={resolvingId === r.id}
                           >
-                            {resolvingId === r.id ? (
-                              <ActivityIndicator color={colors.emerald} size="small" />
-                            ) : (
-                              <Text style={styles.resolveBtnText}>
-                                Mark resolved
-                              </Text>
-                            )}
-                          </TouchableOpacity>
+                            {({ pressed }) =>
+                              resolvingId === r.id ? (
+                                <ActivityIndicator color={colors.emerald} size="small" />
+                              ) : (
+                                <Text style={[styles.resolveBtnText, pressed && styles.resolveBtnTextPressed]}>
+                                  Mark resolved
+                                </Text>
+                              )
+                            }
+                          </Pressable>
                         </View>
                         )}
                       </View>
@@ -327,11 +332,13 @@ export default function NotificationBell({ color = colors.emeraldSoft }: { color
                 onPress={handleClearAll}
                 disabled={pendingCount > 0 || requests.length === 0 || clearing}
               >
-                {clearing ? (
-                  <ActivityIndicator color={colors.emerald} size="small" />
-                ) : (
-                  <Text style={styles.btnOutlineText}>Clear All</Text>
-                )}
+                {({ pressed }) =>
+                  clearing ? (
+                    <ActivityIndicator color={colors.emerald} size="small" />
+                  ) : (
+                    <Text style={[styles.btnOutlineText, pressed && styles.btnOutlineTextPressed]}>Clear All</Text>
+                  )
+                }
               </Pressable>
               <Pressable
                 style={({ pressed }) => [
@@ -341,7 +348,9 @@ export default function NotificationBell({ color = colors.emeraldSoft }: { color
                 ]}
                 onPress={closeModal}
               >
-                <Text style={styles.btnPrimaryText}>Close</Text>
+                {({ pressed }) => (
+                  <Text style={[styles.btnPrimaryText, pressed && styles.btnPrimaryTextPressed]}>Close</Text>
+                )}
               </Pressable>
             </View>
           </View>
@@ -466,7 +475,11 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs + 2,
     paddingHorizontal: spacing.md + 2,
   },
+  goToTenantBtnPressed: {
+    backgroundColor: colors.white,
+  },
   goToTenantBtnText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.white },
+  goToTenantBtnTextPressed: { color: colors.emerald },
   itemTitle: { fontSize: fontSize.sm, fontFamily: fontFamily.regular, color: colors.ink, lineHeight: 19 },
   itemTitleBold: { fontFamily: fontFamily.bold, color: colors.ink },
   itemSub: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.regular, color: colors.textSecondary, marginTop: 2 },
@@ -479,7 +492,11 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs + 2,
     paddingHorizontal: spacing.md + 2,
   },
+  resolveBtnPressed: {
+    backgroundColor: colors.emerald,
+  },
   resolveBtnText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.emerald },
+  resolveBtnTextPressed: { color: colors.white },
 
   btnRow: {
     flexDirection: "row",
@@ -499,13 +516,15 @@ const styles = StyleSheet.create({
   },
   btnOutline: { borderWidth: 1.5, borderColor: colors.emerald, backgroundColor: colors.white },
   btnOutlinePressed: {
-    backgroundColor: colors.emeraldSoft,
+    backgroundColor: colors.emerald,
     transform: [{ scale: 0.96 }],
   },
   btnOutlineText: { fontSize: fontSize.base, fontFamily: fontFamily.semibold, color: colors.emerald },
+  btnOutlineTextPressed: { color: colors.white },
   btnDisabledOutline: { opacity: 0.4 },
   btnPrimary: { backgroundColor: colors.ink, ...shadow.button },
-  btnPrimaryPressed: { backgroundColor: colors.emerald, transform: [{ scale: 0.96 }] },
+  btnPrimaryPressed: { backgroundColor: colors.white, transform: [{ scale: 0.96 }] },
   btnPrimaryText: { fontSize: fontSize.base, fontFamily: fontFamily.bold, color: colors.white },
+  btnPrimaryTextPressed: { color: colors.ink },
   btnDisabled: { opacity: 0.5 },
 });

@@ -3,6 +3,7 @@ import {
   View,
   Text,
   TouchableOpacity,
+  Pressable,
   ActivityIndicator,
   StyleSheet,
   ScrollView,
@@ -235,9 +236,11 @@ export default function UpdateConfirmation() {
     return (
       <View style={styles.fullCenter}>
         <Text style={styles.errorText}>Update not found.</Text>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Text style={styles.backLink}>Go back</Text>
-        </TouchableOpacity>
+        <Pressable onPress={() => router.back()}>
+          {({ pressed }) => (
+            <Text style={[styles.backLink, pressed && styles.backLinkPressed]}>Go back</Text>
+          )}
+        </Pressable>
       </View>
     );
   }
@@ -427,33 +430,36 @@ export default function UpdateConfirmation() {
 
         {!isAlreadyDecided && (
           <View style={styles.actionRow} ref={approveRef} collapsable={false}>
-            <TouchableOpacity
-              style={[
+            <Pressable
+              style={({ pressed }) => [
                 styles.actionBtn,
                 styles.approveBtn,
                 saving && styles.btnDisabled,
+                pressed && !saving && styles.approveBtnPressed,
               ]}
               onPress={approveOne}
               disabled={saving}
-              activeOpacity={0.8}
             >
-              {saving ? (
-                <ActivityIndicator color={colors.white} size="small" />
-              ) : (
-                <Text style={styles.actionBtnText}>Acknowledge</Text>
-              )}
-            </TouchableOpacity>
+              {({ pressed }) =>
+                saving ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <Text style={[styles.actionBtnText, pressed && styles.actionBtnTextPressed]}>Acknowledge</Text>
+                )
+              }
+            </Pressable>
           </View>
         )}
 
         {isAlreadyDecided && (
-          <TouchableOpacity
-            style={styles.backBtnBottom}
+          <Pressable
+            style={({ pressed }) => [styles.backBtnBottom, pressed && styles.backBtnBottomPressed]}
             onPress={() => router.back()}
-            activeOpacity={0.8}
           >
-            <Text style={styles.backBtnBottomText}>Go Back</Text>
-          </TouchableOpacity>
+            {({ pressed }) => (
+              <Text style={[styles.backBtnBottomText, pressed && styles.backBtnBottomTextPressed]}>Go Back</Text>
+            )}
+          </Pressable>
         )}
       </ScrollView>
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
@@ -606,7 +612,7 @@ const styles = StyleSheet.create({
   },
   afterLabel: { color: colors.emerald },
   beforeAfterValue: {
-    fontSize: fontSize.md,
+    fontSize: fontSize.sm,
     fontFamily: fontFamily.bold,
     color: colors.textSecondary,
   },
@@ -661,7 +667,9 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   approveBtn: { backgroundColor: colors.emerald, ...shadow.button },
+  approveBtnPressed: { backgroundColor: colors.white },
   actionBtnText: { color: colors.white, fontSize: fontSize.base, fontFamily: fontFamily.semibold },
+  actionBtnTextPressed: { color: colors.emerald },
 
   backBtnBottom: {
     backgroundColor: colors.emerald,
@@ -669,13 +677,20 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md + 2,
     alignItems: "center",
   },
+  backBtnBottomPressed: {
+    backgroundColor: colors.white,
+  },
   backBtnBottomText: {
     color: colors.white,
     fontSize: fontSize.base,
     fontFamily: fontFamily.bold,
   },
+  backBtnBottomTextPressed: {
+    color: colors.emerald,
+  },
 
   btnDisabled: { opacity: 0.5 },
   errorText: { fontSize: fontSize.md, color: colors.textSecondary, fontFamily: fontFamily.regular, marginBottom: spacing.md },
   backLink: { fontSize: fontSize.sm, color: colors.emeraldBright, fontFamily: fontFamily.semibold },
+  backLinkPressed: { color: colors.ink },
 });

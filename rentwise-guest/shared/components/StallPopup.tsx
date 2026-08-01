@@ -26,9 +26,13 @@ interface Props {
   stall: Stall;
   onClose: () => void;
   onViewOthers?: () => void;
+  // Rotates the whole card 90° in place (tablet 2D map page, which rotates
+  // its entire layout into portrait) -- transform is paint-only, so this
+  // doesn't affect the card's already-resolved width/height.
+  rotate90?: boolean;
 }
 
-export default function StallPopup({ stall, onClose, onViewOthers }: Props) {
+export default function StallPopup({ stall, onClose, onViewOthers, rotate90 }: Props) {
   const { width } = useWindowDimensions();
   const isMobile = width <= 480;
   const isVacant = stall.status?.toLowerCase() !== "occupied";
@@ -36,7 +40,7 @@ export default function StallPopup({ stall, onClose, onViewOthers }: Props) {
   const statusTint = isVacant ? PRIMARY_TINT : OCCUPIED_TINT;
 
   return (
-    <View style={[styles.card, isMobile && styles.cardMobile]}>
+    <View style={[styles.card, isMobile && styles.cardMobile, rotate90 && { transform: [{ rotate: "90deg" }] }]}>
       <TouchableOpacity
         style={[styles.closeIconBtn, isMobile && styles.closeIconBtnMobile]}
         onPress={onClose}

@@ -4,6 +4,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   ScrollView,
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -268,14 +269,14 @@ export default function Account() {
           ) : loadError ? (
             <View style={styles.centeredBox}>
               <Text style={styles.loadErrorText}>{loadError}</Text>
-              <TouchableOpacity
-                style={styles.backLink}
-                onPress={() => router.back()}
-                activeOpacity={0.7}
-              >
-                <ArrowLeft size={15} color={colors.emerald} style={{ marginRight: spacing.xs }} />
-                <Text style={styles.backLinkText}>Go Back</Text>
-              </TouchableOpacity>
+              <Pressable style={styles.backLink} onPress={() => router.back()}>
+                {({ pressed }) => (
+                  <>
+                    <ArrowLeft size={15} color={pressed ? colors.ink : colors.emerald} style={{ marginRight: spacing.xs }} />
+                    <Text style={[styles.backLinkText, pressed && styles.backLinkTextPressed]}>Go Back</Text>
+                  </>
+                )}
+              </Pressable>
             </View>
           ) : (
             <>
@@ -402,9 +403,9 @@ export default function Account() {
 
                       {/* MOVE LOCATION — relocate this active tenant to a different
                           stall directly, instead of archiving them first. */}
-                      <TouchableOpacity
+                      <Pressable
                         ref={moveBtnRef}
-                        style={styles.outlineActionBtn}
+                        style={({ pressed }) => [styles.outlineActionBtn, pressed && styles.outlineActionBtnPressed]}
                         onPress={() =>
                           router.push({
                             pathname: "/tenant-relocation",
@@ -420,11 +421,14 @@ export default function Account() {
                             },
                           } as any)
                         }
-                        activeOpacity={0.8}
                       >
-                        <ArrowLeftRight size={16} color={colors.emerald} style={{ marginRight: spacing.sm }} />
-                        <Text style={styles.outlineActionBtnText}>Move Location</Text>
-                      </TouchableOpacity>
+                        {({ pressed }) => (
+                          <>
+                            <ArrowLeftRight size={16} color={pressed ? colors.white : colors.emerald} style={{ marginRight: spacing.sm }} />
+                            <Text style={[styles.outlineActionBtnText, pressed && styles.outlineActionBtnTextPressed]}>Move Location</Text>
+                          </>
+                        )}
+                      </Pressable>
 
                       {submitError ? (
                         <Text style={styles.submitError}>{submitError}</Text>
@@ -556,6 +560,9 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     color: colors.emerald,
+  },
+  backLinkTextPressed: {
+    color: colors.ink,
   },
 
   // ── Stall ID pill ─────────────────────────────────────────────────────────────
@@ -762,10 +769,16 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
     minHeight: 48,
   },
+  outlineActionBtnPressed: {
+    backgroundColor: colors.emerald,
+  },
   outlineActionBtnText: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.semibold,
     color: colors.emerald,
+  },
+  outlineActionBtnTextPressed: {
+    color: colors.white,
   },
 
   dangerBtn: {

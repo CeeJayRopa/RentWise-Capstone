@@ -3,6 +3,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  Pressable,
   ActivityIndicator,
   Modal,
   ScrollView,
@@ -24,7 +25,7 @@ import { auth } from "../shared/firebaseConfig";
 import { getTenantData } from "../services/tenantService";
 import { MONTHS } from "../services/billingSchedule";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
-import ReceiptCardContent from "./components/ReceiptCardContent";
+import ReceiptCardContent, { ReceiptActionsBar } from "./components/ReceiptCardContent";
 import HelpTour, { HelpStep } from "./components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
 
@@ -33,7 +34,10 @@ const AnimatedLinearGradient = Animated.createAnimatedComponent(LinearGradient);
 export default function PaymentHistoryScreen() {
   const insets = useSafeAreaInsets();
 
-  const [stall, setStall] = useState<any>(null);
+  // The TENANT's own billing terms (price/paymentSchedule) -- these travel
+  // with the tenant if they relocate, unlike the stall doc they used to be
+  // read from (which stayed with whoever's occupying that physical space).
+  const [billing, setBilling] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -95,11 +99,8 @@ export default function PaymentHistoryScreen() {
 
       (async () => {
         const tenantData = await getTenantData(user.uid);
-        if (tenantData?.stallId) {
-          const stallSnap = await getDoc(doc(db, "stalls", tenantData.stallId));
-          if (stallSnap.exists()) {
-            setStall({ id: stallSnap.id, ...stallSnap.data() });
-          }
+        if (tenantData) {
+          setBilling({ price: (tenantData as any).price, paymentSchedule: (tenantData as any).paymentSchedule });
         }
       })();
 
@@ -199,10 +200,10 @@ export default function PaymentHistoryScreen() {
     .reduce((sum, p) => sum + Number(p.amount || 0), 0);
 
   // "of ₱X" reference figure for the progress bar — the selected month's
-  // full charge at the stall's current daily rate (pricing isn't tracked
+  // full charge at the tenant's current daily rate (pricing isn't tracked
   // historically, so this is always today's rate applied to that month's
   // day count).
-  const periodRate = Number(stall?.price || 0);
+  const periodRate = Number(billing?.price || 0);
   const monthIndex = MONTHS.indexOf(selectedMonth);
   const daysInSelectedMonth = new Date(selectedYear, monthIndex + 1, 0).getDate();
   const monthTotalCharge = periodRate * daysInSelectedMonth;
@@ -376,11 +377,16 @@ export default function PaymentHistoryScreen() {
 
               <View ref={yearPillRef} collapsable={false}>
                 <TouchableOpacity
-                  style={[styles.yearPill, showYearPicker && styles.yearPillOpen]}
+                  style={[styles.yearPill, showYearPicker && styles.yearPillActive]}
                   onPress={openYearPicker}
+                  activeOpacity={0.7}
                 >
                   <Text style={styles.yearPillText}>{selectedYear}</Text>
-                  <ChevronDown size={14} color={colors.emerald} />
+                  <ChevronDown
+                    size={14}
+                    color={colors.emerald}
+                    style={showYearPicker ? styles.yearPillChevronFlipped : undefined}
+                  />
                 </TouchableOpacity>
               </View>
             </View>
@@ -486,30 +492,48 @@ export default function PaymentHistoryScreen() {
           <View style={styles.receiptPreviewCard}>
             <ScrollView style={styles.receiptScrollArea} showsVerticalScrollIndicator={false}>
               {selectedPayment?.receiptData ? (
-                <ReceiptCardContent
-                  data={selectedPayment.receiptData}
-                  stall={stall}
-                  onClose={() => {
-                    setShowReceiptModal(false);
-                    setSelectedPayment(null);
-                  }}
-                />
+                <ReceiptCardContent data={selectedPayment.receiptData} billing={billing} showActions={false} />
               ) : selectedPayment?.receipt ? (
                 <>
                   <Image source={{ uri: selectedPayment.receipt }} style={styles.receiptImage} />
-                  <TouchableOpacity
-                    style={styles.legacyReceiptCloseBtn}
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.legacyReceiptCloseBtn,
+                      pressed && styles.legacyReceiptCloseBtnPressed,
+                    ]}
                     onPress={() => {
                       setShowReceiptModal(false);
                       setSelectedPayment(null);
                     }}
-                    activeOpacity={0.7}
                   >
-                    <Text style={styles.legacyReceiptCloseBtnText}>Close</Text>
-                  </TouchableOpacity>
+                    {({ pressed }) => (
+                      <Text
+                        style={[
+                          styles.legacyReceiptCloseBtnText,
+                          pressed && styles.legacyReceiptCloseBtnTextPressed,
+                        ]}
+                      >
+                        Close
+                      </Text>
+                    )}
+                  </Pressable>
                 </>
               ) : null}
             </ScrollView>
+
+            {/* Fixed footer -- outside the ScrollView so it stays visible
+                at the bottom of the modal instead of scrolling away with
+                the receipt content. */}
+            {selectedPayment?.receiptData && (
+              <ReceiptActionsBar
+                data={selectedPayment.receiptData}
+                billing={billing}
+                onClose={() => {
+                  setShowReceiptModal(false);
+                  setSelectedPayment(null);
+                }}
+              />
+            )}
           </View>
         </View>
       </Modal>
@@ -727,18 +751,28 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     paddingHorizontal: spacing.md + 2,
     paddingVertical: spacing.sm + 2,
+    borderWidth: 1.5,
+    borderColor: "transparent",
     ...shadow.card,
   },
 
-  yearPillOpen: {
-    borderBottomLeftRadius: 0,
-    borderBottomRightRadius: 0,
+  // Shown while the dropdown is open -- gives the pill a "clicked in"
+  // look (tinted fill + emerald border) instead of changing its shape.
+  yearPillActive: {
+    backgroundColor: colors.emeraldSoft,
+    borderColor: colors.emerald,
   },
 
   yearPillText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     color: colors.emerald,
+  },
+
+  // Flips the chevron to point up while the dropdown is open, so the
+  // button visibly reacts to being clicked in vs. clicked out.
+  yearPillChevronFlipped: {
+    transform: [{ rotate: "180deg" }],
   },
 
   yearOverlay: {
@@ -903,10 +937,19 @@ const styles = StyleSheet.create({
     marginTop: spacing.xl,
   },
 
+  legacyReceiptCloseBtnPressed: {
+    backgroundColor: colors.ink,
+    borderColor: colors.ink,
+  },
+
   legacyReceiptCloseBtnText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     color: colors.textSecondary,
+  },
+
+  legacyReceiptCloseBtnTextPressed: {
+    color: colors.white,
   },
 
   receiptImage: {

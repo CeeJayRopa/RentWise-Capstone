@@ -39,6 +39,9 @@ export default function AdminProfile() {
   const [lastName, setLastName] = useState("");
   const [contactNo, setContactNo] = useState("");
 
+  // Confirmation gate before Save changes actually runs.
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+
   const [focusedField, setFocusedField] = useState<string | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(20)).current;
@@ -176,6 +179,13 @@ export default function AdminProfile() {
     }
   };
 
+  function handleCancelEditProfile() {
+    setFirstName(originalRef.current.firstName);
+    setLastName(originalRef.current.lastName);
+    setContactNo(originalRef.current.contactNo);
+    setIsEditing(false);
+  }
+
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
@@ -312,31 +322,75 @@ export default function AdminProfile() {
 
         {/* EDIT / SAVE BUTTON */}
         <View ref={editBtnRef} collapsable={false}>
-        <Pressable
-          style={({ pressed }) => [
-            styles.saveBtn,
-            isEditing && (!hasChanges || hasEmptyField || saving) && styles.saveBtnDisabled,
-            pressed && (!isEditing || (hasChanges && !hasEmptyField && !saving)) && styles.saveBtnPressed,
-          ]}
-          onPress={isEditing ? handleSave : () => setIsEditing(true)}
-          disabled={isEditing && (!hasChanges || hasEmptyField || saving)}
-        >
-          {saving ? (
-            <ActivityIndicator color={colors.white} size="small" />
+          {isEditing ? (
+            <View style={styles.pwActionsRow}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.pwCancelBtn,
+                  pressed && { backgroundColor: colors.error, borderColor: colors.error, transform: [{ scale: 0.97 }] },
+                ]}
+                onPress={handleCancelEditProfile}
+                disabled={saving}
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.pwCancelBtnText, pressed && styles.pwCancelBtnTextPressed]}>Cancel</Text>
+                )}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.saveBtn,
+                  styles.pwUpdateBtn,
+                  (!hasChanges || hasEmptyField || saving) && styles.saveBtnDisabled,
+                  pressed &&
+                    hasChanges &&
+                    !hasEmptyField &&
+                    !saving && { backgroundColor: colors.white, transform: [{ scale: 0.97 }] },
+                ]}
+                onPress={() => setShowSaveConfirm(true)}
+                disabled={!hasChanges || hasEmptyField || saving}
+              >
+                {({ pressed }) =>
+                  saving ? (
+                    <ActivityIndicator color={colors.white} size="small" />
+                  ) : (
+                    <Text
+                      style={[
+                        styles.saveBtnText,
+                        styles.pwUpdateBtnText,
+                        pressed && hasChanges && !hasEmptyField && styles.pwUpdateBtnTextPressed,
+                      ]}
+                    >
+                      Save changes
+                    </Text>
+                  )
+                }
+              </Pressable>
+            </View>
           ) : (
-            <Text style={styles.saveBtnText}>{isEditing ? "Save changes" : "Edit Profile"}</Text>
+            <Pressable
+              style={({ pressed }) => [styles.saveBtn, pressed && styles.saveBtnPressed]}
+              onPress={() => setIsEditing(true)}
+            >
+              <Text style={styles.saveBtnText}>Edit Profile</Text>
+            </Pressable>
           )}
-        </Pressable>
         </View>
 
         {/* LOGOUT */}
         <View ref={logoutBtnRef} collapsable={false}>
         <Pressable
-          style={({ pressed }) => [styles.logoutBtn, pressed && styles.logoutBtnPressed]}
+          style={({ pressed }) => [
+            styles.logoutBtn,
+            pressed && { backgroundColor: colors.error, borderColor: colors.error, transform: [{ scale: 0.97 }] },
+          ]}
           onPress={() => setShowLogoutConfirm(true)}
         >
-          <LogOut size={18} color={colors.error} style={{ marginRight: spacing.sm + 2 }} />
-          <Text style={styles.logoutBtnText}>Logout Account</Text>
+          {({ pressed }) => (
+            <>
+              <LogOut size={18} color={pressed ? colors.white : colors.error} style={{ marginRight: spacing.sm + 2 }} />
+              <Text style={[styles.logoutBtnText, pressed && styles.logoutBtnTextPressed]}>Logout Account</Text>
+            </>
+          )}
         </Pressable>
         </View>
       </ScrollView>
@@ -382,27 +436,70 @@ export default function AdminProfile() {
             </View>
             <View style={styles.alertDivider} />
             <View style={styles.alertBtnRow}>
-              <TouchableOpacity
-                style={styles.alertBtn}
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && !loggingOut && styles.alertBtnCancelPressed]}
                 onPress={() => setShowLogoutConfirm(false)}
-                activeOpacity={0.6}
                 disabled={loggingOut}
               >
-                <Text style={styles.alertBtnCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <View style={styles.alertBtnDivider} />
-              <TouchableOpacity
-                style={styles.alertBtn}
-                onPress={handleLogout}
-                activeOpacity={0.6}
-                disabled={loggingOut}
-              >
-                {loggingOut ? (
-                  <ActivityIndicator color={colors.emerald} size="small" />
-                ) : (
-                  <Text style={styles.alertBtnConfirmText}>Confirm</Text>
+                {({ pressed }) => (
+                  <Text style={[styles.alertBtnCancelText, pressed && !loggingOut && styles.alertBtnCancelTextPressed]}>Cancel</Text>
                 )}
-              </TouchableOpacity>
+              </Pressable>
+              <View style={styles.alertBtnDivider} />
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && !loggingOut && styles.alertBtnConfirmPressed]}
+                onPress={handleLogout}
+                disabled={loggingOut}
+              >
+                {({ pressed }) =>
+                  loggingOut ? (
+                    <ActivityIndicator color={colors.emerald} size="small" />
+                  ) : (
+                    <Text style={[styles.alertBtnConfirmText, pressed && styles.alertBtnConfirmTextPressed]}>Confirm</Text>
+                  )
+                }
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* SAVE CHANGES CONFIRMATION MODAL */}
+      <Modal
+        visible={showSaveConfirm}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowSaveConfirm(false)}
+      >
+        <View style={styles.alertOverlay}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setShowSaveConfirm(false)} />
+          <View style={styles.alertCard}>
+            <View style={styles.alertBody}>
+              <Text style={styles.alertTitleNeutral}>Save changes?</Text>
+              <Text style={styles.alertMessage}>Are you sure you want to update your profile information?</Text>
+            </View>
+            <View style={styles.alertDivider} />
+            <View style={styles.alertBtnRow}>
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && styles.alertBtnCancelPressed]}
+                onPress={() => setShowSaveConfirm(false)}
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.alertBtnCancelText, pressed && styles.alertBtnCancelTextPressed]}>Cancel</Text>
+                )}
+              </Pressable>
+              <View style={styles.alertBtnDivider} />
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && styles.alertBtnConfirmPressed]}
+                onPress={() => {
+                  setShowSaveConfirm(false);
+                  handleSave();
+                }}
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.alertBtnConfirmText, pressed && styles.alertBtnConfirmTextPressed]}>Continue</Text>
+                )}
+              </Pressable>
             </View>
           </View>
         </View>
@@ -613,6 +710,49 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
+  // ── Save/Cancel row (shown while editing) ────────────────────────────
+  pwActionsRow: {
+    flexDirection: "row",
+    gap: spacing.md,
+    marginTop: spacing.sm,
+  },
+
+  pwCancelBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    paddingVertical: 16,
+    backgroundColor: colors.white,
+    ...shadow.card,
+  },
+
+  pwCancelBtnText: {
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
+    color: colors.textSecondary,
+  },
+
+  pwCancelBtnTextPressed: {
+    color: colors.white,
+  },
+
+  pwUpdateBtn: {
+    flex: 1,
+    marginTop: 0,
+  },
+
+  pwUpdateBtnText: {
+    fontSize: fontSize.md,
+  },
+
+  pwUpdateBtnTextPressed: {
+    color: colors.emerald,
+  },
+
   logoutBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -630,6 +770,10 @@ const styles = StyleSheet.create({
     fontSize: fontSize.base,
     fontFamily: fontFamily.semibold,
     color: colors.error,
+  },
+
+  logoutBtnTextPressed: {
+    color: colors.white,
   },
 
   // ── Toast ─────────────────────────────────────────────────────────────────────
@@ -694,6 +838,13 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
+  alertTitleNeutral: {
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    textAlign: "center",
+  },
+
   alertMessage: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.regular,
@@ -725,15 +876,31 @@ const styles = StyleSheet.create({
     backgroundColor: colors.border,
   },
 
+  alertBtnCancelPressed: {
+    backgroundColor: colors.error,
+  },
+
   alertBtnCancelText: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.regular,
     color: colors.textMuted,
   },
 
+  alertBtnCancelTextPressed: {
+    color: colors.white,
+  },
+
+  alertBtnConfirmPressed: {
+    backgroundColor: colors.emerald,
+  },
+
   alertBtnConfirmText: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.semibold,
     color: colors.emerald,
+  },
+
+  alertBtnConfirmTextPressed: {
+    color: colors.white,
   },
 });

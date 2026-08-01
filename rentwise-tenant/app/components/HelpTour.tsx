@@ -3,6 +3,7 @@ import {
   View,
   Text,
   TouchableOpacity,
+  Pressable,
   StyleSheet,
   Modal,
   useWindowDimensions,
@@ -526,17 +527,30 @@ export default function HelpTour({
               </Text>
             )}
             <View style={styles.tooltipActions}>
-              <TouchableOpacity onPress={onClose} activeOpacity={0.7}>
-                <Text style={styles.skipText}>Skip</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.nextBtn}
-                activeOpacity={0.8}
+              <Pressable onPress={onClose} hitSlop={8}>
+                {({ pressed }) => (
+                  <Text style={[styles.skipText, pressed && styles.skipTextPressed]}>Skip</Text>
+                )}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.nextBtn, pressed && styles.nextBtnPressed]}
                 onPress={() => (isLast ? onClose() : setStepIndex((i) => i + 1))}
               >
-                <Text style={styles.nextBtnText}>{isLast ? "Got it" : "Next"}</Text>
-                {!isLast && <ArrowRight size={14} color={colors.white} style={{ marginLeft: 6 }} />}
-              </TouchableOpacity>
+                {({ pressed }) => (
+                  <>
+                    <Text style={[styles.nextBtnText, pressed && styles.nextBtnTextPressed]}>
+                      {isLast ? "Got it" : "Next"}
+                    </Text>
+                    {!isLast && (
+                      <ArrowRight
+                        size={14}
+                        color={pressed ? colors.emerald : colors.white}
+                        style={{ marginLeft: 6 }}
+                      />
+                    )}
+                  </>
+                )}
+              </Pressable>
             </View>
           </View>
         </Animated.View>
@@ -583,6 +597,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm + 2,
   },
   skipText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.textSecondary },
+  skipTextPressed: { color: colors.ink },
   nextBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -590,6 +605,10 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     paddingVertical: 7,
     paddingHorizontal: spacing.md,
+    borderWidth: 1.5,
+    borderColor: "transparent",
   },
+  nextBtnPressed: { backgroundColor: colors.white, borderColor: colors.emerald },
   nextBtnText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.bold, color: colors.white },
+  nextBtnTextPressed: { color: colors.emerald },
 });

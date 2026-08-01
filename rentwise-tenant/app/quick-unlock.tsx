@@ -165,16 +165,18 @@ export default function QuickUnlock() {
           style={({ pressed }) => [
             styles.unlockBtn,
             unlocking && styles.unlockBtnDisabled,
-            pressed && !unlocking && { backgroundColor: colors.ink },
+            pressed && !unlocking && styles.unlockBtnPressed,
           ]}
           onPress={handleUnlock}
           disabled={unlocking}
         >
-          {unlocking ? (
-            <ActivityIndicator color={colors.white} />
-          ) : (
-            <Text style={styles.unlockBtnText}>Unlock</Text>
-          )}
+          {({ pressed }) =>
+            unlocking ? (
+              <ActivityIndicator color={colors.white} />
+            ) : (
+              <Text style={[styles.unlockBtnText, pressed && styles.unlockBtnTextPressed]}>Unlock</Text>
+            )
+          }
         </Pressable>
 
         <Pressable style={styles.signOutLink} onPress={handleSignOut}>
@@ -272,15 +274,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: spacing.xxl,
     minHeight: 50,
+    borderWidth: 1.5,
+    borderColor: "transparent",
     ...shadow.button,
   },
   unlockBtnDisabled: {
     opacity: 0.6,
   },
+  unlockBtnPressed: {
+    backgroundColor: colors.white,
+    borderColor: colors.emerald,
+  },
   unlockBtnText: {
     color: colors.white,
     fontSize: fontSize.md,
     fontFamily: fontFamily.bold,
+  },
+  unlockBtnTextPressed: {
+    color: colors.emerald,
   },
   signOutLink: {
     alignItems: "center",

@@ -230,11 +230,15 @@ export default function TenantRelocation() {
           onPress={handleRestore}
           disabled={!selectedStall || restoring}
         >
-          {restoring ? (
-            <ActivityIndicator color={colors.white} size="small" />
-          ) : (
-            <Text style={styles.restoreBtnText}>Restore account</Text>
-          )}
+          {({ pressed }) =>
+            restoring ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={[styles.restoreBtnText, pressed && !!selectedStall && styles.restoreBtnTextPressed]}>
+                Restore account
+              </Text>
+            )
+          }
         </Pressable>
       </View>
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
@@ -446,7 +450,7 @@ const styles = StyleSheet.create({
   },
 
   restoreBtnPressed: {
-    backgroundColor: colors.emerald,
+    backgroundColor: colors.white,
     transform: [{ scale: 0.97 }],
   },
 
@@ -459,5 +463,9 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.semibold,
     color: colors.white,
     textAlign: "center",
+  },
+
+  restoreBtnTextPressed: {
+    color: colors.ink,
   },
 });

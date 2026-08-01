@@ -86,11 +86,20 @@ function isSamePeriod(schedule: string, a: Date, b: Date): boolean {
 // PAYMENT DUE CHECK
 // Returns true  → the current month's running balance is not yet settled
 //         false → the tenant is paid up through today (or ahead)
+//
+// `now` MUST be the caller's Manila-adjusted Date (reminderScheduler.ts's
+// `nowManila`), never `new Date()` computed in here -- Cloud Functions run
+// in UTC, and Manila is UTC+8, so any local `new Date()` is on the WRONG
+// calendar day for roughly a third of the day (00:00-07:59 Manila time).
+// That silently broke every calculation below (month totals, period
+// matching, semi-monthly gating) whenever a reminder was scheduled in that
+// window -- e.g. a 7:35 AM Manila run saw a `now` of 23:35 the previous day.
 // ─────────────────────────────────────────────────────────────────────────────
 export async function isPaymentDue(
   tenantId: string,
   schedule: string,
   dailyRate: number,
+  now: Date,
 ): Promise<boolean> {
   // Composite index required in Firestore: userId ASC, status ASC
   const snap = await getFirestore()
@@ -99,7 +108,6 @@ export async function isPaymentDue(
     .where('status', 'in', ['approved', 'pending'])
     .get();
 
-  const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -147,12 +155,15 @@ export async function isPaymentDue(
 // ─────────────────────────────────────────────────────────────────────────────
 // DUPLICATE REMINDER CHECK
 // Returns true → a reminder was already sent within the current period
+//
+// `now` MUST be the caller's Manila-adjusted Date -- see the comment on
+// isPaymentDue above for why.
 // ─────────────────────────────────────────────────────────────────────────────
 export async function hasReminderBeenSent(
   tenantId: string,
   schedule: string,
+  now: Date,
 ): Promise<boolean> {
-  const now = new Date();
   let periodStart: Date;
 
   if (schedule === 'daily') {

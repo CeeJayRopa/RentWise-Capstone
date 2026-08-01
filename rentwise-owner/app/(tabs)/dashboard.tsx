@@ -203,15 +203,6 @@ export default function Dashboard() {
       const occupiedCount = stallsSnap.docs.filter((d) => d.data().status === "occupied").length;
       const unoccupiedCount = stallsSnap.docs.filter((d) => d.data().status === "unoccupied").length;
 
-      const stallMap = new Map<string, { price: number; paymentSchedule: string }>();
-      stallsSnap.docs.forEach((d) => {
-        const sd = d.data();
-        stallMap.set(d.id, {
-          price: Number(sd.price ?? 0),
-          paymentSchedule: (sd.paymentSchedule as string) ?? "monthly",
-        });
-      });
-
       const inRange = (d: (typeof paymentsSnap.docs)[number], startMs: number, endMs: number) => {
         const date = d.data().date as Timestamp | undefined;
         if (!date?.toMillis) return false;
@@ -236,12 +227,13 @@ export default function Dashboard() {
       // overcounted tenants who'd only partially paid what's due.
       const paidCount = activeTenants.filter((d) => {
         const u = d.data();
-        const stall = stallMap.get(u.stallId as string);
-        if (!stall) return false;
+        // Billing terms live on the tenant, not the stall -- travels with
+        // them if relocated, instead of reflecting whoever's stall this is.
+        if (!u.stallId) return false;
         const paidThisMonth = monthPayments
           .filter((p) => p.data().userId === d.id)
           .reduce((sum, p) => sum + ((p.data().amount ?? p.data().paymentAmount ?? 0) as number), 0);
-        return isTenantPaidThisMonth(stall.price, stall.paymentSchedule, paidThisMonth, now);
+        return isTenantPaidThisMonth(u.price ?? 0, u.paymentSchedule ?? "monthly", paidThisMonth, now);
       }).length;
 
       setStats({

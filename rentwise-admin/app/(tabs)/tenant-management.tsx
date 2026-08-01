@@ -268,8 +268,12 @@ export default function TenantManagement() {
                         setArchiveTarget(item);
                       }}
                     >
-                      <Archive size={14} color={colors.error} />
-                      <Text style={styles.archiveBtnText}>Archive</Text>
+                      {({ pressed }) => (
+                        <>
+                          <Archive size={14} color={pressed ? colors.white : colors.error} />
+                          <Text style={[styles.archiveBtnText, pressed && styles.archiveBtnTextPressed]}>Archive</Text>
+                        </>
+                      )}
                     </Pressable>
                   </View>
                 </View>
@@ -310,26 +314,33 @@ export default function TenantManagement() {
                   </View>
                 ) : null}
                 <View style={styles.modalBtns}>
-                  <TouchableOpacity
-                    style={[styles.modalBtn, styles.modalBtnOutline]}
+                  <Pressable
+                    style={({ pressed }) => [styles.modalBtn, styles.modalBtnOutline, pressed && styles.modalBtnOutlinePressed]}
                     onPress={() => setArchiveTarget(null)}
-                    activeOpacity={0.7}
                     disabled={archiving}
                   >
-                    <Text style={styles.modalBtnOutlineText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.modalBtn, styles.modalBtnDanger, archiving && styles.modalBtnDisabled]}
-                    onPress={handleArchive}
-                    activeOpacity={0.8}
-                    disabled={archiving}
-                  >
-                    {archiving ? (
-                      <ActivityIndicator color={colors.white} size="small" />
-                    ) : (
-                      <Text style={styles.modalBtnDangerText}>Archive</Text>
+                    {({ pressed }) => (
+                      <Text style={[styles.modalBtnOutlineText, pressed && styles.modalBtnOutlineTextPressed]}>Cancel</Text>
                     )}
-                  </TouchableOpacity>
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.modalBtn,
+                      styles.modalBtnDanger,
+                      archiving && styles.modalBtnDisabled,
+                      pressed && !archiving && styles.modalBtnDangerPressed,
+                    ]}
+                    onPress={handleArchive}
+                    disabled={archiving}
+                  >
+                    {({ pressed }) =>
+                      archiving ? (
+                        <ActivityIndicator color={colors.white} size="small" />
+                      ) : (
+                        <Text style={[styles.modalBtnDangerText, pressed && styles.modalBtnDangerTextPressed]}>Archive</Text>
+                      )
+                    }
+                  </Pressable>
                 </View>
               </View>
             </View>
@@ -509,6 +520,10 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
+  archiveBtnTextPressed: {
+    color: colors.white,
+  },
+
   // ── Confirmation modals ───────────────────────────────────────────────────────
 
   modalOverlay: {
@@ -597,11 +612,17 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: colors.emerald,
   },
+  modalBtnOutlinePressed: {
+    backgroundColor: colors.emerald,
+  },
 
   modalBtnOutlineText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     color: colors.emerald,
+  },
+  modalBtnOutlineTextPressed: {
+    color: colors.white,
   },
 
   modalBtnPrimary: {
@@ -618,11 +639,17 @@ const styles = StyleSheet.create({
   modalBtnDanger: {
     backgroundColor: colors.error,
   },
+  modalBtnDangerPressed: {
+    backgroundColor: colors.white,
+  },
 
   modalBtnDangerText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     color: colors.white,
+  },
+  modalBtnDangerTextPressed: {
+    color: colors.error,
   },
 
   modalBtnDisabled: {

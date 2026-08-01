@@ -29,6 +29,13 @@ export interface Tenant {
 
   mustChangePassword?: boolean;
 
+  // This tenant's own billing terms -- the source of truth for rent
+  // calculations (not the stall's, which is just a denormalized display
+  // copy for the guest app). Travels with the tenant if they relocate.
+  price?: number;
+  paymentSchedule?: string;
+  category?: string;
+
   stall?: any;
 }
 

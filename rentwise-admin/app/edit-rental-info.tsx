@@ -4,6 +4,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   Animated,
   Easing,
   ActivityIndicator,
@@ -43,6 +44,11 @@ export default function EditRentalInfo() {
   const [spaceId, setSpaceId] = useState("");
   const [buildingNumber, setBuildingNumber] = useState("");
   const [tenantName, setTenantName] = useState("");
+  // Billing terms (price/paymentSchedule/category) belong to whoever is
+  // CURRENTLY renting this stall, not the stall itself -- empty when
+  // vacant, in which case this screen just edits the stall's own listing
+  // defaults instead of a specific tenant's terms.
+  const [tenantId, setTenantId] = useState("");
 
   // Editable fields (string so TextInput stays controlled)
   const [length, setLength] = useState("");
@@ -198,12 +204,27 @@ export default function EditRentalInfo() {
         category: loadedCategory,
       };
 
-      const tenantId = (data.tenantId as string) ?? "";
-      if (tenantId) {
-        const tenantSnap = await getDoc(doc(db, "users", tenantId));
+      const currentTenantId = (data.tenantId as string) ?? "";
+      setTenantId(currentTenantId);
+      if (currentTenantId) {
+        const tenantSnap = await getDoc(doc(db, "users", currentTenantId));
         if (tenantSnap.exists()) {
           const td = tenantSnap.data();
           setTenantName(`${td.firstName ?? ""} ${td.lastName ?? ""}`.trim());
+          // The tenant's OWN price/paymentSchedule/category are the source
+          // of truth once occupied -- the stall's copy (just read above)
+          // is only a denormalized display value that can lag behind if
+          // this tenant relocated here after it was last edited.
+          setRentalRate(String(td.price ?? data.price ?? ""));
+          setPaymentSchedule(((td.paymentSchedule as string) || (data.paymentSchedule as string) || "monthly") as Schedule);
+          const tenantCategory = ((td.category as string) || loadedCategory) as MarketCategory | "";
+          setCategory(tenantCategory);
+          originalRef.current = {
+            ...originalRef.current!,
+            rentalRate: String(td.price ?? data.price ?? ""),
+            paymentSchedule: ((td.paymentSchedule as string) || (data.paymentSchedule as string) || "monthly") as Schedule,
+            category: tenantCategory,
+          };
         }
       } else {
         setTenantName("");
@@ -266,6 +287,11 @@ export default function EditRentalInfo() {
     setSaving(true);
     setSaveError("");
     try {
+      // Dimensions are always the stall's own attribute. price/
+      // paymentSchedule/category are also written here as a denormalized
+      // display copy (the guest app reads a stall's price/category
+      // regardless of who's renting it) -- but when occupied, the TENANT's
+      // own doc below is the real source of truth for billing.
       await updateDoc(doc(db, "stalls", stallId), {
         length: parseFloat(length),
         width: parseFloat(width),
@@ -273,6 +299,14 @@ export default function EditRentalInfo() {
         paymentSchedule,
         category,
       });
+
+      if (tenantId) {
+        await updateDoc(doc(db, "users", tenantId), {
+          price: parseFloat(rentalRate),
+          paymentSchedule,
+          category,
+        });
+      }
 
       const orig = originalRef.current;
       if (orig) {
@@ -377,13 +411,11 @@ export default function EditRentalInfo() {
           ) : loadError ? (
             <View style={styles.centeredBox}>
               <Text style={styles.loadErrorText}>{loadError}</Text>
-              <TouchableOpacity
-                style={styles.backLink}
-                onPress={() => router.back()}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.backLinkText}>← Go Back</Text>
-              </TouchableOpacity>
+              <Pressable style={styles.backLink} onPress={() => router.back()}>
+                {({ pressed }) => (
+                  <Text style={[styles.backLinkText, pressed && styles.backLinkTextPressed]}>← Go Back</Text>
+                )}
+              </Pressable>
             </View>
           ) : (
             <>
@@ -652,6 +684,7 @@ const styles = StyleSheet.create({
 
   backLink: { paddingVertical: spacing.sm, paddingHorizontal: spacing.lg },
   backLinkText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.emerald },
+  backLinkTextPressed: { color: colors.ink },
 
   // ── Stall ID pill ─────────────────────────────────────────────────────────────
 

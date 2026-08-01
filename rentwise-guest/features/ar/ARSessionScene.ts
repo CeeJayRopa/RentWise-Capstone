@@ -48,6 +48,9 @@ interface PlacedObject extends PlacedObjectInfo {
   wallOffset: number;
   surfaceType: SurfaceType;
   spawnStartTime: number;
+  // Set once updateSpawnAnimations has written the exact final scale, so the object's
+  // scale isn't touched every frame forever after it finishes popping in.
+  spawnAnimDone: boolean;
   // Cumulative manual rotation (degrees) applied via rotateSelected, on top of whatever
   // base facing orientTowardCamera/orientTowardWall computes. Tracked separately because
   // moveSelectedToReticle recomputes that base facing from scratch on every move, which
@@ -297,7 +300,10 @@ export class ARSessionScene {
       antialias: true,
       preserveDrawingBuffer: true,
     });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    // Capped at 2x -- above that, sharpness gains are imperceptible on a phone screen
+    // while GPU cost keeps climbing (roughly with the square of the ratio), competing
+    // with the same per-frame budget WebXR needs for hit-testing/plane detection.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(canvas.clientWidth, canvas.clientHeight);
     (renderer.xr as any).enabled = true;
     (renderer.xr as any).setReferenceSpaceType("local");
@@ -624,6 +630,7 @@ export class ARSessionScene {
       wallOffset: this.armedWallOffset,
       surfaceType,
       spawnStartTime: performance.now(),
+      spawnAnimDone: false,
       userYawDeg: 0,
     };
 
@@ -807,8 +814,19 @@ export class ARSessionScene {
   private updateSpawnAnimations() {
     const now = performance.now();
     for (const p of this.placed) {
-      if (now - p.spawnStartTime >= SPAWN_ANIM_DURATION_MS) continue;
-      const t = easeOutCubic(Math.min(1, (now - p.spawnStartTime) / SPAWN_ANIM_DURATION_MS));
+      if (p.spawnAnimDone) continue; // already finalized -- skip entirely (hot-path perf)
+
+      const elapsed = now - p.spawnStartTime;
+      if (elapsed >= SPAWN_ANIM_DURATION_MS) {
+        // Snap to the exact target once, however late this frame landed -- covers the
+        // case where a hitch (GC pause, GPU upload) skipped the frame that would have
+        // hit t===1 exactly, which used to leave the object frozen mid-animation forever.
+        p.group.scale.set(p.scale.x, p.scale.y, p.scale.z);
+        p.spawnAnimDone = true;
+        continue;
+      }
+
+      const t = easeOutCubic(elapsed / SPAWN_ANIM_DURATION_MS);
       p.group.scale.set(
         Math.max(0.001, p.scale.x * t),
         Math.max(0.001, p.scale.y * t),

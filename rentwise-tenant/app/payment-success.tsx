@@ -63,9 +63,13 @@ export default function PaymentSuccess() {
 
         const receiptNo = "RW-ONLINE-" + Date.now().toString().slice(-8);
         const tenantName = `${tenantData.firstName} ${tenantData.lastName}`;
-        const schedule = stallData?.paymentSchedule ?? "monthly";
+        // Billing terms live on the tenant, not the stall -- travels with
+        // them if they've relocated, instead of picking up whatever the
+        // new stall's previous occupant was charged.
+        const schedule = (tenantData as any).paymentSchedule ?? "monthly";
+        const dailyRate = (tenantData as any).price ?? 0;
 
-        const scheduleRent = computePeriodCharge(stallData?.price ?? 0, schedule, new Date());
+        const scheduleRent = computePeriodCharge(dailyRate, schedule, new Date());
 
         // Same split as dashboard.tsx: only the portion beyond what's
         // already owed (arrears + today) counts as genuine advance.
@@ -84,7 +88,7 @@ export default function PaymentSuccess() {
           if (!pd || pd < monthStart) return sum;
           return sum + Number(data.amount || 0);
         }, 0);
-        const chargedToDate = chargedSinceMonthStart(stallData?.price ?? 0, schedule, today);
+        const chargedToDate = chargedSinceMonthStart(dailyRate, schedule, today);
         const paymentDue = chargedToDate - paidThisMonth;
 
         const owedAmount = Math.max(paymentDue, scheduleRent || 0);
@@ -97,7 +101,7 @@ export default function PaymentSuccess() {
 
         // Same itemization as the in-app WebView handler (payments.tsx) —
         // lists each specific unpaid period this payment covers.
-        const owedBreakdown = consecutivePeriodsEnding(stallData?.price ?? 0, schedule, today, periodsOwed).map((p) => ({
+        const owedBreakdown = consecutivePeriodsEnding(dailyRate, schedule, today, periodsOwed).map((p) => ({
           label: periodLabel(schedule, p.date),
           amount: p.amount,
         }));
@@ -106,7 +110,7 @@ export default function PaymentSuccess() {
         for (let i = 0; i < periodsAdvance; i++) {
           advanceBreakdown.push({
             label: `Advance – ${periodLabel(schedule, advanceCursor)}`,
-            amount: computePeriodCharge(stallData?.price ?? 0, schedule, advanceCursor),
+            amount: computePeriodCharge(dailyRate, schedule, advanceCursor),
           });
           advanceCursor = nextPeriodStart(schedule, advanceCursor);
         }

@@ -435,12 +435,16 @@ export default function Login() {
                 style={({ pressed }) => [
                   styles.signInBtn,
                   !!lockoutUntil && styles.signInBtnDisabled,
-                  pressed && !lockoutUntil && { backgroundColor: colors.ink, transform: [{ scale: 0.98 }] },
+                  pressed && !lockoutUntil && styles.signInBtnPressed,
                 ]}
                 onPress={handleLogin}
                 disabled={!!lockoutUntil}
               >
-                <Text style={styles.signInText}>Sign in</Text>
+                {({ pressed }) => (
+                  <Text style={[styles.signInText, pressed && !lockoutUntil && styles.signInTextPressed]}>
+                    Sign in
+                  </Text>
+                )}
               </Pressable>
             </Animated.View>
           </View>
@@ -506,14 +510,17 @@ export default function Login() {
                 <Pressable
                   style={({ pressed }) => [
                     fp.submitBtn,
-                    pressed && { backgroundColor: colors.ink, transform: [{ scale: 0.97 }] },
+                    pressed && !fpLoading && fp.submitBtnPressed,
                   ]}
                   onPress={handleForgotSubmit}
                   disabled={fpLoading}
                 >
-                  {fpLoading
-                    ? <ActivityIndicator color={colors.white} />
-                    : <Text style={fp.submitText}>Submit request</Text>
+                  {({ pressed }) =>
+                    fpLoading ? (
+                      <ActivityIndicator color={colors.white} />
+                    ) : (
+                      <Text style={[fp.submitText, pressed && fp.submitTextPressed]}>Submit request</Text>
+                    )
                   }
                 </Pressable>
               )}
@@ -644,16 +651,25 @@ const styles = StyleSheet.create({
     backgroundColor: colors.emerald,
     paddingVertical: 15,
     alignItems: "center",
+    borderWidth: 1.5,
+    borderColor: "transparent",
     ...shadow.button,
   },
   signInBtnDisabled: {
     opacity: 0.5,
+  },
+  signInBtnPressed: {
+    backgroundColor: colors.white,
+    borderColor: colors.emerald,
   },
   signInText: {
     color: colors.white,
     fontSize: fontSize.md,
     fontFamily: fontFamily.bold,
     textAlign: "center",
+  },
+  signInTextPressed: {
+    color: colors.emerald,
   },
   forgotLinkText: {
     fontSize: fontSize.sm,
@@ -797,13 +813,22 @@ const fp = StyleSheet.create({
     backgroundColor: colors.emerald,
     paddingVertical: 13,
     alignItems: "center",
+    borderWidth: 1.5,
+    borderColor: "transparent",
     ...shadow.button,
+  },
+  submitBtnPressed: {
+    backgroundColor: colors.white,
+    borderColor: colors.emerald,
   },
   submitText: {
     color: colors.white,
     fontSize: fontSize.base,
     fontFamily: fontFamily.bold,
     textAlign: "center",
+  },
+  submitTextPressed: {
+    color: colors.emerald,
   },
   successBox: {
     marginTop: spacing.md + 2,

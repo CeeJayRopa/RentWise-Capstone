@@ -84,14 +84,21 @@ export const sendPaymentReminders = onSchedule(
           }
 
           const stall = stallDoc.data()!;
-          const schedule: string = stall.paymentSchedule ?? 'monthly';
+          // Billing terms live on the TENANT, not the stall -- otherwise a
+          // relocated tenant gets checked against whoever rented this stall
+          // before them. The stall doc is still fetched for its spaceId,
+          // used in the SMS message below.
+          const schedule: string = tenant.paymentSchedule ?? 'monthly';
 
           // ── Skip: already paid for this period ────────────────────────────
-          const due = await isPaymentDue(tenantId, schedule, stall.price ?? 0);
+          // nowManila (not `new Date()`) -- see paymentChecker.ts's comment
+          // on isPaymentDue for why passing raw server/UTC time here broke
+          // every reminder scheduled between 12:00-7:59 AM Manila time.
+          const due = await isPaymentDue(tenantId, schedule, tenant.price ?? 0, nowManila);
           if (!due) continue;
 
           // ── Skip: reminder already sent this period ───────────────────────
-          const alreadySent = await hasReminderBeenSent(tenantId, schedule);
+          const alreadySent = await hasReminderBeenSent(tenantId, schedule, nowManila);
           if (alreadySent) continue;
 
           // ── Build SMS message ─────────────────────────────────────────────
@@ -103,9 +110,9 @@ export const sendPaymentReminders = onSchedule(
             '',
             `Hello ${fullName},`,
             '',
-            `Your stall rental payment for Space ${stall.spaceId} is currently unpaid.`,
+            `Your stall rental payment for Stall ${stall.spaceId} is currently unpaid.`,
             '',
-            'Please settle your payment at Ka Domeng Talipapa Wet and Dry Market.',
+            'Please settle your payment with the admin at the Admin Office.',
             '',
             'Thank you.',
           ].join('\n');
@@ -124,7 +131,7 @@ export const sendPaymentReminders = onSchedule(
             // Push in-app notification to Firestore
             await db.collection('notifications').add({
               userId: tenantId,
-              message: `Hi ${fullName}, your ${schedule} rent for Space ${stall.spaceId} is due today. Please settle your payment at Ka Domeng Talipapa Wet and Dry Market.`,
+              message: `Hi ${fullName}, your ${schedule} rent for Stall ${stall.spaceId} is due today. Please settle your payment with the admin at the Admin Office.`,
               read: false,
               createdAt: FieldValue.serverTimestamp(),
             });

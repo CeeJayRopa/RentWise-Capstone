@@ -4,6 +4,7 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  Pressable,
   ActivityIndicator,
   Alert,
 } from "react-native";
@@ -245,25 +246,58 @@ export default function Notification() {
       </LinearGradient>
 
       <View style={styles.actionsRow}>
-        <TouchableOpacity
+        <Pressable
           ref={markAllRef}
-          style={[styles.actionPill, (!hasUnread || markingAll) && styles.actionPillDisabled]}
+          style={({ pressed }) => [
+            styles.actionPill,
+            (!hasUnread || markingAll) && styles.actionPillDisabled,
+            pressed && hasUnread && !markingAll && styles.actionPillGreenPressed,
+          ]}
           onPress={markAllRead}
           disabled={!hasUnread || markingAll}
         >
-          <Check size={14} color={colors.emerald} />
-          <Text style={styles.actionPillTextGreen}>{markingAll ? "Marking…" : "Mark all read"}</Text>
-        </TouchableOpacity>
+          {({ pressed }) => (
+            <>
+              <Check size={14} color={pressed && hasUnread && !markingAll ? colors.white : colors.emerald} />
+              <Text
+                style={[
+                  styles.actionPillTextGreen,
+                  pressed && hasUnread && !markingAll && styles.actionPillTextPressed,
+                ]}
+              >
+                {markingAll ? "Marking…" : "Mark all read"}
+              </Text>
+            </>
+          )}
+        </Pressable>
 
-        <TouchableOpacity
+        <Pressable
           ref={clearAllRef}
-          style={[styles.actionPill, (notifications.length === 0 || clearing) && styles.actionPillDisabled]}
+          style={({ pressed }) => [
+            styles.actionPill,
+            (notifications.length === 0 || clearing) && styles.actionPillDisabled,
+            pressed && notifications.length > 0 && !clearing && styles.actionPillRedPressed,
+          ]}
           onPress={handleClearAll}
           disabled={notifications.length === 0 || clearing}
         >
-          <Trash2 size={14} color={colors.error} />
-          <Text style={styles.actionPillTextRed}>{clearing ? "Clearing…" : "Clear all"}</Text>
-        </TouchableOpacity>
+          {({ pressed }) => (
+            <>
+              <Trash2
+                size={14}
+                color={pressed && notifications.length > 0 && !clearing ? colors.white : colors.error}
+              />
+              <Text
+                style={[
+                  styles.actionPillTextRed,
+                  pressed && notifications.length > 0 && !clearing && styles.actionPillTextPressed,
+                ]}
+              >
+                {clearing ? "Clearing…" : "Clear all"}
+              </Text>
+            </>
+          )}
+        </Pressable>
       </View>
 
       <ScrollView
@@ -397,6 +431,14 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
 
+  actionPillGreenPressed: {
+    backgroundColor: colors.emerald,
+  },
+
+  actionPillRedPressed: {
+    backgroundColor: colors.error,
+  },
+
   actionPillTextGreen: {
     color: colors.emerald,
     fontSize: fontSize.sm,
@@ -407,6 +449,10 @@ const styles = StyleSheet.create({
     color: colors.error,
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
+  },
+
+  actionPillTextPressed: {
+    color: colors.white,
   },
 
   // ── Body ────────────────────────────────────────

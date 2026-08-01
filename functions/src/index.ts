@@ -144,6 +144,14 @@ export const adminCreateTenant = onCall(async (request) => {
   let createdUser;
 
   try {
+    // Billing terms (price/paymentSchedule/category) now live on the
+    // TENANT, not the stall -- a new tenant starts out with whatever the
+    // stall was last listing (its own denormalized display copy), same as
+    // before this changed, they just now own that data going forward
+    // instead of sharing the stall's copy with whoever rents it next.
+    const stallSnap = await db.collection("stalls").doc(stallId).get();
+    const stallData = stallSnap.data() ?? {};
+
     // Create Firebase Auth account
 
     createdUser = await auth.createUser({
@@ -173,6 +181,10 @@ export const adminCreateTenant = onCall(async (request) => {
       stallId,
 
       status: "active",
+
+      price: stallData.price ?? 0,
+      paymentSchedule: stallData.paymentSchedule ?? "monthly",
+      category: stallData.category ?? "",
 
       createdAt: FieldValue.serverTimestamp(),
     });

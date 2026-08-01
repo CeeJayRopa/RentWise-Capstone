@@ -192,10 +192,12 @@ export default function OwnerForgotPassword() {
                 No security questions have been set up yet. Set them up under My Account, under Change Password.
               </Text>
               <Pressable
-                style={({ pressed }) => [styles.signInBtn, { marginTop: spacing.xxl }, pressed && { backgroundColor: colors.ink }]}
+                style={({ pressed }) => [styles.signInBtn, { marginTop: spacing.xxl }, pressed && { backgroundColor: colors.white }]}
                 onPress={() => router.replace("/login")}
               >
-                <Text style={styles.signInText}>Back to Sign in</Text>
+                {({ pressed }) => (
+                  <Text style={[styles.signInText, pressed && styles.signInTextPressed]}>Back to Sign in</Text>
+                )}
               </Pressable>
             </>
           )}
@@ -321,12 +323,18 @@ function SubmitButton({ label, loading, onPress }: { label: string; loading: boo
         styles.signInBtn,
         { marginTop: spacing.xxl },
         loading && styles.signInBtnDisabled,
-        pressed && !loading && { backgroundColor: colors.ink, transform: [{ scale: 0.98 }] },
+        pressed && !loading && { backgroundColor: colors.white, transform: [{ scale: 0.98 }] },
       ]}
       onPress={onPress}
       disabled={loading}
     >
-      {loading ? <ActivityIndicator color={colors.white} size="small" /> : <Text style={styles.signInText}>{label}</Text>}
+      {({ pressed }) =>
+        loading ? (
+          <ActivityIndicator color={colors.white} size="small" />
+        ) : (
+          <Text style={[styles.signInText, pressed && styles.signInTextPressed]}>{label}</Text>
+        )
+      }
     </Pressable>
   );
 }
@@ -410,4 +418,5 @@ const styles = StyleSheet.create({
   },
   signInBtnDisabled: { opacity: 0.5 },
   signInText: { color: colors.white, fontSize: fontSize.md, fontFamily: fontFamily.bold, textAlign: "center" },
+  signInTextPressed: { color: colors.emerald },
 });

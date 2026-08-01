@@ -47,21 +47,25 @@ export function Button({
         variantStyles[variant],
         fullWidth && styles.fullWidth,
         variant === "primary" && !isDisabled && shadow.button,
-        pressed && !isDisabled && styles.pressed,
+        pressed && !isDisabled && pressedVariantStyles[variant],
         isDisabled && styles.disabled,
         style,
       ]}
     >
-      {loading ? (
-        <ActivityIndicator
-          color={variant === "primary" || variant === "danger" ? colors.white : colors.emerald}
-        />
-      ) : (
-        <View style={styles.content}>
-          {icon}
-          <Text style={[styles.label, labelStyles[variant]]}>{label}</Text>
-        </View>
-      )}
+      {({ pressed }) =>
+        loading ? (
+          <ActivityIndicator
+            color={variant === "primary" || variant === "danger" ? colors.white : colors.emerald}
+          />
+        ) : (
+          <View style={styles.content}>
+            {icon}
+            <Text style={[styles.label, labelStyles[variant], pressed && !isDisabled && pressedLabelStyles[variant]]}>
+              {label}
+            </Text>
+          </View>
+        )
+      }
     </Pressable>
   );
 }
@@ -81,7 +85,6 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.semibold,
     fontSize: fontSize.base,
   },
-  pressed: { opacity: 0.85, transform: [{ scale: 0.99 }] },
   disabled: { opacity: 0.5 },
 });
 
@@ -97,4 +100,21 @@ const labelStyles = StyleSheet.create({
   secondary: { color: colors.ink },
   ghost: { color: colors.emerald },
   danger: { color: colors.white },
+});
+
+// Pressed state inverts each variant's fill/label colors (plus a slight
+// scale-down) instead of just dimming opacity, so a tap gives clear visual
+// feedback no matter which variant is used.
+const pressedVariantStyles = StyleSheet.create({
+  primary: { backgroundColor: colors.white, transform: [{ scale: 0.98 }] },
+  secondary: { backgroundColor: colors.ink, borderColor: colors.ink, transform: [{ scale: 0.98 }] },
+  ghost: { backgroundColor: colors.emerald, transform: [{ scale: 0.98 }] },
+  danger: { backgroundColor: colors.white, transform: [{ scale: 0.98 }] },
+});
+
+const pressedLabelStyles = StyleSheet.create({
+  primary: { color: colors.emerald },
+  secondary: { color: colors.white },
+  ghost: { color: colors.white },
+  danger: { color: colors.error },
 });

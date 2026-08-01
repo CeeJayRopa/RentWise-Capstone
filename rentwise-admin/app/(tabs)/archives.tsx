@@ -322,18 +322,20 @@ export default function Archives() {
               <View style={styles.cardActions}>
                 <View ref={index === 0 ? restoreBtnRef : undefined} collapsable={false} style={{ flex: 1 }}>
                   <Pressable
-                    style={styles.restoreBtn}
+                    style={({ pressed }) => [styles.restoreBtn, pressed && styles.restoreBtnPressed]}
                     onPress={() => handleRestorePress(item)}
                     disabled={checkingStallId === item.uid}
                   >
-                    {checkingStallId === item.uid ? (
-                      <ActivityIndicator color={colors.emerald} size="small" />
-                    ) : (
-                      <>
-                        <RotateCcw size={15} color={colors.emerald} style={styles.btnIcon} />
-                        <Text style={styles.restoreBtnText}>Restore</Text>
-                      </>
-                    )}
+                    {({ pressed }) =>
+                      checkingStallId === item.uid ? (
+                        <ActivityIndicator color={colors.emerald} size="small" />
+                      ) : (
+                        <>
+                          <RotateCcw size={15} color={pressed ? colors.white : colors.emerald} style={styles.btnIcon} />
+                          <Text style={[styles.restoreBtnText, pressed && styles.restoreBtnTextPressed]}>Restore</Text>
+                        </>
+                      )
+                    }
                   </Pressable>
                 </View>
 
@@ -341,11 +343,15 @@ export default function Archives() {
 
                 <View ref={index === 0 ? deleteBtnRef : undefined} collapsable={false} style={{ flex: 1 }}>
                   <Pressable
-                    style={styles.deleteBtn}
+                    style={({ pressed }) => [styles.deleteBtn, pressed && styles.deleteBtnPressed]}
                     onPress={() => { setDeleteError(""); setDeleteTarget(item); }}
                   >
-                    <Trash2 size={15} color={colors.error} style={styles.btnIcon} />
-                    <Text style={styles.deleteBtnText}>Delete</Text>
+                    {({ pressed }) => (
+                      <>
+                        <Trash2 size={15} color={pressed ? colors.white : colors.error} style={styles.btnIcon} />
+                        <Text style={[styles.deleteBtnText, pressed && styles.deleteBtnTextPressed]}>Delete</Text>
+                      </>
+                    )}
                   </Pressable>
                 </View>
               </View>
@@ -382,30 +388,33 @@ export default function Archives() {
                   <Text style={styles.modalError}>{restoreError}</Text>
                 ) : null}
                 <View style={styles.modalBtns}>
-                  <TouchableOpacity
-                    style={[styles.modalBtn, styles.modalBtnOutline]}
+                  <Pressable
+                    style={({ pressed }) => [styles.modalBtn, styles.modalBtnOutline, pressed && styles.modalBtnOutlinePressed]}
                     onPress={() => setConfirmTarget(null)}
-                    activeOpacity={0.7}
                     disabled={restoring}
                   >
-                    <Text style={styles.modalBtnOutlineText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
+                    {({ pressed }) => (
+                      <Text style={[styles.modalBtnOutlineText, pressed && styles.modalBtnOutlineTextPressed]}>Cancel</Text>
+                    )}
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
                       styles.modalBtn,
                       styles.modalBtnPrimary,
                       restoring && styles.modalBtnDisabled,
+                      pressed && !restoring && styles.modalBtnPrimaryPressed,
                     ]}
                     onPress={handleRestore}
-                    activeOpacity={0.8}
                     disabled={restoring}
                   >
-                    {restoring ? (
-                      <ActivityIndicator color={colors.white} size="small" />
-                    ) : (
-                      <Text style={styles.modalBtnPrimaryText}>Restore</Text>
-                    )}
-                  </TouchableOpacity>
+                    {({ pressed }) =>
+                      restoring ? (
+                        <ActivityIndicator color={colors.white} size="small" />
+                      ) : (
+                        <Text style={[styles.modalBtnPrimaryText, pressed && styles.modalBtnPrimaryTextPressed]}>Restore</Text>
+                      )
+                    }
+                  </Pressable>
                 </View>
               </View>
             </View>
@@ -439,30 +448,33 @@ export default function Archives() {
                   <Text style={styles.modalError}>{deleteError}</Text>
                 ) : null}
                 <View style={styles.modalBtns}>
-                  <TouchableOpacity
-                    style={[styles.modalBtn, styles.modalBtnOutline]}
+                  <Pressable
+                    style={({ pressed }) => [styles.modalBtn, styles.modalBtnOutline, pressed && styles.modalBtnOutlinePressed]}
                     onPress={() => setDeleteTarget(null)}
-                    activeOpacity={0.7}
                     disabled={deleting}
                   >
-                    <Text style={styles.modalBtnOutlineText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
+                    {({ pressed }) => (
+                      <Text style={[styles.modalBtnOutlineText, pressed && styles.modalBtnOutlineTextPressed]}>Cancel</Text>
+                    )}
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
                       styles.modalBtn,
                       styles.modalBtnDanger,
                       deleting && styles.modalBtnDisabled,
+                      pressed && !deleting && styles.modalBtnDangerPressed,
                     ]}
                     onPress={handleDelete}
-                    activeOpacity={0.8}
                     disabled={deleting}
                   >
-                    {deleting ? (
-                      <ActivityIndicator color={colors.white} size="small" />
-                    ) : (
-                      <Text style={styles.modalBtnDangerText}>Delete</Text>
-                    )}
-                  </TouchableOpacity>
+                    {({ pressed }) =>
+                      deleting ? (
+                        <ActivityIndicator color={colors.white} size="small" />
+                      ) : (
+                        <Text style={[styles.modalBtnDangerText, pressed && styles.modalBtnDangerTextPressed]}>Delete</Text>
+                      )
+                    }
+                  </Pressable>
                 </View>
               </View>
             </View>
@@ -644,12 +656,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: spacing.sm,
+    borderRadius: radius.sm,
+  },
+  restoreBtnPressed: {
+    backgroundColor: colors.emerald,
   },
   restoreBtnText: {
     color: colors.emerald,
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     textAlign: "center",
+  },
+  restoreBtnTextPressed: {
+    color: colors.white,
   },
 
   deleteBtn: {
@@ -658,12 +677,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: spacing.sm,
+    borderRadius: radius.sm,
+  },
+  deleteBtnPressed: {
+    backgroundColor: colors.error,
   },
   deleteBtnText: {
     color: colors.error,
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     textAlign: "center",
+  },
+  deleteBtnTextPressed: {
+    color: colors.white,
   },
 
   // ── Confirmation modals ───────────────────────────────────────────────────────
@@ -734,16 +760,25 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: colors.emerald,
   },
+  modalBtnOutlinePressed: {
+    backgroundColor: colors.emerald,
+  },
 
   modalBtnOutlineText: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.semibold,
     color: colors.emerald,
   },
+  modalBtnOutlineTextPressed: {
+    color: colors.white,
+  },
 
   modalBtnPrimary: {
     backgroundColor: colors.emerald,
     ...shadow.button,
+  },
+  modalBtnPrimaryPressed: {
+    backgroundColor: colors.white,
   },
 
   modalBtnPrimaryText: {
@@ -751,15 +786,24 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.semibold,
     color: colors.white,
   },
+  modalBtnPrimaryTextPressed: {
+    color: colors.emerald,
+  },
 
   modalBtnDanger: {
     backgroundColor: colors.error,
+  },
+  modalBtnDangerPressed: {
+    backgroundColor: colors.white,
   },
 
   modalBtnDangerText: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.semibold,
     color: colors.white,
+  },
+  modalBtnDangerTextPressed: {
+    color: colors.error,
   },
 
   modalBtnDisabled: {

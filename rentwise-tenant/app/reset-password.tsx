@@ -108,9 +108,14 @@ export default function ResetPassword() {
           <Text style={styles.errorText}>
             This link has expired or was already used. Please request a new one from the login screen.
           </Text>
-          <TouchableOpacity style={styles.backBtn} onPress={goToLogin} activeOpacity={0.8}>
-            <Text style={styles.backBtnText}>Back to Sign in</Text>
-          </TouchableOpacity>
+          <Pressable
+            style={({ pressed }) => [styles.backBtn, pressed && styles.backBtnPressed]}
+            onPress={goToLogin}
+          >
+            {({ pressed }) => (
+              <Text style={[styles.backBtnText, pressed && styles.backBtnTextPressed]}>Back to Sign in</Text>
+            )}
+          </Pressable>
         </View>
       )}
 
@@ -119,9 +124,14 @@ export default function ResetPassword() {
           <CheckCircle2 size={44} color={colors.emeraldBright} style={{ marginBottom: 12 }} />
           <Text style={styles.doneText}>Password updated!</Text>
           <Text style={styles.doneSubtext}>You can now sign in with your new password.</Text>
-          <TouchableOpacity style={styles.backBtn} onPress={goToLogin} activeOpacity={0.8}>
-            <Text style={styles.backBtnText}>Back to Sign in</Text>
-          </TouchableOpacity>
+          <Pressable
+            style={({ pressed }) => [styles.backBtn, pressed && styles.backBtnPressed]}
+            onPress={goToLogin}
+          >
+            {({ pressed }) => (
+              <Text style={[styles.backBtnText, pressed && styles.backBtnTextPressed]}>Back to Sign in</Text>
+            )}
+          </Pressable>
         </View>
       )}
 
@@ -184,18 +194,25 @@ export default function ResetPassword() {
           </View>
           {!!confirmError && <Text style={styles.fieldError}>{confirmError}</Text>}
 
-          <TouchableOpacity
-            style={[styles.submitBtn, submitting && styles.submitBtnDisabled]}
+          <Pressable
+            style={({ pressed }) => [
+              styles.submitBtn,
+              submitting && styles.submitBtnDisabled,
+              pressed && !submitting && styles.submitBtnPressed,
+            ]}
             onPress={handleSubmit}
             disabled={submitting}
-            activeOpacity={0.8}
           >
-            {submitting ? (
-              <ActivityIndicator color={colors.white} size="small" />
-            ) : (
-              <Text style={styles.submitBtnText}>Save New Password</Text>
-            )}
-          </TouchableOpacity>
+            {({ pressed }) =>
+              submitting ? (
+                <ActivityIndicator color={colors.white} size="small" />
+              ) : (
+                <Text style={[styles.submitBtnText, pressed && styles.submitBtnTextPressed]}>
+                  Save New Password
+                </Text>
+              )
+            }
+          </Pressable>
         </View>
       )}
     </View>
@@ -226,9 +243,13 @@ const styles = StyleSheet.create({
     borderRadius: radius.md + 2,
     paddingVertical: 13,
     paddingHorizontal: spacing.xxxl,
+    borderWidth: 1.5,
+    borderColor: "transparent",
     ...shadow.button,
   },
+  backBtnPressed: { backgroundColor: colors.white, borderColor: colors.emerald },
   backBtnText: { color: colors.white, fontSize: fontSize.base, fontFamily: fontFamily.semibold },
+  backBtnTextPressed: { color: colors.emerald },
 
   formBody: { flex: 1, padding: spacing.xxl },
   formTitle: { fontSize: fontSize.xl, fontFamily: fontFamily.bold, color: colors.ink, marginBottom: 4 },
@@ -263,8 +284,12 @@ const styles = StyleSheet.create({
     borderRadius: radius.md + 2,
     paddingVertical: 15,
     alignItems: "center",
+    borderWidth: 1.5,
+    borderColor: "transparent",
     ...shadow.button,
   },
   submitBtnDisabled: { opacity: 0.6 },
+  submitBtnPressed: { backgroundColor: colors.white, borderColor: colors.emerald },
   submitBtnText: { color: colors.white, fontSize: fontSize.md, fontFamily: fontFamily.bold },
+  submitBtnTextPressed: { color: colors.emerald },
 });

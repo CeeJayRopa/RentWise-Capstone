@@ -5,6 +5,7 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  Pressable,
   ActivityIndicator,
   Alert,
 } from "react-native";
@@ -378,32 +379,35 @@ export default function Notifications() {
                       {relativeTime(item.createdAt)}
                     </Text>
                     <View style={styles.resetActionsRow}>
-                      <TouchableOpacity
-                        style={styles.checkReportBtn}
+                      <Pressable
+                        style={({ pressed }) => [styles.checkReportBtn, pressed && styles.checkReportBtnPressed]}
                         onPress={goResetAdminPassword}
-                        activeOpacity={0.8}
                       >
-                        <Text style={styles.checkReportText}>
-                          Reset in Manage Admin
-                        </Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[
+                        {({ pressed }) => (
+                          <Text style={[styles.checkReportText, pressed && styles.checkReportTextPressed]}>
+                            Reset in Manage Admin
+                          </Text>
+                        )}
+                      </Pressable>
+                      <Pressable
+                        style={({ pressed }) => [
                           styles.resolveResetBtn,
                           resolvingResetId === item.id && styles.btnDisabled,
+                          pressed && resolvingResetId !== item.id && styles.resolveResetBtnPressed,
                         ]}
                         onPress={() => resolveAdminReset(item)}
                         disabled={resolvingResetId === item.id}
-                        activeOpacity={0.8}
                       >
-                        {resolvingResetId === item.id ? (
-                          <ActivityIndicator color={colors.emerald} size="small" />
-                        ) : (
-                          <Text style={styles.resolveResetBtnText}>
-                            Mark resolved
-                          </Text>
-                        )}
-                      </TouchableOpacity>
+                        {({ pressed }) =>
+                          resolvingResetId === item.id ? (
+                            <ActivityIndicator color={colors.emerald} size="small" />
+                          ) : (
+                            <Text style={[styles.resolveResetBtnText, pressed && styles.resolveResetBtnTextPressed]}>
+                              Mark resolved
+                            </Text>
+                          )
+                        }
+                      </Pressable>
                     </View>
                   </View>
                 </View>
@@ -416,34 +420,40 @@ export default function Notifications() {
         {notifications.length > 0 && (
           <View style={styles.actionRow} ref={actionRowRef} collapsable={false}>
             {pendingCount > 0 && (
-              <TouchableOpacity
-                style={[styles.approveAllBtn, busy && styles.btnDisabled]}
+              <Pressable
+                style={({ pressed }) => [styles.approveAllBtn, busy && styles.btnDisabled, pressed && !busy && styles.approveAllBtnPressed]}
                 onPress={handleApproveAll}
                 disabled={busy}
-                activeOpacity={0.8}
               >
-                {approving ? (
-                  <ActivityIndicator color={colors.white} size="small" />
-                ) : (
-                  <Text style={styles.approveAllText}>
-                    Acknowledge All ({pendingCount})
-                  </Text>
-                )}
-              </TouchableOpacity>
+                {({ pressed }) =>
+                  approving ? (
+                    <ActivityIndicator color={colors.white} size="small" />
+                  ) : (
+                    <Text style={[styles.approveAllText, pressed && styles.approveAllTextPressed]}>
+                      Acknowledge All ({pendingCount})
+                    </Text>
+                  )
+                }
+              </Pressable>
             )}
 
-            <TouchableOpacity
-              style={[styles.clearBtn, (busy || pendingCount > 0) && styles.btnDisabled]}
+            <Pressable
+              style={({ pressed }) => [
+                styles.clearBtn,
+                (busy || pendingCount > 0) && styles.btnDisabled,
+                pressed && !(busy || pendingCount > 0) && styles.clearBtnPressed,
+              ]}
               onPress={handleClearAll}
               disabled={busy || pendingCount > 0}
-              activeOpacity={0.8}
             >
-              {clearing ? (
-                <ActivityIndicator color={colors.error} size="small" />
-              ) : (
-                <Text style={styles.clearText}>Clear All</Text>
-              )}
-            </TouchableOpacity>
+              {({ pressed }) =>
+                clearing ? (
+                  <ActivityIndicator color={colors.error} size="small" />
+                ) : (
+                  <Text style={[styles.clearText, pressed && styles.clearTextPressed]}>Clear All</Text>
+                )
+              }
+            </Pressable>
           </View>
         )}
 
@@ -499,14 +509,19 @@ export default function Notifications() {
                 </View>
 
                 {isPending && item.updateId ? (
-                  <TouchableOpacity
+                  <Pressable
                     ref={index === firstPendingIndex ? checkReportRef : undefined}
-                    style={[styles.checkReportBtn, styles.checkReportBtnCentered]}
+                    style={({ pressed }) => [
+                      styles.checkReportBtn,
+                      styles.checkReportBtnCentered,
+                      pressed && styles.checkReportBtnPressed,
+                    ]}
                     onPress={() => handleCheckReport(item)}
-                    activeOpacity={0.8}
                   >
-                    <Text style={styles.checkReportText}>Check Report</Text>
-                  </TouchableOpacity>
+                    {({ pressed }) => (
+                      <Text style={[styles.checkReportText, pressed && styles.checkReportTextPressed]}>Check Report</Text>
+                    )}
+                  </Pressable>
                 ) : null}
               </View>
             );
@@ -585,10 +600,16 @@ const styles = StyleSheet.create({
     minHeight: 42,
     ...shadow.button,
   },
+  approveAllBtnPressed: {
+    backgroundColor: colors.white,
+  },
   approveAllText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     color: colors.white,
+  },
+  approveAllTextPressed: {
+    color: colors.emerald,
   },
   clearBtn: {
     flex: 1,
@@ -601,10 +622,16 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     minHeight: 42,
   },
+  clearBtnPressed: {
+    backgroundColor: colors.error,
+  },
   clearText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     color: colors.error,
+  },
+  clearTextPressed: {
+    color: colors.white,
   },
   btnDisabled: { opacity: 0.5 },
 
@@ -668,12 +695,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md + 2,
     paddingVertical: 6,
     borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: "transparent",
   },
   checkReportBtnCentered: {
     alignSelf: "center",
     marginTop: spacing.sm + 2,
   },
+  checkReportBtnPressed: {
+    backgroundColor: colors.white,
+    borderColor: colors.emerald,
+  },
   checkReportText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.white },
+  checkReportTextPressed: { color: colors.emerald },
 
   sectionTitle: {
     fontSize: fontSize.sm,
@@ -695,7 +729,12 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: radius.pill,
   },
+  resolveResetBtnPressed: {
+    backgroundColor: colors.emerald,
+    borderColor: colors.emerald,
+  },
   resolveResetBtnText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.emerald },
+  resolveResetBtnTextPressed: { color: colors.white },
 
   empty: { alignItems: "center", paddingTop: 80 },
   emptyText: { fontSize: fontSize.base, color: colors.textSecondary, fontFamily: fontFamily.regular },

@@ -4,6 +4,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   ActivityIndicator,
   StyleSheet,
   ScrollView,
@@ -36,9 +37,6 @@ import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared
 
 const cloudFunctions = getFunctions(firebaseApp);
 
-const FIELD_MINT = "#C7E3C2";
-const FIELD_MINT_DARK = "#A9CBA1";
-
 const SECURITY_QUESTIONS = [
   "When did Ka Domeng start?",
   "What is your mother's maiden name?",
@@ -66,6 +64,10 @@ export default function OwnerProfile() {
   const [usernameError, setUsernameError] = useState("");
   const [contactNoError, setContactNoError] = useState("");
 
+  const [pwEditing, setPwEditing] = useState(false);
+  const [oldPassword, setOldPassword] = useState("");
+  const [showOldPass, setShowOldPass] = useState(false);
+  const [oldPwError, setOldPwError] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showNewPass, setShowNewPass] = useState(false);
@@ -73,7 +75,9 @@ export default function OwnerProfile() {
   const [pwError, setPwError] = useState("");
   const [confirmError, setConfirmError] = useState("");
   const [changingPw, setChangingPw] = useState(false);
+  const [showPwConfirm, setShowPwConfirm] = useState(false);
 
+  const [secEditing, setSecEditing] = useState(false);
   const [secQuestions, setSecQuestions] = useState<[string, string, string]>(["", "", ""]);
   const [secAnswers, setSecAnswers] = useState<[string, string, string]>(["", "", ""]);
   const [secCurrentPassword, setSecCurrentPassword] = useState("");
@@ -114,8 +118,8 @@ export default function OwnerProfile() {
 
   const tourSteps: HelpStep[] = [
     { key: "fields", ref: fieldsRef, title: "Your details", description: "Your last name, first name, login username, and contact number.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(fieldsRef) },
-    { key: "edit", ref: editBtnRef, title: "Edit Profile", description: "Unlocks your name, username, and contact number so you can update them, plus the password fields below.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(editBtnRef) },
-    { key: "password", ref: pwSectionRef, title: "Change password", description: "Set a new login password. Must be 8-12 characters with an uppercase letter, a number, and a special character.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(pwSectionRef) },
+    { key: "edit", ref: editBtnRef, title: "Edit Profile", description: "Unlocks your name, username, and contact number so you can update them.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(editBtnRef) },
+    { key: "password", ref: pwSectionRef, title: "Change password", description: "Verify your current password, then set a new one — 8-12 characters with an uppercase letter, a number, and a special character.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(pwSectionRef) },
     { key: "secquestions", ref: secQSectionRef, title: "Security questions", description: "Set 3 recovery questions so you can get back into your account if you ever forget your password.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(secQSectionRef) },
   ];
 
@@ -232,6 +236,49 @@ export default function OwnerProfile() {
     }
   };
 
+  const handleCancelEditProfile = () => {
+    setFirstName(original.firstName);
+    setLastName(original.lastName);
+    setUsername(original.username);
+    setContactNo(original.contactNo);
+    setFirstNameError(""); setLastNameError(""); setUsernameError(""); setContactNoError("");
+    setIsEditing(false);
+  };
+
+  function handleCancelPasswordEdit() {
+    setOldPassword(""); setNewPassword(""); setConfirmPassword("");
+    setOldPwError(""); setPwError(""); setConfirmError("");
+    setPwEditing(false);
+  }
+
+  function handleCancelSecQuestionsEdit() {
+    setSecQuestions(["", "", ""]);
+    setSecAnswers(["", "", ""]);
+    setSecCurrentPassword("");
+    setPickerSlot(null);
+    setSecEditing(false);
+  }
+
+  // Only one section can be in edit mode at a time -- opening one closes
+  // (and discards) the other two, same as if Cancel had been pressed on them.
+  function handleStartEditProfile() {
+    handleCancelPasswordEdit();
+    handleCancelSecQuestionsEdit();
+    setIsEditing(true);
+  }
+
+  function handleStartEditPassword() {
+    handleCancelEditProfile();
+    handleCancelSecQuestionsEdit();
+    setPwEditing(true);
+  }
+
+  function handleStartEditSecQuestions() {
+    handleCancelEditProfile();
+    handleCancelPasswordEdit();
+    setSecEditing(true);
+  }
+
   const hasChanges =
     firstName !== original.firstName ||
     lastName !== original.lastName ||
@@ -244,6 +291,13 @@ export default function OwnerProfile() {
   const handleChangePassword = async () => {
     const pwRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
     let valid = true;
+
+    if (!oldPassword) {
+      setOldPwError("Please enter your current password.");
+      valid = false;
+    } else {
+      setOldPwError("");
+    }
 
     if (!pwRegex.test(newPassword)) {
       setPwError("8–12 characters with at least 1 uppercase letter, number & special character.");
@@ -265,15 +319,24 @@ export default function OwnerProfile() {
     if (!valid) return;
 
     const user = auth.currentUser;
-    if (!user) return;
+    if (!user || !user.email) return;
     setChangingPw(true);
     try {
+      // Re-authenticating with the OLD password both proves it's correct
+      // (wrong-password rejects here, before anything changes) and covers
+      // the "requires-recent-login" case updatePassword can otherwise hit
+      // on a stale session.
+      await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, oldPassword));
       await updatePassword(user, newPassword);
+      setOldPassword("");
       setNewPassword("");
       setConfirmPassword("");
+      setPwEditing(false);
       showToast("Password updated!");
     } catch (err: any) {
-      if (err?.code === "auth/requires-recent-login") {
+      if (err?.code === "auth/wrong-password" || err?.code === "auth/invalid-credential") {
+        setOldPwError("Current password is incorrect.");
+      } else if (err?.code === "auth/requires-recent-login") {
         Alert.alert("Session Expired", "Please log out and log in again before changing your password.");
       } else {
         Alert.alert("Error", "Failed to change password.");
@@ -316,6 +379,7 @@ export default function OwnerProfile() {
         securityQuestions: secQuestions.map((q, i) => ({ question: q, answer: secAnswers[i] })),
       });
       setSecCurrentPassword("");
+      setSecEditing(false);
       showToast("Security questions saved!");
     } catch (err: any) {
       if (err?.code === "auth/invalid-credential" || err?.code === "auth/wrong-password") {
@@ -482,19 +546,49 @@ export default function OwnerProfile() {
         </Card>
         </View>
 
-        {/* Edit / Save Button */}
+        {/* Edit / Cancel + Save Button */}
         <View ref={editBtnRef} collapsable={false} style={{ width: "100%" }}>
-          <TouchableOpacity
-            style={[styles.saveBtn, isEditing && (saving || hasEmptyField || !hasChanges) && styles.btnDisabled]}
-            onPress={isEditing ? handleSave : () => setIsEditing(true)}
-            disabled={isEditing && (saving || hasEmptyField || !hasChanges)}
-            activeOpacity={0.8}
-          >
-            {saving
-              ? <ActivityIndicator color={colors.white} size="small" />
-              : <Text style={styles.saveBtnText}>{isEditing ? "Save changes" : "Edit Profile"}</Text>
-            }
-          </TouchableOpacity>
+          {isEditing ? (
+            <View style={styles.pwActionsRow}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.pwCancelBtn,
+                  pressed && { backgroundColor: colors.error, borderColor: colors.error },
+                ]}
+                onPress={handleCancelEditProfile}
+                disabled={saving}
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.pwCancelBtnText, pressed && styles.pwCancelBtnTextPressed]}>Cancel</Text>
+                )}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.saveBtn,
+                  styles.pwUpdateBtn,
+                  (saving || hasEmptyField || !hasChanges) && styles.btnDisabled,
+                  pressed && !(saving || hasEmptyField || !hasChanges) && styles.saveBtnPressed,
+                ]}
+                onPress={handleSave}
+                disabled={saving || hasEmptyField || !hasChanges}
+              >
+                {({ pressed }) =>
+                  saving
+                    ? <ActivityIndicator color={colors.white} size="small" />
+                    : <Text style={[styles.saveBtnText, styles.pwUpdateBtnText, pressed && styles.saveBtnTextPressed]}>Save changes</Text>
+                }
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable
+              style={({ pressed }) => [styles.saveBtn, pressed && styles.saveBtnPressed]}
+              onPress={handleStartEditProfile}
+            >
+              {({ pressed }) => (
+                <Text style={[styles.saveBtnText, pressed && styles.saveBtnTextPressed]}>Edit Profile</Text>
+              )}
+            </Pressable>
+          )}
         </View>
 
         {/* PASSWORD CARD */}
@@ -502,8 +596,26 @@ export default function OwnerProfile() {
         <Card style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>Change Password</Text>
 
+          <Text style={styles.fieldLabel}>Current password</Text>
+          <View style={[styles.pwField, !pwEditing && styles.rowFieldReadOnly, !!oldPwError && styles.inputErrorBorder]}>
+            <TextInput
+              style={styles.rowInput}
+              value={oldPassword}
+              onChangeText={(t) => { setOldPassword(t); setOldPwError(""); }}
+              secureTextEntry={!showOldPass}
+              placeholder="Current password"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              editable={pwEditing}
+            />
+            <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowOldPass((v) => !v)} activeOpacity={0.7}>
+              {showOldPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+            </TouchableOpacity>
+          </View>
+          {!!oldPwError && <Text style={styles.fieldError}>{oldPwError}</Text>}
+
           <Text style={styles.fieldLabel}>New password</Text>
-          <View style={[styles.pwField, !isEditing && styles.rowFieldReadOnly, !!pwError && styles.inputErrorBorder]}>
+          <View style={[styles.pwField, !pwEditing && styles.rowFieldReadOnly, !!pwError && styles.inputErrorBorder]}>
             <TextInput
               style={styles.rowInput}
               value={newPassword}
@@ -513,7 +625,7 @@ export default function OwnerProfile() {
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               maxLength={12}
-              editable={isEditing}
+              editable={pwEditing}
             />
             <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowNewPass((v) => !v)} activeOpacity={0.7}>
               {showNewPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
@@ -523,7 +635,7 @@ export default function OwnerProfile() {
           <Text style={styles.hint}>Min. 8 characters with a capital letter, a number, and a special character.</Text>
 
           <Text style={styles.fieldLabel}>Confirm password</Text>
-          <View style={[styles.pwField, !isEditing && styles.rowFieldReadOnly, !!confirmError && styles.inputErrorBorder]}>
+          <View style={[styles.pwField, !pwEditing && styles.rowFieldReadOnly, !!confirmError && styles.inputErrorBorder]}>
             <TextInput
               style={styles.rowInput}
               value={confirmPassword}
@@ -533,7 +645,7 @@ export default function OwnerProfile() {
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               maxLength={12}
-              editable={isEditing}
+              editable={pwEditing}
             />
             <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowConfirmPass((v) => !v)} activeOpacity={0.7}>
               {showConfirmPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
@@ -541,18 +653,46 @@ export default function OwnerProfile() {
           </View>
           {!!confirmError && <Text style={styles.fieldError}>{confirmError}</Text>}
 
-          {isEditing && (
-            <TouchableOpacity
-              style={[styles.updatePwBtn, (changingPw || newPassword.length < 8 || confirmPassword.length < 8) && styles.btnDisabled]}
-              onPress={handleChangePassword}
-              disabled={changingPw || newPassword.length < 8 || confirmPassword.length < 8}
-              activeOpacity={0.8}
+          {pwEditing ? (
+            <View style={[styles.pwActionsRow, { marginTop: spacing.sm }]}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.pwCancelBtn,
+                  pressed && { backgroundColor: colors.error, borderColor: colors.error },
+                ]}
+                onPress={handleCancelPasswordEdit}
+                disabled={changingPw}
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.pwCancelBtnText, pressed && styles.pwCancelBtnTextPressed]}>Cancel</Text>
+                )}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.updatePwBtn,
+                  styles.pwUpdateBtn,
+                  (changingPw || !oldPassword || newPassword.length < 8 || confirmPassword.length < 8) && styles.btnDisabled,
+                  pressed && !(changingPw || !oldPassword || newPassword.length < 8 || confirmPassword.length < 8) && styles.saveBtnPressed,
+                ]}
+                onPress={() => setShowPwConfirm(true)}
+                disabled={changingPw || !oldPassword || newPassword.length < 8 || confirmPassword.length < 8}
+              >
+                {({ pressed }) =>
+                  changingPw
+                    ? <ActivityIndicator color={colors.white} size="small" />
+                    : <Text style={[styles.saveBtnText, styles.pwUpdateBtnText, pressed && styles.saveBtnTextPressed]}>Update Password</Text>
+                }
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable
+              style={({ pressed }) => [styles.updatePwBtn, pressed && styles.saveBtnPressed]}
+              onPress={handleStartEditPassword}
             >
-              {changingPw
-                ? <ActivityIndicator color={colors.white} size="small" />
-                : <Text style={styles.saveBtnText}>Update Password</Text>
-              }
-            </TouchableOpacity>
+              {({ pressed }) => (
+                <Text style={[styles.saveBtnText, pressed && styles.saveBtnTextPressed]}>Change Password</Text>
+              )}
+            </Pressable>
           )}
         </Card>
         </View>
@@ -569,9 +709,9 @@ export default function OwnerProfile() {
             <View key={slot} style={{ width: "100%", marginTop: spacing.sm }}>
               <Text style={styles.fieldLabel}>Question {slot + 1}</Text>
               <TouchableOpacity
-                style={[styles.rowField, !isEditing && styles.rowFieldReadOnly, { paddingHorizontal: spacing.lg, paddingVertical: spacing.md + 1 }]}
-                onPress={() => isEditing && setPickerSlot(slot as 0 | 1 | 2)}
-                disabled={!isEditing}
+                style={[styles.rowField, !secEditing && styles.rowFieldReadOnly, { paddingHorizontal: spacing.lg, paddingVertical: spacing.md + 1 }]}
+                onPress={() => secEditing && setPickerSlot(slot as 0 | 1 | 2)}
+                disabled={!secEditing}
                 activeOpacity={0.7}
               >
                 <Text style={[{ flex: 1, fontSize: fontSize.base, fontFamily: fontFamily.medium, color: secQuestions[slot] ? colors.ink : colors.textMuted }]}>
@@ -581,7 +721,7 @@ export default function OwnerProfile() {
               </TouchableOpacity>
 
               <TextInput
-                style={[styles.input, !isEditing && styles.inputReadOnly, { marginTop: spacing.sm, marginBottom: 0 }]}
+                style={[styles.input, !secEditing && styles.inputReadOnly, { marginTop: spacing.sm, marginBottom: 0 }]}
                 value={secAnswers[slot]}
                 onChangeText={(t) => setSecAnswers((prev) => {
                   const next = [...prev] as [string, string, string];
@@ -591,12 +731,12 @@ export default function OwnerProfile() {
                 placeholder="Your answer"
                 placeholderTextColor={colors.textMuted}
                 autoCapitalize="none"
-                editable={isEditing}
+                editable={secEditing}
               />
             </View>
           ))}
 
-          {isEditing && (
+          {secEditing && (
             <>
               <Text style={[styles.fieldLabel, { marginTop: spacing.lg }]}>Current Password</Text>
               <View style={styles.pwField}>
@@ -613,31 +753,64 @@ export default function OwnerProfile() {
                   {showSecCurrentPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
                 </TouchableOpacity>
               </View>
+            </>
+          )}
 
-              <TouchableOpacity
-                style={[
+          {secEditing ? (
+            <View style={[styles.pwActionsRow, { marginTop: spacing.sm }]}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.pwCancelBtn,
+                  pressed && { backgroundColor: colors.error, borderColor: colors.error },
+                ]}
+                onPress={handleCancelSecQuestionsEdit}
+                disabled={savingSecQ}
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.pwCancelBtnText, pressed && styles.pwCancelBtnTextPressed]}>Cancel</Text>
+                )}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
                   styles.updatePwBtn,
+                  styles.pwUpdateBtn,
                   (savingSecQ || !secSlotsFilled || !secCurrentPassword) && styles.btnDisabled,
+                  pressed && !(savingSecQ || !secSlotsFilled || !secCurrentPassword) && styles.saveBtnPressed,
                 ]}
                 onPress={handleSaveSecurityQuestions}
                 disabled={savingSecQ || !secSlotsFilled || !secCurrentPassword}
-                activeOpacity={0.8}
               >
-                {savingSecQ
+                {({ pressed }) => savingSecQ
                   ? <ActivityIndicator color={colors.white} size="small" />
-                  : <Text style={styles.saveBtnText}>Save Security Questions</Text>
+                  : <Text style={[styles.saveBtnText, styles.pwUpdateBtnText, pressed && styles.saveBtnTextPressed]}>Save Security Questions</Text>
                 }
-              </TouchableOpacity>
-            </>
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable
+              style={({ pressed }) => [styles.updatePwBtn, pressed && styles.saveBtnPressed]}
+              onPress={handleStartEditSecQuestions}
+            >
+              {({ pressed }) => (
+                <Text style={[styles.saveBtnText, pressed && styles.saveBtnTextPressed]}>Set Security Questions</Text>
+              )}
+            </Pressable>
           )}
         </Card>
         </View>
 
         {/* Logout */}
-        <TouchableOpacity style={styles.logoutBtn} onPress={() => setShowLogoutConfirm(true)} activeOpacity={0.7}>
-          <LogOut size={18} color={colors.error} style={{ marginRight: spacing.sm + 2 }} />
-          <Text style={styles.logoutBtnText}>Logout Account</Text>
-        </TouchableOpacity>
+        <Pressable
+          style={({ pressed }) => [styles.logoutBtn, pressed && styles.logoutBtnPressed]}
+          onPress={() => setShowLogoutConfirm(true)}
+        >
+          {({ pressed }) => (
+            <>
+              <LogOut size={18} color={pressed ? colors.white : colors.error} style={{ marginRight: spacing.sm + 2 }} />
+              <Text style={[styles.logoutBtnText, pressed && styles.logoutBtnTextPressed]}>Logout Account</Text>
+            </>
+          )}
+        </Pressable>
       </ScrollView>
 
       {/* Security question picker */}
@@ -711,27 +884,75 @@ export default function OwnerProfile() {
             </View>
             <View style={styles.alertDivider} />
             <View style={styles.alertBtnRow}>
-              <TouchableOpacity
-                style={styles.alertBtn}
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && styles.alertBtnCancelPressed]}
                 onPress={() => setShowLogoutConfirm(false)}
-                activeOpacity={0.6}
                 disabled={loggingOut}
               >
-                <Text style={styles.alertBtnCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <View style={styles.alertBtnDivider} />
-              <TouchableOpacity
-                style={styles.alertBtn}
-                onPress={handleLogout}
-                activeOpacity={0.6}
-                disabled={loggingOut}
-              >
-                {loggingOut ? (
-                  <ActivityIndicator color={colors.emerald} size="small" />
-                ) : (
-                  <Text style={styles.alertBtnConfirmText}>Confirm</Text>
+                {({ pressed }) => (
+                  <Text style={[styles.alertBtnCancelText, pressed && styles.alertBtnCancelTextPressed]}>Cancel</Text>
                 )}
-              </TouchableOpacity>
+              </Pressable>
+              <View style={styles.alertBtnDivider} />
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && styles.alertBtnConfirmPressed]}
+                onPress={handleLogout}
+                disabled={loggingOut}
+              >
+                {({ pressed }) =>
+                  loggingOut ? (
+                    <ActivityIndicator color={colors.emerald} size="small" />
+                  ) : (
+                    <Text style={[styles.alertBtnConfirmText, pressed && styles.alertBtnConfirmTextPressed]}>Confirm</Text>
+                  )
+                }
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* UPDATE PASSWORD CONFIRMATION MODAL */}
+      <Modal
+        visible={showPwConfirm}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!changingPw) setShowPwConfirm(false); }}
+      >
+        <View style={styles.alertOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => { if (!changingPw) setShowPwConfirm(false); }}
+          />
+          <View style={styles.alertCard}>
+            <View style={styles.alertBody}>
+              <Text style={styles.alertTitleNeutral}>Update password?</Text>
+              <Text style={styles.alertMessage}>
+                Are you sure you want to change your password? You'll need to use the new password the next time you log in.
+              </Text>
+            </View>
+            <View style={styles.alertDivider} />
+            <View style={styles.alertBtnRow}>
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && styles.alertBtnCancelPressed]}
+                onPress={() => setShowPwConfirm(false)}
+                disabled={changingPw}
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.alertBtnCancelText, pressed && styles.alertBtnCancelTextPressed]}>Cancel</Text>
+                )}
+              </Pressable>
+              <View style={styles.alertBtnDivider} />
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && styles.alertBtnConfirmPressed]}
+                onPress={() => { setShowPwConfirm(false); handleChangePassword(); }}
+                disabled={changingPw}
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.alertBtnConfirmText, pressed && styles.alertBtnConfirmTextPressed]}>Continue</Text>
+                )}
+              </Pressable>
             </View>
           </View>
         </View>
@@ -858,8 +1079,8 @@ const styles = StyleSheet.create({
   },
 
   inputReadOnly: {
-    backgroundColor: FIELD_MINT,
-    borderColor: FIELD_MINT,
+    backgroundColor: colors.white,
+    borderColor: colors.border,
     borderRadius: radius.xl,
     color: colors.ink,
   },
@@ -888,8 +1109,8 @@ const styles = StyleSheet.create({
   },
 
   rowFieldReadOnly: {
-    backgroundColor: FIELD_MINT,
-    borderColor: FIELD_MINT,
+    backgroundColor: colors.white,
+    borderColor: colors.border,
     borderRadius: radius.xl,
   },
 
@@ -933,7 +1154,9 @@ const styles = StyleSheet.create({
   },
 
   phonePrefixReadOnly: {
-    backgroundColor: FIELD_MINT_DARK,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
 
   phonePrefixText: {
@@ -999,11 +1222,19 @@ const styles = StyleSheet.create({
 
   btnDisabled: { opacity: 0.45 },
 
+  saveBtnPressed: {
+    backgroundColor: colors.white,
+  },
+
   saveBtnText: {
     color: colors.white,
     fontSize: fontSize.md,
     fontFamily: fontFamily.bold,
     textAlign: "center",
+  },
+
+  saveBtnTextPressed: {
+    color: colors.ink,
   },
 
   updatePwBtn: {
@@ -1017,6 +1248,45 @@ const styles = StyleSheet.create({
     ...shadow.button,
   },
 
+  // ── Edit Profile: Cancel / Save row ─────────
+  pwActionsRow: {
+    flexDirection: "row",
+    gap: spacing.md,
+  },
+
+  pwCancelBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    paddingVertical: 10,
+    backgroundColor: colors.white,
+    ...shadow.card,
+  },
+
+  pwCancelBtnText: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.bold,
+    color: colors.textSecondary,
+  },
+
+  pwCancelBtnTextPressed: {
+    color: colors.white,
+  },
+
+  pwUpdateBtn: {
+    flex: 1,
+    marginTop: 0,
+    paddingVertical: 10,
+  },
+
+  pwUpdateBtnText: {
+    fontSize: fontSize.sm,
+  },
+
   logoutBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -1027,10 +1297,16 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     marginTop: spacing.lg,
   },
+  logoutBtnPressed: {
+    backgroundColor: colors.error,
+  },
   logoutBtnText: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.semibold,
     color: colors.error,
+  },
+  logoutBtnTextPressed: {
+    color: colors.white,
   },
 
   // ── Security question picker ─────────────────────────────────────────────────
@@ -1127,6 +1403,13 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
+  alertTitleNeutral: {
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    textAlign: "center",
+  },
+
   alertMessage: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.regular,
@@ -1158,15 +1441,31 @@ const styles = StyleSheet.create({
     backgroundColor: colors.border,
   },
 
+  alertBtnCancelPressed: {
+    backgroundColor: colors.error,
+  },
+
   alertBtnCancelText: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.regular,
     color: colors.textMuted,
   },
 
+  alertBtnCancelTextPressed: {
+    color: colors.white,
+  },
+
+  alertBtnConfirmPressed: {
+    backgroundColor: colors.emerald,
+  },
+
   alertBtnConfirmText: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.semibold,
     color: colors.emerald,
+  },
+
+  alertBtnConfirmTextPressed: {
+    color: colors.white,
   },
 });

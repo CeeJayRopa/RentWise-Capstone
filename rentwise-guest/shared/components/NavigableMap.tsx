@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
 const TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? "";
 const MARKET_LNG = 121.086224;
@@ -137,13 +138,25 @@ export default function NavigableMap({ height, isMobile = false }: Props) {
 
       {/* ── Navigate button ── */}
       <TouchableOpacity
-        style={[s.navBtn, isMobile && { alignSelf: "stretch" }]}
+        style={[
+          s.navBtn,
+          isMobile && [s.navBtnMobile, { alignSelf: "stretch" }],
+        ]}
         onPress={openInGoogleMaps}
         {...({ className: "rw-btn-primary" } as any)}
       >
-        <Text style={s.navBtnText}>Navigate to Market →</Text>
+        {isMobile ? (
+          <>
+            <View style={s.navBtnIconWrap}>
+              <Ionicons name="navigate-outline" size={18} color="#fff" />
+            </View>
+            <Text style={s.navBtnTextMobile}>Navigate to Market</Text>
+            <Ionicons name="arrow-forward" size={18} color="#fff" />
+          </>
+        ) : (
+          <Text style={s.navBtnText}>Navigate to Market →</Text>
+        )}
       </TouchableOpacity>
-      <Text style={s.navCaption}>Opens Google Maps to the main entrance, near Café Enrique</Text>
     </View>
   );
 }
@@ -184,5 +197,22 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   navBtnText: { color: WHITE, fontSize: 16, fontWeight: "700" },
-  navCaption: { color: MUTED, fontSize: 12, marginTop: 2 },
+  // Matches MarketMapEmbed's mobile action-pill layout (icon-in-circle,
+  // label, trailing arrow) instead of the plain centered "label →" text.
+  navBtnMobile: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  navBtnIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.22)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  navBtnTextMobile: { flex: 1, color: WHITE, fontSize: 15, fontWeight: "700" },
 });

@@ -89,6 +89,12 @@ export const createTenantAccount = async (
         );
       }
 
+      // Billing terms (price/paymentSchedule/category) now live on the
+      // TENANT, not the stall -- a new tenant starts out with whatever the
+      // stall was last listing (its own denormalized display copy), same
+      // starting point as before, they just own that data going forward
+      // instead of sharing the stall's copy with whoever rents it next.
+      const stallData = stallSnap.data();
       tx.set(doc(db, "users", uid), {
         firstName,
         lastName,
@@ -98,6 +104,9 @@ export const createTenantAccount = async (
         role: "tenant",
         stallId,
         status: "active",
+        price: stallData.price ?? 0,
+        paymentSchedule: stallData.paymentSchedule ?? "monthly",
+        category: stallData.category ?? "",
         // Always starts true — every tenant starts on the shared default
         // password and must change it via the forced-change screen the
         // moment they first log in with @Tenant123.
@@ -204,7 +213,9 @@ export const archiveTenant = async (uid: string): Promise<void> => {
 
   let buildingNumber = "";
   let spaceId = "";
-  let paymentSchedule = "";
+  // Source of truth is the tenant's own doc now, not the stall -- read
+  // straight off `user` (already fetched above) instead of the stall copy.
+  const paymentSchedule = (user.paymentSchedule as string) ?? "";
 
   let stallBelongsToTenant = false;
   if (stallId) {
@@ -213,7 +224,6 @@ export const archiveTenant = async (uid: string): Promise<void> => {
       const sd = stallSnap.data();
       buildingNumber = (sd.buildingNumber as string) ?? "";
       spaceId = (sd.spaceId as string) ?? "";
-      paymentSchedule = (sd.paymentSchedule as string) ?? "";
       // Only this tenant's own archive should clear the stall's occupancy —
       // a stale stallId left over from a past race condition (e.g. two
       // admins registering the same stall) must not evict whoever the
@@ -349,6 +359,12 @@ export const restoreTenant = async (uid: string): Promise<void> => {
   const stallId = (archive.stallId as string) ?? "";
   const tenantName = `${archive.firstName ?? ""} ${archive.lastName ?? ""}`.trim();
 
+  // The tenant's own price/paymentSchedule/category never left their doc
+  // while archived -- fetched here just to sync the reassigned stall's
+  // denormalized display copy (guest app) to match.
+  const userSnap = await getDoc(doc(db, "users", uid));
+  const user = userSnap.exists() ? userSnap.data() : {};
+
   // Re-enable login before committing the restore.
   await setTenantAccountDisabled(uid, false);
 
@@ -364,6 +380,9 @@ export const restoreTenant = async (uid: string): Promise<void> => {
         tenantId: uid,
         tenantName,
         status: "occupied",
+        price: user.price ?? 0,
+        paymentSchedule: user.paymentSchedule ?? "monthly",
+        category: user.category ?? "",
       });
       stallReassigned = true;
     }
@@ -427,10 +446,18 @@ export const relocateActiveTenant = async (
 
   batch.update(doc(db, "users", uid), { stallId: newStallId });
 
+  // The tenant's own price/paymentSchedule/category (their billing terms)
+  // travel with them automatically since they live on `users/{uid}`, which
+  // isn't touched here beyond `stallId` -- this just syncs the new stall's
+  // denormalized display copy (guest app) to match, so it doesn't keep
+  // showing whoever rented this stall before.
   batch.update(doc(db, "stalls", newStallId), {
     tenantId: uid,
     tenantName,
     status: "occupied",
+    price: user.price ?? 0,
+    paymentSchedule: user.paymentSchedule ?? "monthly",
+    category: user.category ?? "",
   });
 
   if (oldStallId && oldStallBelongsToTenant) {
@@ -476,6 +503,12 @@ export const restoreTenantToNewStall = async (
 
   const newSpaceNo = String(stallSnap.data().spaceId ?? newStallId);
 
+  // The tenant's own price/paymentSchedule/category never left their doc
+  // while archived -- fetched here just to sync the new stall's
+  // denormalized display copy (guest app) to match.
+  const userSnap = await getDoc(doc(db, "users", uid));
+  const user = userSnap.exists() ? userSnap.data() : {};
+
   // Re-enable login before committing the restore.
   await setTenantAccountDisabled(uid, false);
 
@@ -490,6 +523,9 @@ export const restoreTenantToNewStall = async (
     tenantId: uid,
     tenantName,
     status: "occupied",
+    price: user.price ?? 0,
+    paymentSchedule: user.paymentSchedule ?? "monthly",
+    category: user.category ?? "",
   });
 
   batch.delete(doc(db, "archives", uid));

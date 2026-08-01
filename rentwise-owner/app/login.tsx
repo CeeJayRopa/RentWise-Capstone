@@ -372,16 +372,18 @@ export default function Login() {
                 style={({ pressed }) => [
                   styles.signInBtn,
                   (loading || !!lockoutUntil) && styles.signInBtnDisabled,
-                  pressed && !loading && !lockoutUntil && { backgroundColor: colors.ink, transform: [{ scale: 0.98 }] },
+                  pressed && !loading && !lockoutUntil && { backgroundColor: colors.white, transform: [{ scale: 0.98 }] },
                 ]}
                 onPress={handleLogin}
                 disabled={loading || !!lockoutUntil}
               >
-                {loading ? (
-                  <ActivityIndicator color={colors.white} size="small" />
-                ) : (
-                  <Text style={styles.signInText}>Sign in</Text>
-                )}
+                {({ pressed }) =>
+                  loading ? (
+                    <ActivityIndicator color={colors.white} size="small" />
+                  ) : (
+                    <Text style={[styles.signInText, pressed && styles.signInTextPressed]}>Sign in</Text>
+                  )
+                }
               </Pressable>
             </Animated.View>
 
@@ -577,5 +579,9 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     fontFamily: fontFamily.bold,
     textAlign: "center",
+  },
+
+  signInTextPressed: {
+    color: colors.emerald,
   },
 });

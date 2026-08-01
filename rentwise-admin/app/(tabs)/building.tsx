@@ -524,7 +524,9 @@ function StallRow({
               } as any)
             }
           >
-            <Text style={styles.btnText}>Register</Text>
+            {({ pressed }) => (
+              <Text style={[styles.btnText, pressed && styles.btnRegisterTextPressed]}>Register</Text>
+            )}
           </Pressable>
           </View>
         )}
@@ -549,7 +551,9 @@ function StallRow({
                 } as any)
               }
             >
-              <Text style={styles.btnText}>Manage</Text>
+              {({ pressed }) => (
+                <Text style={[styles.btnText, pressed && styles.btnManageTextPressed]}>Manage</Text>
+              )}
             </Pressable>
             </View>
 
@@ -569,7 +573,9 @@ function StallRow({
                 } as any)
               }
             >
-              <Text style={styles.btnTextOutline}>Edit Rental</Text>
+              {({ pressed }) => (
+                <Text style={[styles.btnTextOutline, pressed && styles.btnEditRentalTextPressed]}>Edit Rental</Text>
+              )}
             </Pressable>
             </View>
           </>
@@ -840,8 +846,12 @@ const styles = StyleSheet.create({
   },
 
   btnManagePressed: {
-    backgroundColor: colors.ink,
+    backgroundColor: colors.white,
     transform: [{ scale: 0.97 }],
+  },
+
+  btnManageTextPressed: {
+    color: colors.emerald,
   },
 
   btnEditRental: {
@@ -856,8 +866,13 @@ const styles = StyleSheet.create({
   },
 
   btnEditRentalPressed: {
-    backgroundColor: colors.emeraldSoft,
+    backgroundColor: colors.emerald,
+    borderColor: colors.emerald,
     transform: [{ scale: 0.97 }],
+  },
+
+  btnEditRentalTextPressed: {
+    color: colors.white,
   },
 
   btnRegister: {
@@ -871,7 +886,11 @@ const styles = StyleSheet.create({
   },
 
   btnRegisterPressed: {
-    backgroundColor: colors.emerald,
+    backgroundColor: colors.white,
     transform: [{ scale: 0.97 }],
+  },
+
+  btnRegisterTextPressed: {
+    color: colors.emeraldBright,
   },
 });

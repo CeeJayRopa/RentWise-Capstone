@@ -4,6 +4,7 @@ import {
   Text,
   FlatList,
   TouchableOpacity,
+  Pressable,
   ActivityIndicator,
   StyleSheet,
   Alert,
@@ -99,7 +100,9 @@ function isSameDay(r: ReportDoc, target: Date): boolean {
   );
 }
 
-function groupByDate(reports: ReportDoc[]): { date: string; items: ReportDoc[] }[] {
+type ReportGroup = { date: string; items: ReportDoc[] };
+
+function groupByDate(reports: ReportDoc[]): ReportGroup[] {
   const map = new Map<string, ReportDoc[]>();
   for (const r of reports) {
     const key = formatDate(r.createdAt);
@@ -150,6 +153,7 @@ export default function DailyReports() {
   // from a report's detail screen) skip the loading spinner so the FlatList never unmounts
   // — unmounting is what was resetting the scroll position back to the top on every return.
   const hasLoadedOnceRef = useRef(false);
+  const flatListRef = useRef<FlatList<ReportGroup>>(null);
   const toastAnim = useRef(new Animated.Value(0)).current;
   const [toastVisible, setToastVisible] = useState(false);
   const [tourVisible, setTourVisible] = useState(false);
@@ -231,7 +235,20 @@ export default function DailyReports() {
 
   const onDateChange = (_: unknown, date?: Date) => {
     setShowDatePicker(false);
-    if (date) setSelectedDate(date);
+    if (!date) return;
+    setSelectedDate(date);
+
+    // If the picked date has a group in the (already-loaded) list, scroll
+    // to it -- lets the owner jump straight to that day's reports instead
+    // of hunting through the whole list by hand.
+    const targetKey = formatDate({ toDate: () => date });
+    const groups = groupByDate(reports);
+    const index = groups.findIndex((g) => g.date === targetKey);
+    if (index !== -1) {
+      requestAnimationFrame(() => {
+        flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0 });
+      });
+    }
   };
 
   const downloadPdf = async () => {
@@ -331,22 +348,27 @@ export default function DailyReports() {
 
       {/* Download Report button */}
       <View style={styles.downloadRow}>
-        <TouchableOpacity
+        <Pressable
           ref={downloadRef}
-          style={[styles.downloadBtn, downloading && styles.downloadBtnDisabled]}
+          style={({ pressed }) => [
+            styles.downloadBtn,
+            downloading && styles.downloadBtnDisabled,
+            pressed && !downloading && styles.downloadBtnPressed,
+          ]}
           onPress={downloadPdf}
           disabled={downloading}
-          activeOpacity={0.8}
         >
-          {downloading ? (
-            <ActivityIndicator color={colors.white} size="small" />
-          ) : (
-            <>
-              <Download size={16} color={colors.white} style={{ marginRight: 8 }} />
-              <Text style={styles.downloadBtnText}>Download Report</Text>
-            </>
-          )}
-        </TouchableOpacity>
+          {({ pressed }) =>
+            downloading ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <>
+                <Download size={16} color={pressed ? colors.emerald : colors.white} style={{ marginRight: 8 }} />
+                <Text style={[styles.downloadBtnText, pressed && styles.downloadBtnTextPressed]}>Download Report</Text>
+              </>
+            )
+          }
+        </Pressable>
       </View>
 
       <View style={{ flex: 1 }} ref={listRef} collapsable={false}>
@@ -359,6 +381,7 @@ export default function DailyReports() {
         </View>
       ) : (
         <FlatList
+          ref={flatListRef}
           data={groups}
           keyExtractor={(item) => item.date}
           contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + spacing.xl }]}
@@ -366,6 +389,15 @@ export default function DailyReports() {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.emerald} />
           }
+          // Each group renders a variable number of report cards, so there's
+          // no fixed item height for scrollToIndex to rely on up front --
+          // this retries with an approximate offset once the target has
+          // actually been measured, which is the standard FlatList fix.
+          onScrollToIndexFailed={(info) => {
+            setTimeout(() => {
+              flatListRef.current?.scrollToIndex({ index: info.index, animated: true, viewPosition: 0 });
+            }, 100);
+          }}
           renderItem={({ item: group }) => (
             <View>
               <View style={styles.groupDateRow}>
@@ -477,7 +509,9 @@ const styles = StyleSheet.create({
     ...shadow.button,
   },
   downloadBtnDisabled: { opacity: 0.4 },
+  downloadBtnPressed: { backgroundColor: colors.white },
   downloadBtnText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.white },
+  downloadBtnTextPressed: { color: colors.emerald },
 
   subHeader: {
     paddingHorizontal: spacing.xl,

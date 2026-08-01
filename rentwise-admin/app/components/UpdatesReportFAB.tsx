@@ -4,6 +4,7 @@ import {
   Text,
   Modal,
   TouchableOpacity,
+  Pressable,
   ScrollView,
   ActivityIndicator,
   LayoutAnimation,
@@ -307,31 +308,34 @@ export default function UpdatesReportFAB({
             )}
 
             <View style={styles.btnRow}>
-              <TouchableOpacity
-                style={[styles.btn, styles.btnOutline]}
+              <Pressable
+                style={({ pressed }) => [styles.btn, styles.btnOutline, pressed && !applying && styles.btnOutlinePressed]}
                 onPress={closeModal}
-                activeOpacity={0.8}
                 disabled={applying}
               >
-                <Text style={styles.btnOutlineText}>Close</Text>
-              </TouchableOpacity>
+                {({ pressed }) => (
+                  <Text style={[styles.btnOutlineText, pressed && !applying && styles.btnOutlineTextPressed]}>Close</Text>
+                )}
+              </Pressable>
 
-              <TouchableOpacity
-                style={[
+              <Pressable
+                style={({ pressed }) => [
                   styles.btn,
                   styles.btnPrimary,
                   applying && styles.btnDisabled,
+                  pressed && !applying && styles.btnPrimaryPressed,
                 ]}
                 onPress={applyChanges}
-                activeOpacity={0.8}
                 disabled={applying}
               >
-                {applying ? (
-                  <ActivityIndicator color={colors.white} size="small" />
-                ) : (
-                  <Text style={styles.btnPrimaryText}>Apply Changes</Text>
-                )}
-              </TouchableOpacity>
+                {({ pressed }) =>
+                  applying ? (
+                    <ActivityIndicator color={colors.white} size="small" />
+                  ) : (
+                    <Text style={[styles.btnPrimaryText, pressed && styles.btnPrimaryTextPressed]}>Apply Changes</Text>
+                  )
+                }
+              </Pressable>
             </View>
           </View>
         </View>
@@ -483,9 +487,13 @@ const styles = StyleSheet.create({
     minHeight: 42,
   },
   btnOutline: { borderWidth: 1.5, borderColor: colors.emerald },
+  btnOutlinePressed: { backgroundColor: colors.emerald },
   btnOutlineText: { fontSize: fontSize.base, fontFamily: fontFamily.semibold, color: colors.emerald },
+  btnOutlineTextPressed: { color: colors.white },
   btnPrimary: { backgroundColor: colors.emerald, ...shadow.button },
+  btnPrimaryPressed: { backgroundColor: colors.white },
   btnPrimaryText: { fontSize: fontSize.base, fontFamily: fontFamily.semibold, color: colors.white },
+  btnPrimaryTextPressed: { color: colors.emerald },
   btnDisabled: { opacity: 0.5 },
 });
 

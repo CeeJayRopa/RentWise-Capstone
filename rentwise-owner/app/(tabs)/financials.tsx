@@ -5,6 +5,7 @@ import {
   Image,
   FlatList,
   TouchableOpacity,
+  Pressable,
   ActivityIndicator,
   StyleSheet,
   TextInput,
@@ -210,23 +211,25 @@ export default function Financials() {
         getDocs(query(collection(db, "payments"), where("status", "==", "approved"))),
       ]);
 
-      const tenantMap = new Map<string, { name: string; stallId: string; status: string }>();
+      // paymentSchedule lives on the tenant, not the stall -- travels with
+      // them if relocated, instead of reflecting whoever's stall this is.
+      const tenantMap = new Map<string, { name: string; stallId: string; status: string; paymentSchedule: string }>();
       usersSnap.docs.forEach((d) => {
         const data = d.data();
         tenantMap.set(d.id, {
           name: `${data.firstName ?? ""} ${data.lastName ?? ""}`.trim(),
           stallId: data.stallId ?? "",
           status: data.status ?? "",
+          paymentSchedule: String(data.paymentSchedule ?? "").toLowerCase(),
         });
       });
 
-      const stallMap = new Map<string, { buildingNumber: string; spaceId: string; paymentSchedule: string }>();
+      const stallMap = new Map<string, { buildingNumber: string; spaceId: string }>();
       stallsSnap.docs.forEach((d) => {
         const data = d.data();
         stallMap.set(d.id, {
           buildingNumber: String(data.buildingNumber ?? ""),
           spaceId: data.spaceId ?? "",
-          paymentSchedule: String(data.paymentSchedule ?? "").toLowerCase(),
         });
       });
 
@@ -245,9 +248,9 @@ export default function Financials() {
         const tenant = tenantMap.get(uid);
         if (!tenant || tenant.status !== "active") return;
         const stall = stallMap.get(tenant.stallId ?? "");
-        if (scheduleKey && stall?.paymentSchedule !== scheduleKey) return;
+        if (scheduleKey && tenant.paymentSchedule !== scheduleKey) return;
 
-        const range = fixedRange ?? getDateRangeForSchedule(stall?.paymentSchedule ?? "monthly");
+        const range = fixedRange ?? getDateRangeForSchedule(tenant.paymentSchedule ?? "monthly");
         if (dateMs < range.start.getTime() || dateMs > range.end.getTime()) return;
 
         if (paidUids.has(uid)) return;
@@ -281,7 +284,7 @@ export default function Financials() {
         if (paidUids.has(d.id)) return;
         const tenant = tenantMap.get(d.id)!;
         const stall = stallMap.get(d.data().stallId ?? "");
-        if (scheduleKey && stall?.paymentSchedule !== scheduleKey) return;
+        if (scheduleKey && tenant.paymentSchedule !== scheduleKey) return;
         result.push({
           id: `unpaid-${d.id}`,
           tenantName: tenant.name,
@@ -519,13 +522,14 @@ export default function Financials() {
                 </View>
                 {item.status === "paid" && item.receipt && (
                   <View ref={index === firstReceiptIndex ? receiptBtnRef : undefined} collapsable={false}>
-                    <TouchableOpacity
-                      style={styles.receiptBtn}
+                    <Pressable
+                      style={({ pressed }) => [styles.receiptBtn, pressed && styles.receiptBtnPressed]}
                       onPress={() => setViewingReceipt(item.receipt)}
-                      activeOpacity={0.7}
                     >
-                      <Text style={styles.receiptBtnText}>Receipt</Text>
-                    </TouchableOpacity>
+                      {({ pressed }) => (
+                        <Text style={[styles.receiptBtnText, pressed && styles.receiptBtnTextPressed]}>Receipt</Text>
+                      )}
+                    </Pressable>
                   </View>
                 )}
               </View>
@@ -857,11 +861,20 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm + 2,
     borderRadius: radius.pill,
     backgroundColor: colors.emerald,
+    borderWidth: 1.5,
+    borderColor: "transparent",
+  },
+  receiptBtnPressed: {
+    backgroundColor: colors.white,
+    borderColor: colors.emerald,
   },
   receiptBtnText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.bold,
     color: colors.white,
+  },
+  receiptBtnTextPressed: {
+    color: colors.emerald,
   },
 
   // ── Receipt modal — ported from rentwise-admin/app/tenant-preview.tsx's

@@ -421,16 +421,18 @@ export default function Login() {
                 style={({ pressed }) => [
                   styles.signInBtn,
                   (loading || !!lockoutUntil) && styles.signInBtnDisabled,
-                  pressed && !loading && !lockoutUntil && { backgroundColor: colors.ink, transform: [{ scale: 0.98 }] },
+                  pressed && !loading && !lockoutUntil && { backgroundColor: colors.white, transform: [{ scale: 0.98 }] },
                 ]}
                 onPress={handleLogin}
                 disabled={loading || !!lockoutUntil}
               >
-                {loading ? (
-                  <ActivityIndicator color={colors.white} size="small" />
-                ) : (
-                  <Text style={styles.signInText}>Sign in</Text>
-                )}
+                {({ pressed }) =>
+                  loading ? (
+                    <ActivityIndicator color={colors.white} size="small" />
+                  ) : (
+                    <Text style={[styles.signInText, pressed && styles.signInTextPressed]}>Sign in</Text>
+                  )
+                }
               </Pressable>
             </Animated.View>
 
@@ -493,14 +495,15 @@ export default function Login() {
                 <Pressable
                   style={({ pressed }) => [
                     fp.submitBtn,
-                    pressed && { backgroundColor: colors.ink, transform: [{ scale: 0.97 }] },
+                    pressed && !fpLoading && { backgroundColor: colors.white, transform: [{ scale: 0.97 }] },
                   ]}
                   onPress={handleForgotSubmit}
                   disabled={fpLoading}
                 >
-                  {fpLoading
-                    ? <ActivityIndicator color={colors.white} />
-                    : <Text style={fp.submitText}>Submit request</Text>
+                  {({ pressed }) =>
+                    fpLoading
+                      ? <ActivityIndicator color={colors.white} />
+                      : <Text style={[fp.submitText, pressed && fp.submitTextPressed]}>Submit request</Text>
                   }
                 </Pressable>
               )}
@@ -660,6 +663,10 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
+  signInTextPressed: {
+    color: colors.emerald,
+  },
+
   forgotLinkText: {
     fontSize: fontSize.sm,
     color: colors.emeraldBright,
@@ -808,6 +815,9 @@ const fp = StyleSheet.create({
     fontSize: fontSize.base,
     fontFamily: fontFamily.bold,
     textAlign: "center",
+  },
+  submitTextPressed: {
+    color: colors.emerald,
   },
   successBox: {
     marginTop: spacing.md + 2,

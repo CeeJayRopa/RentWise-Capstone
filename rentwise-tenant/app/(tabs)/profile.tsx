@@ -14,15 +14,15 @@ import {
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { doc, onSnapshot, updateDoc } from "firebase/firestore";
-import { sendEmailVerification, updatePassword } from "firebase/auth";
+import { sendEmailVerification, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 import { auth } from "../../shared/firebaseConfig";
 import { db } from "../../shared/services/firestore";
 import { getTenantData, updateTenantProfile, syncPersonalEmail } from "../../services/tenantService";
 import { logoutUser } from "../../services/authService";
 import { setRememberMe } from "../../shared/services/rememberMe";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { Store, Tag, CheckCircle2, LogOut, User, Phone, Mail, Pencil, ShieldCheck, HelpCircle, Eye, EyeOff } from "lucide-react-native";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import HelpTour, { HelpStep } from "../components/HelpTour";
@@ -51,10 +51,16 @@ export default function Profile() {
   const [isEditing, setIsEditing] = useState(false);
   const [showToast, setShowToast] = useState(false);
 
+  // Fully separate from `isEditing` (the profile-fields toggle) -- this
+  // section unlocks independently via its own "Change Password" button.
+  const [pwEditing, setPwEditing] = useState(false);
+  const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showOldPass, setShowOldPass] = useState(false);
   const [showNewPass, setShowNewPass] = useState(false);
   const [showConfirmPass, setShowConfirmPass] = useState(false);
+  const [oldPwError, setOldPwError] = useState("");
   const [pwError, setPwError] = useState("");
   const [confirmError, setConfirmError] = useState("");
   const [changingPw, setChangingPw] = useState(false);
@@ -75,6 +81,27 @@ export default function Profile() {
   useEffect(() => {
     isEditingRef.current = isEditing;
   }, [isEditing]);
+
+  // Tabs keep this screen mounted in the background instead of unmounting
+  // it, so leaving either section mid-edit and switching tabs (e.g. to
+  // Home) would otherwise leave it stuck in edit mode on return. Resetting
+  // on blur (not focus) means it only fires when the tenant actually
+  // navigates away, discarding any unsaved edits exactly like pressing
+  // Cancel would. Routed through refs (updated every render) rather than a
+  // dependency array, so the focus-effect's identity never changes and it
+  // can't misfire mid-visit right after a save updates `original`.
+  const cancelEditProfileRef = useRef(() => {});
+  const cancelPasswordEditRef = useRef(() => {});
+  cancelEditProfileRef.current = handleCancelEditProfile;
+  cancelPasswordEditRef.current = handleCancelPasswordEdit;
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        cancelEditProfileRef.current();
+        cancelPasswordEditRef.current();
+      };
+    }, []),
+  );
 
   // Scrolls a given section into view and gives the ScrollView time to
   // settle before HelpTour measures it — otherwise a section below the
@@ -107,20 +134,22 @@ export default function Profile() {
     loadProfile();
   }, []);
 
-  // Live-syncs market category with the stall doc — the admin can change it
+  // Live-syncs market category with the tenant's own doc (the source of
+  // truth for their billing terms and category) — the admin can change it
   // from Edit Rental Info and it shows up here (and vice versa) without
   // needing to reopen the page. Skipped while actively editing so an
   // incoming update can't clobber a selection the tenant hasn't saved yet.
   useEffect(() => {
-    if (!stallId) return;
-    const unsub = onSnapshot(doc(db, "stalls", stallId), (snap) => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
       if (!snap.exists() || isEditingRef.current) return;
       const liveCategory = ((snap.data().category as string) || "") as MarketCategory | "";
       setCategory(liveCategory);
       setOriginal((prev) => ({ ...prev, category: liveCategory }));
     });
     return unsub;
-  }, [stallId]);
+  }, []);
 
   // Auto-opens the guided tour the first time the tenant ever lands on this
   // page — never again after that, since it flips a persisted per-device
@@ -155,8 +184,8 @@ export default function Profile() {
         }
 
         // Category itself is populated by the live listener below (it
-        // lives on the stall doc, not the tenant doc) — this just seeds a
-        // blank default until that listener's first snapshot arrives.
+        // lives on the tenant's own doc) — this just seeds a blank default
+        // until that listener's first snapshot arrives.
         setOriginal({
           firstName: data.firstName || "",
           lastName: data.lastName || "",
@@ -185,9 +214,39 @@ export default function Profile() {
     }
   }
 
+  function handleCancelPasswordEdit() {
+    setOldPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+    setOldPwError("");
+    setPwError("");
+    setConfirmError("");
+    setPwEditing(false);
+  }
+
+  // Only one of the two sections can be in edit mode at a time -- opening
+  // one closes the other (discarding whatever was unsaved there), same as
+  // if Cancel had been pressed on it.
+  function handleStartEditProfile() {
+    handleCancelPasswordEdit();
+    setIsEditing(true);
+  }
+
+  function handleStartEditPassword() {
+    handleCancelEditProfile();
+    setPwEditing(true);
+  }
+
   async function handleChangePassword() {
     const pwRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
     let valid = true;
+
+    if (!oldPassword) {
+      setOldPwError("Please enter your current password.");
+      valid = false;
+    } else {
+      setOldPwError("");
+    }
 
     if (!pwRegex.test(newPassword)) {
       setPwError("8–12 characters with at least 1 uppercase letter, number & special character.");
@@ -209,15 +268,24 @@ export default function Profile() {
     if (!valid) return;
 
     const user = auth.currentUser;
-    if (!user) return;
+    if (!user || !user.email) return;
     setChangingPw(true);
     try {
+      // Re-authenticating with the OLD password both proves it's correct
+      // (wrong-password rejects here, before anything changes) and covers
+      // the "requires-recent-login" case updatePassword can otherwise hit
+      // on a stale session.
+      await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, oldPassword));
       await updatePassword(user, newPassword);
+      setOldPassword("");
       setNewPassword("");
       setConfirmPassword("");
+      setPwEditing(false);
       Alert.alert("Success", "Password updated!");
     } catch (err: any) {
-      if (err?.code === "auth/requires-recent-login") {
+      if (err?.code === "auth/wrong-password" || err?.code === "auth/invalid-credential") {
+        setOldPwError("Current password is incorrect.");
+      } else if (err?.code === "auth/requires-recent-login") {
         Alert.alert("Session Expired", "Please log out and log in again before changing your password.");
       } else {
         Alert.alert("Error", "Failed to change password.");
@@ -267,6 +335,11 @@ export default function Profile() {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
+  // Confirmation gate before Save changes / Update Password actually run --
+  // "profile" or "password" picks which one Continue should trigger, null
+  // means the modal is closed.
+  const [confirmTarget, setConfirmTarget] = useState<"profile" | "password" | null>(null);
+
   async function handleSignOut() {
     setLoggingOut(true);
     try {
@@ -277,6 +350,15 @@ export default function Profile() {
       setLoggingOut(false);
       setShowLogoutConfirm(false);
     }
+  }
+
+  function handleCancelEditProfile() {
+    setFirstName(original.firstName);
+    setLastName(original.lastName);
+    setContact(original.contact);
+    setPersonalEmail(original.personalEmail);
+    setCategory(original.category);
+    setIsEditing(false);
   }
 
   async function saveProfile() {
@@ -311,7 +393,14 @@ export default function Profile() {
         }
       }
 
-      await updateTenantProfile(user.uid, { firstName: fn, lastName: ln, contactNo: cn });
+      const profileUpdates: Record<string, any> = { firstName: fn, lastName: ln, contactNo: cn };
+      if (category !== original.category) {
+        // Tenant's own doc is the source of truth; the stall doc keeps a
+        // denormalized copy purely so the guest app's public listing stays
+        // accurate for this space.
+        profileUpdates.category = category;
+      }
+      await updateTenantProfile(user.uid, profileUpdates);
 
       if (category !== original.category && stallId) {
         await updateDoc(doc(db, "stalls", stallId), { category });
@@ -525,19 +614,58 @@ export default function Profile() {
               category !== original.category;
             const hasEmptyField = !firstName.trim() || !lastName.trim() || !contact.trim();
             const disabled = isEditing && (!hasChanges || hasEmptyField);
-            return (
+            return isEditing ? (
+              <View style={styles.pwActionsRow}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.pwCancelBtn,
+                    pressed && { backgroundColor: colors.error, borderColor: colors.error, transform: [{ scale: 0.97 }] },
+                  ]}
+                  onPress={handleCancelEditProfile}
+                >
+                  {({ pressed }) => (
+                    <Text style={[styles.pwCancelBtnText, pressed && styles.pwCancelBtnTextPressed]}>Cancel</Text>
+                  )}
+                </Pressable>
+                <Pressable
+                  ref={saveBtnRef}
+                  style={({ pressed }) => [
+                    styles.saveButton,
+                    styles.pwUpdateBtn,
+                    disabled && styles.saveButtonDisabled,
+                    pressed && !disabled && { backgroundColor: colors.white, transform: [{ scale: 0.97 }] },
+                  ]}
+                  onPress={() => setConfirmTarget("profile")}
+                  disabled={disabled}
+                >
+                  {({ pressed }) => (
+                    <Text
+                      style={[
+                        styles.saveText,
+                        styles.pwUpdateBtnText,
+                        pressed && !disabled && styles.pwUpdateBtnTextPressed,
+                      ]}
+                    >
+                      Save changes
+                    </Text>
+                  )}
+                </Pressable>
+              </View>
+            ) : (
               <Pressable
                 ref={saveBtnRef}
                 style={({ pressed }) => [
                   styles.saveButton,
-                  disabled && styles.saveButtonDisabled,
-                  pressed && !disabled && { backgroundColor: colors.ink, transform: [{ scale: 0.97 }] },
+                  pressed && { backgroundColor: colors.white, transform: [{ scale: 0.97 }] },
                 ]}
-                onPress={isEditing ? saveProfile : () => setIsEditing(true)}
-                disabled={disabled}
+                onPress={handleStartEditProfile}
               >
-                {!isEditing && <Pencil size={15} color={colors.white} style={{ marginRight: 8 }} />}
-                <Text style={styles.saveText}>{isEditing ? "Save changes" : "Edit Profile"}</Text>
+                {({ pressed }) => (
+                  <>
+                    <Pencil size={15} color={pressed ? colors.emerald : colors.white} style={{ marginRight: 8 }} />
+                    <Text style={[styles.saveText, pressed && styles.pwUpdateBtnTextPressed]}>Edit Profile</Text>
+                  </>
+                )}
               </Pressable>
             );
           })()}
@@ -548,9 +676,32 @@ export default function Profile() {
           <Text style={styles.sectionTitle}>Change Password</Text>
 
           <View style={styles.labelRow}>
+            <Text style={styles.label}>Current password</Text>
+          </View>
+          <View style={[styles.pwField, !pwEditing && styles.inputReadOnly, !!oldPwError && styles.pwFieldError]}>
+            <TextInput
+              style={styles.pwInput}
+              value={oldPassword}
+              onChangeText={(t) => {
+                setOldPassword(t);
+                setOldPwError("");
+              }}
+              secureTextEntry={!showOldPass}
+              placeholder="Current password"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              editable={pwEditing}
+            />
+            <Pressable onPress={() => setShowOldPass((v) => !v)} hitSlop={8}>
+              {showOldPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+            </Pressable>
+          </View>
+          {!!oldPwError && <Text style={styles.pwFieldErrorText}>{oldPwError}</Text>}
+
+          <View style={styles.labelRow}>
             <Text style={styles.label}>New password</Text>
           </View>
-          <View style={[styles.pwField, !isEditing && styles.inputReadOnly, !!pwError && styles.pwFieldError]}>
+          <View style={[styles.pwField, !pwEditing && styles.inputReadOnly, !!pwError && styles.pwFieldError]}>
             <TextInput
               style={styles.pwInput}
               value={newPassword}
@@ -564,7 +715,7 @@ export default function Profile() {
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               maxLength={12}
-              editable={isEditing}
+              editable={pwEditing}
             />
             <Pressable onPress={() => setShowNewPass((v) => !v)} hitSlop={8}>
               {showNewPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
@@ -576,7 +727,7 @@ export default function Profile() {
           <View style={styles.labelRow}>
             <Text style={styles.label}>Confirm password</Text>
           </View>
-          <View style={[styles.pwField, !isEditing && styles.inputReadOnly, !!confirmError && styles.pwFieldError]}>
+          <View style={[styles.pwField, !pwEditing && styles.inputReadOnly, !!confirmError && styles.pwFieldError]}>
             <TextInput
               style={styles.pwInput}
               value={confirmPassword}
@@ -589,7 +740,7 @@ export default function Profile() {
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               maxLength={12}
-              editable={isEditing}
+              editable={pwEditing}
             />
             <Pressable onPress={() => setShowConfirmPass((v) => !v)} hitSlop={8}>
               {showConfirmPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
@@ -597,17 +748,58 @@ export default function Profile() {
           </View>
           {!!confirmError && <Text style={styles.pwFieldErrorText}>{confirmError}</Text>}
 
-          {isEditing && (
+          {pwEditing ? (
+            <View style={styles.pwActionsRow}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.pwCancelBtn,
+                  pressed && { backgroundColor: colors.error, borderColor: colors.error, transform: [{ scale: 0.97 }] },
+                ]}
+                onPress={handleCancelPasswordEdit}
+                disabled={changingPw}
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.pwCancelBtnText, pressed && styles.pwCancelBtnTextPressed]}>Cancel</Text>
+                )}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.saveButton,
+                  styles.pwUpdateBtn,
+                  (changingPw || !oldPassword || newPassword.length < 8 || confirmPassword.length < 8) &&
+                    styles.saveButtonDisabled,
+                  pressed && !changingPw && { backgroundColor: colors.white, transform: [{ scale: 0.97 }] },
+                ]}
+                onPress={() => setConfirmTarget("password")}
+                disabled={changingPw || !oldPassword || newPassword.length < 8 || confirmPassword.length < 8}
+              >
+                {({ pressed }) => (
+                  <Text
+                    style={[
+                      styles.saveText,
+                      styles.pwUpdateBtnText,
+                      pressed && !changingPw && styles.pwUpdateBtnTextPressed,
+                    ]}
+                  >
+                    {changingPw ? "Updating…" : "Update Password"}
+                  </Text>
+                )}
+              </Pressable>
+            </View>
+          ) : (
             <Pressable
               style={({ pressed }) => [
                 styles.saveButton,
-                (changingPw || newPassword.length < 8 || confirmPassword.length < 8) && styles.saveButtonDisabled,
-                pressed && { backgroundColor: colors.ink, transform: [{ scale: 0.97 }] },
+                pressed && { backgroundColor: colors.white, transform: [{ scale: 0.97 }] },
               ]}
-              onPress={handleChangePassword}
-              disabled={changingPw || newPassword.length < 8 || confirmPassword.length < 8}
+              onPress={handleStartEditPassword}
             >
-              <Text style={styles.saveText}>{changingPw ? "Updating…" : "Update Password"}</Text>
+              {({ pressed }) => (
+                <>
+                  <Pencil size={15} color={pressed ? colors.emerald : colors.white} style={{ marginRight: 8 }} />
+                  <Text style={[styles.saveText, pressed && styles.pwUpdateBtnTextPressed]}>Change Password</Text>
+                </>
+              )}
             </Pressable>
           )}
         </View>
@@ -616,12 +808,16 @@ export default function Profile() {
           ref={signOutRef}
           style={({ pressed }) => [
             styles.signOutButton,
-            pressed && { backgroundColor: colors.errorSoft },
+            pressed && { backgroundColor: colors.error, borderColor: colors.error, transform: [{ scale: 0.97 }] },
           ]}
           onPress={() => setShowLogoutConfirm(true)}
         >
-          <LogOut size={16} color={colors.error} />
-          <Text style={styles.signOutText}>Sign out</Text>
+          {({ pressed }) => (
+            <>
+              <LogOut size={16} color={pressed ? colors.white : colors.error} />
+              <Text style={[styles.signOutText, pressed && styles.signOutTextPressed]}>Sign out</Text>
+            </>
+          )}
         </Pressable>
 
       </ScrollView>
@@ -664,27 +860,86 @@ export default function Profile() {
             </View>
             <View style={styles.alertDivider} />
             <View style={styles.alertBtnRow}>
-              <TouchableOpacity
-                style={styles.alertBtn}
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && styles.alertBtnCancelPressed]}
                 onPress={() => setShowLogoutConfirm(false)}
-                activeOpacity={0.6}
                 disabled={loggingOut}
               >
-                <Text style={styles.alertBtnCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <View style={styles.alertBtnDivider} />
-              <TouchableOpacity
-                style={styles.alertBtn}
-                onPress={handleSignOut}
-                activeOpacity={0.6}
-                disabled={loggingOut}
-              >
-                {loggingOut ? (
-                  <ActivityIndicator color={colors.emerald} size="small" />
-                ) : (
-                  <Text style={styles.alertBtnConfirmText}>Confirm</Text>
+                {({ pressed }) => (
+                  <Text style={[styles.alertBtnCancelText, pressed && styles.alertBtnCancelTextPressed]}>
+                    Cancel
+                  </Text>
                 )}
-              </TouchableOpacity>
+              </Pressable>
+              <View style={styles.alertBtnDivider} />
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && styles.alertBtnConfirmPressed]}
+                onPress={handleSignOut}
+                disabled={loggingOut}
+              >
+                {({ pressed }) =>
+                  loggingOut ? (
+                    <ActivityIndicator color={colors.emerald} size="small" />
+                  ) : (
+                    <Text style={[styles.alertBtnConfirmText, pressed && styles.alertBtnConfirmTextPressed]}>
+                      Confirm
+                    </Text>
+                  )
+                }
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* SAVE CHANGES / UPDATE PASSWORD CONFIRMATION MODAL */}
+      <Modal
+        visible={confirmTarget !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConfirmTarget(null)}
+      >
+        <View style={styles.alertOverlay}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setConfirmTarget(null)} />
+          <View style={styles.alertCard}>
+            <View style={styles.alertBody}>
+              <Text style={styles.alertTitleNeutral}>
+                {confirmTarget === "password" ? "Update password?" : "Save changes?"}
+              </Text>
+              <Text style={styles.alertMessage}>
+                {confirmTarget === "password"
+                  ? "Are you sure you want to change your password? You'll need to use the new password the next time you log in."
+                  : "Are you sure you want to update your profile information?"}
+              </Text>
+            </View>
+            <View style={styles.alertDivider} />
+            <View style={styles.alertBtnRow}>
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && styles.alertBtnCancelPressed]}
+                onPress={() => setConfirmTarget(null)}
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.alertBtnCancelText, pressed && styles.alertBtnCancelTextPressed]}>
+                    Cancel
+                  </Text>
+                )}
+              </Pressable>
+              <View style={styles.alertBtnDivider} />
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && styles.alertBtnConfirmPressed]}
+                onPress={() => {
+                  const target = confirmTarget;
+                  setConfirmTarget(null);
+                  if (target === "password") handleChangePassword();
+                  else if (target === "profile") saveProfile();
+                }}
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.alertBtnConfirmText, pressed && styles.alertBtnConfirmTextPressed]}>
+                    Continue
+                  </Text>
+                )}
+              </Pressable>
             </View>
           </View>
         </View>
@@ -712,13 +967,16 @@ export default function Profile() {
             </View>
             <View style={styles.alertDivider} />
             <View style={styles.alertBtnRow}>
-              <TouchableOpacity
-                style={styles.alertBtn}
+              <Pressable
+                style={({ pressed }) => [styles.alertBtn, pressed && styles.alertBtnConfirmPressed]}
                 onPress={() => setShowSpamReminder(false)}
-                activeOpacity={0.6}
               >
-                <Text style={styles.alertBtnConfirmText}>Got it</Text>
-              </TouchableOpacity>
+                {({ pressed }) => (
+                  <Text style={[styles.alertBtnConfirmText, pressed && styles.alertBtnConfirmTextPressed]}>
+                    Got it
+                  </Text>
+                )}
+              </Pressable>
             </View>
           </View>
         </View>
@@ -1118,6 +1376,50 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
 
+  // ── Change Password: Cancel / Update row ─────────
+  pwActionsRow: {
+    flexDirection: "row",
+    gap: spacing.md,
+    marginTop: spacing.md,
+  },
+
+  pwCancelBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    paddingVertical: 10,
+    backgroundColor: colors.white,
+    ...shadow.card,
+  },
+
+  pwCancelBtnText: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.bold,
+    color: colors.textSecondary,
+  },
+
+  pwCancelBtnTextPressed: {
+    color: colors.white,
+  },
+
+  pwUpdateBtn: {
+    flex: 1,
+    marginTop: 0,
+    paddingVertical: 10,
+  },
+
+  pwUpdateBtnText: {
+    fontSize: fontSize.sm,
+  },
+
+  pwUpdateBtnTextPressed: {
+    color: colors.emerald,
+  },
+
   saveText: {
     color: colors.white,
     fontSize: fontSize.md,
@@ -1136,12 +1438,17 @@ const styles = StyleSheet.create({
     borderColor: colors.errorSoft,
     backgroundColor: colors.errorSoft,
     paddingVertical: 13,
+    ...shadow.card,
   },
 
   signOutText: {
     color: colors.error,
     fontSize: fontSize.base,
     fontFamily: fontFamily.semibold,
+  },
+
+  signOutTextPressed: {
+    color: colors.white,
   },
 
   // ── Logout confirmation alert ────────────────────────────────────────────
@@ -1214,15 +1521,31 @@ const styles = StyleSheet.create({
     backgroundColor: colors.border,
   },
 
+  alertBtnCancelPressed: {
+    backgroundColor: colors.error,
+  },
+
   alertBtnCancelText: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.regular,
     color: colors.textMuted,
   },
 
+  alertBtnCancelTextPressed: {
+    color: colors.white,
+  },
+
+  alertBtnConfirmPressed: {
+    backgroundColor: colors.emerald,
+  },
+
   alertBtnConfirmText: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.semibold,
     color: colors.emerald,
+  },
+
+  alertBtnConfirmTextPressed: {
+    color: colors.white,
   },
 });

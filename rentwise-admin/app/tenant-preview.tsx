@@ -175,9 +175,9 @@ function periodLabel(schedule: string, date: Date): string {
 // `breakdown` array — only the lump `rentAmount`. Reconstructs the same
 // itemized, date-listed breakdown by working out how many consecutive
 // periods that lump sum represents. Mirrors ReceiptCardContent.tsx exactly.
-function synthesizeBreakdown(data: any, stall: any): { label: string; amount: number }[] {
-  const schedule = stall?.paymentSchedule;
-  const dailyRate = Number(stall?.price || 0);
+function synthesizeBreakdown(data: any, tenant: any): { label: string; amount: number }[] {
+  const schedule = tenant?.paymentSchedule;
+  const dailyRate = Number(tenant?.price || 0);
   const rentAmount = Number(data?.rentAmount || 0);
   if (!schedule || dailyRate <= 0 || rentAmount <= 0) return [];
 
@@ -403,8 +403,10 @@ export default function TenantPreview() {
 
   // Month-scoped balance — mirrors rentwise-tenant/app/dashboard.tsx exactly,
   // so the admin sees the same numbers the tenant sees on their own screen.
-  const dailyRate = Number(stall?.price || 0);
-  const paymentSchedule = stall?.paymentSchedule ?? "monthly";
+  // Billing terms live on the tenant, not the stall, so they travel with
+  // the tenant if relocated instead of reflecting whoever's stall this is.
+  const dailyRate = Number(tenant?.price || 0);
+  const paymentSchedule = tenant?.paymentSchedule ?? "monthly";
   const today = new Date();
   const year = today.getFullYear();
   const month = today.getMonth();
@@ -466,7 +468,7 @@ export default function TenantPreview() {
   // what the tenant tendered (includes any change owed back for cash), so
   // the real amount paid is that minus the change. Mirrors
   // ReceiptCardContent.tsx exactly.
-  const receiptBreakdown = digitalReceipt ? synthesizeBreakdown(digitalReceipt, stall) : [];
+  const receiptBreakdown = digitalReceipt ? synthesizeBreakdown(digitalReceipt, tenant) : [];
   const receiptAmountPaid = digitalReceipt
     ? Number(digitalReceipt.payment ?? 0) - Number(digitalReceipt.change ?? 0)
     : 0;
@@ -532,14 +534,16 @@ export default function TenantPreview() {
                 onPress={handleNotifyTenant}
                 disabled={sending}
               >
-                {sending ? (
-                  <ActivityIndicator color={colors.white} size="small" />
-                ) : (
-                  <>
-                    <Bell size={14} color={colors.white} style={{ marginRight: 6 }} />
-                    <Text style={styles.notifyBtnText}>Notify</Text>
-                  </>
-                )}
+                {({ pressed }) =>
+                  sending ? (
+                    <ActivityIndicator color={colors.white} size="small" />
+                  ) : (
+                    <>
+                      <Bell size={14} color={pressed ? colors.emerald : colors.white} style={{ marginRight: 6 }} />
+                      <Text style={[styles.notifyBtnText, pressed && styles.notifyBtnTextPressed]}>Notify</Text>
+                    </>
+                  )
+                }
               </Pressable>
             </View>
 
@@ -941,7 +945,8 @@ const styles = StyleSheet.create({
   },
 
   notifyBtnPressed: {
-    backgroundColor: "rgba(255,255,255,0.28)",
+    backgroundColor: colors.white,
+    borderColor: colors.white,
   },
 
   notifyBtnDisabled: {
@@ -952,6 +957,10 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
+  },
+
+  notifyBtnTextPressed: {
+    color: colors.emerald,
   },
 
   // ── Body ─────────────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import {
   Image,
   StyleSheet,
   TouchableOpacity,
+  Pressable,
   ActivityIndicator,
   Modal,
   TextInput,
@@ -21,7 +22,6 @@ import BellIcon from "../components/BellIcon";
 import {
   collection,
   doc,
-  getDoc,
   onSnapshot,
   query,
   updateDoc,
@@ -56,6 +56,17 @@ import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../sha
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { bottomNavRefs } from "../components/bottomNavRefs";
 
+// The Schedule card's "₱X / unit" subtitle should reflect whatever the
+// tenant's actual schedule is, not always "/ day" -- a weekly tenant on
+// ₱120/day should see "₱840 / week" (the real per-period charge), not their
+// daily rate mislabeled as their period charge.
+const SCHEDULE_UNIT_LABEL: Record<string, string> = {
+  daily: "day",
+  weekly: "week",
+  "semi-monthly": "cut-off",
+  monthly: "month",
+};
+
 export default function Dashboard() {
   const insets = useSafeAreaInsets();
 
@@ -63,7 +74,6 @@ export default function Dashboard() {
     insets.top > 0 ? insets.top : (StatusBar.currentHeight ?? 24);
 
   const [tenant, setTenant] = useState<any>(null);
-  const [stall, setStall] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -130,10 +140,13 @@ export default function Dashboard() {
   const [changePwError, setChangePwError] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
 
-  // The stall's rate for whatever schedule is currently selected (daily,
-  // weekly, semi-monthly, or monthly) — admin enters this as the direct
-  // per-period amount, not a monthly total to be divided down.
-  const periodRate = Number(stall?.price || 0);
+  // This tenant's own rate for whatever schedule is currently selected
+  // (daily, weekly, semi-monthly, or monthly) — admin enters this as the
+  // direct per-period amount, not a monthly total to be divided down.
+  // Lives on the TENANT (not the stall) so it travels with them if they
+  // relocate, instead of picking up whatever the new stall's previous
+  // occupant was charged.
+  const periodRate = Number(tenant?.price || 0);
 
   useFocusEffect(
     useCallback(() => {
@@ -173,16 +186,24 @@ export default function Dashboard() {
       if (!tenantData) return;
       setTenant(tenantData);
       setMustChangePassword(!!tenantData.mustChangePassword);
-      if (tenantData.stallId) {
-        const stallSnap = await getDoc(doc(db, "stalls", tenantData.stallId));
-        if (stallSnap.exists()) {
-          setStall({ id: stallSnap.id, ...stallSnap.data() });
-        }
-      }
     } catch (error) {
       console.log("PROFILE ERROR:", error);
     }
   }
+
+  // Live (not one-time) so a rate/schedule change the admin makes shows up
+  // immediately even if this screen is already open and focused, instead
+  // of only refreshing the next time the tenant switches back to this tab.
+  // Price/paymentSchedule/category live on the tenant's OWN doc now (not
+  // the stall), so this listens there directly.
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    const unsubscribe = onSnapshot(doc(db, "users", uid), (snap) => {
+      if (snap.exists()) setTenant((prev: any) => ({ ...prev, ...snap.data(), id: snap.id }));
+    });
+    return unsubscribe;
+  }, []);
 
   async function onRefresh() {
     setRefreshing(true);
@@ -236,7 +257,7 @@ export default function Dashboard() {
 
   const successfulPayments = payments.filter((p) => p.status === "approved");
 
-  const paymentSchedule = stall?.paymentSchedule ?? "monthly";
+  const paymentSchedule = tenant?.paymentSchedule ?? "monthly";
   const today = new Date();
 
   // "Remaining Bill": the whole calendar month's total rent (daily rate ×
@@ -301,8 +322,19 @@ export default function Dashboard() {
   // period-by-period below, using the same nextPeriodStart/computePeriodCharge
   // helpers already used to build this list, to skip any period it fully
   // covers.
+  //
+  // Scoped to THIS month, same as paidThisMonth above -- chargedToDate only
+  // counts periods since the 1st of the current month, so comparing it
+  // against a tenant's whole payment HISTORY (every prior month included)
+  // produced a huge phantom surplus that skipped dozens of real upcoming
+  // periods (e.g. showing Aug 25 as "next due" on Aug 1 for a daily payer
+  // who hadn't paid anything yet this month).
   const totalPaidForCoverage = payments
-    .filter((p) => p.status === "approved" || p.status === "pending")
+    .filter((p) => {
+      if (p.status !== "approved" && p.status !== "pending") return false;
+      const d = p.date?.toDate ? p.date.toDate() : p.date ? new Date(p.date) : null;
+      return !!d && d.getFullYear() === year && d.getMonth() === month;
+    })
     .reduce((sum, p) => sum + Number(p.amount || 0), 0);
   let coverageSurplus = totalPaidForCoverage - chargedToDate;
 
@@ -445,11 +477,13 @@ export default function Dashboard() {
                 <Text style={styles.statLabel}>Schedule</Text>
               </View>
               <Text style={styles.statValue}>
-                {stall?.paymentSchedule
-                  ? stall.paymentSchedule.charAt(0).toUpperCase() + stall.paymentSchedule.slice(1)
+                {tenant?.paymentSchedule
+                  ? tenant.paymentSchedule.charAt(0).toUpperCase() + tenant.paymentSchedule.slice(1)
                   : "—"}
               </Text>
-              <Text style={styles.statSub}>₱{periodRate.toLocaleString()} / day</Text>
+              <Text style={styles.statSub}>
+                ₱{onePeriodCharge.toLocaleString()} / {SCHEDULE_UNIT_LABEL[paymentSchedule] ?? "day"}
+              </Text>
             </View>
           </View>
         </View>
@@ -538,17 +572,25 @@ export default function Dashboard() {
               <Text style={styles.pwErrorText}>{changePwError}</Text>
             ) : null}
 
-            <TouchableOpacity
-              style={[styles.payNowBtn, changingPassword && styles.payNowBtnDisabled]}
+            <Pressable
+              style={({ pressed }) => [
+                styles.payNowBtn,
+                changingPassword && styles.payNowBtnDisabled,
+                pressed && !changingPassword && styles.payNowBtnPressed,
+              ]}
               disabled={changingPassword}
               onPress={handleForcedPasswordChange}
             >
-              {changingPassword ? (
-                <ActivityIndicator color={colors.white} />
-              ) : (
-                <Text style={styles.payNowText}>Change Password</Text>
-              )}
-            </TouchableOpacity>
+              {({ pressed }) =>
+                changingPassword ? (
+                  <ActivityIndicator color={colors.white} />
+                ) : (
+                  <Text style={[styles.payNowText, pressed && styles.payNowTextPressed]}>
+                    Change Password
+                  </Text>
+                )
+              }
+            </Pressable>
           </View>
         </View>
       </Modal>
@@ -903,6 +945,8 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     marginTop: spacing.md,
     alignItems: "center",
+    borderWidth: 1.5,
+    borderColor: "transparent",
     ...shadow.button,
   },
 
@@ -910,10 +954,19 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
 
+  payNowBtnPressed: {
+    backgroundColor: colors.white,
+    borderColor: colors.emerald,
+  },
+
   payNowText: {
     color: colors.white,
     fontFamily: fontFamily.semibold,
     fontSize: fontSize.base,
+  },
+
+  payNowTextPressed: {
+    color: colors.emerald,
   },
 
   payHint: {

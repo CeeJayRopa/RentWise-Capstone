@@ -20,7 +20,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { WebView } from "react-native-webview";
 import { captureRef } from "react-native-view-shot";
 
-import { collection, doc, getDoc, onSnapshot, query, updateDoc, where } from "firebase/firestore";
+import { collection, doc, onSnapshot, query, updateDoc, where } from "firebase/firestore";
 
 import { db } from "../../shared/services/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -71,6 +71,7 @@ export default function PaymentsScreen() {
 
   const [tenant, setTenant] = useState<any>(null);
   const [stall, setStall] = useState<any>(null);
+  const [stallId, setStallId] = useState<string | null>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -123,7 +124,7 @@ export default function PaymentsScreen() {
       );
     });
 
-  const periodRate = Number(stall?.price || 0);
+  const periodRate = Number(tenant?.price || 0);
 
   useFocusEffect(
     useCallback(() => {
@@ -210,16 +211,39 @@ export default function PaymentsScreen() {
       const tenantData = await getTenantData(uid);
       if (!tenantData) return;
       setTenant(tenantData);
-      if (tenantData.stallId) {
-        const stallSnap = await getDoc(doc(db, "stalls", tenantData.stallId));
-        if (stallSnap.exists()) {
-          setStall({ id: stallSnap.id, ...stallSnap.data() });
-        }
-      }
+      setStallId(tenantData.stallId ?? null);
     } catch (error) {
       console.log("PROFILE ERROR:", error);
     }
   }
+
+  // Live (not one-time) so a change to the stall's location info (used for
+  // receipts below) shows up immediately, same reasoning as the tenant
+  // listener below.
+  useEffect(() => {
+    if (!stallId) {
+      setStall(null);
+      return;
+    }
+    const unsubscribe = onSnapshot(doc(db, "stalls", stallId), (snap) => {
+      if (snap.exists()) setStall({ id: snap.id, ...snap.data() });
+    });
+    return unsubscribe;
+  }, [stallId]);
+
+  // Live (not one-time) so a rate/schedule change the admin makes shows up
+  // immediately even if this screen is already open and focused, instead
+  // of only refreshing the next time the tenant switches back to this tab.
+  // Price/paymentSchedule/category live on the tenant's OWN doc now (not
+  // the stall), so this listens there directly.
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    const unsubscribe = onSnapshot(doc(db, "users", uid), (snap) => {
+      if (snap.exists()) setTenant((prev: any) => ({ ...prev, ...snap.data(), id: snap.id }));
+    });
+    return unsubscribe;
+  }, []);
 
   // The page isn't scrollable, so there's no pull-to-refresh gesture —
   // this button re-fetches tenant/stall data the same way that used to.
@@ -245,7 +269,7 @@ export default function PaymentsScreen() {
   const successfulPayments = payments.filter((p) => p.status === "approved");
   const pendingPayments = payments.filter((p) => p.status === "pending");
 
-  const paymentSchedule = stall?.paymentSchedule ?? "monthly";
+  const paymentSchedule = tenant?.paymentSchedule ?? "monthly";
   const today = new Date();
   const year = today.getFullYear();
   const month = today.getMonth();
@@ -354,8 +378,8 @@ export default function PaymentsScreen() {
       const paymentMethodLabel = pendingMethod === "gcash" ? "GCash" : pendingMethod === "paymaya" ? "Maya" : "GCash/Maya";
       const receiptNo = "RW-ONLINE-" + Date.now().toString().slice(-8);
       const tenantName = tenant ? `${tenant.firstName} ${tenant.lastName}` : "";
-      const schedule = stall?.paymentSchedule ?? "monthly";
-      const scheduleRent = computePeriodCharge(stall?.price ?? 0, schedule, new Date());
+      const schedule = tenant?.paymentSchedule ?? "monthly";
+      const scheduleRent = computePeriodCharge(tenant?.price ?? 0, schedule, new Date());
       const owedAmount = Math.max(paymentDue, scheduleRent || 0);
       const periodsOwed =
         scheduleRent > 0 ? Math.max(1, Math.round(owedAmount / scheduleRent)) : 1;
@@ -368,7 +392,7 @@ export default function PaymentsScreen() {
       // any consecutive unpaid days/periods before today — so the tenant
       // can see why the total is what it is instead of one lump sum.
       const today = new Date();
-      const owedBreakdown = consecutivePeriodsEnding(stall?.price ?? 0, schedule, today, periodsOwed).map((p) => ({
+      const owedBreakdown = consecutivePeriodsEnding(tenant?.price ?? 0, schedule, today, periodsOwed).map((p) => ({
         label: periodLabel(schedule, p.date),
         amount: p.amount,
       }));
@@ -377,7 +401,7 @@ export default function PaymentsScreen() {
       for (let i = 0; i < periodsAdvance; i++) {
         advanceBreakdown.push({
           label: `Advance – ${periodLabel(schedule, advanceCursor)}`,
-          amount: computePeriodCharge(stall?.price ?? 0, schedule, advanceCursor),
+          amount: computePeriodCharge(tenant?.price ?? 0, schedule, advanceCursor),
         });
         advanceCursor = nextPeriodStart(schedule, advanceCursor);
       }
@@ -579,21 +603,39 @@ export default function PaymentsScreen() {
               )}
             </View>
 
-            <TouchableOpacity
+            <Pressable
               ref={payBtnRef}
-              style={[styles.payNowInlineBtn, (redirecting || !selectedMethod) && styles.payNowInlineBtnDisabled]}
+              style={({ pressed }) => [
+                styles.payNowInlineBtn,
+                (redirecting || !selectedMethod) && styles.payNowInlineBtnDisabled,
+                pressed &&
+                  !(redirecting || !selectedMethod) && {
+                    backgroundColor: colors.white,
+                    transform: [{ scale: 0.97 }],
+                  },
+              ]}
               disabled={redirecting || !selectedMethod}
               onPress={handlePayNow}
             >
-              <Zap size={16} color={colors.white} />
-              <Text style={styles.payNowInlineText} numberOfLines={1}>
-                {redirecting
-                  ? "Opening payment..."
-                  : `Pay ₱${(Number(payAmount) || Math.round(paymentDue)).toLocaleString()}${
-                      selectedMethod ? ` with ${selectedMethod === "gcash" ? "GCash" : "Maya"}` : ""
-                    }`}
-              </Text>
-            </TouchableOpacity>
+              {({ pressed }) => {
+                const isActivePress = pressed && !(redirecting || !selectedMethod);
+                return (
+                  <>
+                    <Zap size={16} color={isActivePress ? colors.emerald : colors.white} />
+                    <Text
+                      style={[styles.payNowInlineText, isActivePress && styles.payNowInlineTextPressed]}
+                      numberOfLines={1}
+                    >
+                      {redirecting
+                        ? "Opening payment..."
+                        : `Pay ₱${(Number(payAmount) || Math.round(paymentDue)).toLocaleString()}${
+                            selectedMethod ? ` with ${selectedMethod === "gcash" ? "GCash" : "Maya"}` : ""
+                          }`}
+                    </Text>
+                  </>
+                );
+              }}
+            </Pressable>
 
             <View style={styles.securityFooter}>
               <Lock size={11} color={colors.textMuted} />
@@ -664,7 +706,7 @@ export default function PaymentsScreen() {
       {captureReceipt && (
         <View style={styles.receiptCaptureOffscreen} pointerEvents="none">
           <View ref={receiptShotRef} collapsable={false} style={styles.receiptCaptureCard}>
-            <ReceiptCardContent data={captureReceipt.data} stall={stall} showActions={false} />
+            <ReceiptCardContent data={captureReceipt.data} billing={tenant} showActions={false} />
           </View>
         </View>
       )}
@@ -979,6 +1021,10 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: fontSize.base,
     fontFamily: fontFamily.bold,
+  },
+
+  payNowInlineTextPressed: {
+    color: colors.emerald,
   },
 
   securityFooter: {

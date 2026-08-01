@@ -1,4 +1,4 @@
-import { View, Text, Image, StyleSheet, TouchableOpacity, Alert } from "react-native";
+import { View, Text, Image, StyleSheet, Pressable, Alert } from "react-native";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import { Check, Clock, XCircle, Download } from "lucide-react-native";
@@ -64,9 +64,9 @@ function methodBadge(method: string): MethodBadge {
 // itemized, date-listed breakdown for those by working out how many
 // consecutive periods that lump sum actually represents (rentAmount ÷ one
 // period's charge) and listing each one ending on the receipt's date.
-function synthesizeBreakdown(data: any, stall: any): BreakdownLine[] {
-  const schedule = stall?.paymentSchedule;
-  const dailyRate = Number(stall?.price || 0);
+function synthesizeBreakdown(data: any, billing: any): BreakdownLine[] {
+  const schedule = billing?.paymentSchedule;
+  const dailyRate = Number(billing?.price || 0);
   const rentAmount = Number(data.rentAmount || 0);
   if (!schedule || dailyRate <= 0 || rentAmount <= 0) return [];
 
@@ -118,27 +118,14 @@ function buildReceiptHtml(data: any, breakdown: BreakdownLine[], amountPaid: num
   `;
 }
 
-export default function ReceiptCardContent({
-  data,
-  stall,
-  showActions = true,
-  onClose,
-}: {
-  data: any;
-  stall?: any;
-  showActions?: boolean;
-  onClose?: () => void;
-}) {
-  const receiptDate = data.date ? new Date(data.date) : new Date();
-
+// Shared by the receipt content and the standalone action bar below, so a
+// caller can render the buttons OUTSIDE a ScrollView (fixed at the bottom
+// of a modal) while the content itself scrolls independently.
+function useReceiptDerived(data: any, billing: any) {
   const breakdown: BreakdownLine[] =
     Array.isArray(data.breakdown) && data.breakdown.length > 0
       ? data.breakdown
-      : synthesizeBreakdown(data, stall);
-
-  const info = statusInfo(data.status);
-  const Icon = info.icon;
-  const badge = methodBadge(data.paymentMethod);
+      : synthesizeBreakdown(data, billing);
 
   // For cash payments, `data.payment` is what the tenant physically handed
   // over — it includes change owed back, which was never actually applied
@@ -161,6 +148,68 @@ export default function ReceiptCardContent({
       Alert.alert("Error", "Couldn't generate the PDF. Please try again.");
     }
   }
+
+  return { breakdown, amountPaid, handleDownloadPdf };
+}
+
+// Standalone Close/PDF action bar -- render this as a sibling AFTER a
+// ScrollView wrapping <ReceiptCardContent showActions={false} .../> so the
+// buttons stay fixed at the bottom of the modal instead of scrolling away
+// with the receipt content.
+export function ReceiptActionsBar({
+  data,
+  billing,
+  onClose,
+}: {
+  data: any;
+  billing?: any;
+  onClose?: () => void;
+}) {
+  const { handleDownloadPdf } = useReceiptDerived(data, billing);
+
+  return (
+    <View style={styles.actionsRow}>
+      <Pressable
+        style={({ pressed }) => [styles.closeBtn, pressed && styles.closeBtnPressed]}
+        onPress={onClose}
+      >
+        {({ pressed }) => (
+          <Text style={[styles.closeBtnText, pressed && styles.closeBtnTextPressed]}>Close</Text>
+        )}
+      </Pressable>
+      <Pressable
+        style={({ pressed }) => [styles.pdfBtn, pressed && styles.pdfBtnPressed]}
+        onPress={handleDownloadPdf}
+      >
+        {({ pressed }) => (
+          <>
+            <Download size={16} color={pressed ? colors.emerald : colors.white} />
+            <Text style={[styles.pdfBtnText, pressed && styles.pdfBtnTextPressed]}>PDF</Text>
+          </>
+        )}
+      </Pressable>
+    </View>
+  );
+}
+
+export default function ReceiptCardContent({
+  data,
+  billing,
+  showActions = true,
+  onClose,
+}: {
+  data: any;
+  billing?: any;
+  showActions?: boolean;
+  onClose?: () => void;
+}) {
+  const receiptDate = data.date ? new Date(data.date) : new Date();
+
+  const { breakdown, amountPaid, handleDownloadPdf } = useReceiptDerived(data, billing);
+
+  const info = statusInfo(data.status);
+  const Icon = info.icon;
+  const badge = methodBadge(data.paymentMethod);
 
   return (
     <View style={styles.root}>
@@ -255,13 +304,25 @@ export default function ReceiptCardContent({
 
       {showActions && (
         <View style={styles.actionsRow}>
-          <TouchableOpacity style={styles.closeBtn} onPress={onClose} activeOpacity={0.7}>
-            <Text style={styles.closeBtnText}>Close</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.pdfBtn} onPress={handleDownloadPdf} activeOpacity={0.7}>
-            <Download size={16} color={colors.white} />
-            <Text style={styles.pdfBtnText}>PDF</Text>
-          </TouchableOpacity>
+          <Pressable
+            style={({ pressed }) => [styles.closeBtn, pressed && styles.closeBtnPressed]}
+            onPress={onClose}
+          >
+            {({ pressed }) => (
+              <Text style={[styles.closeBtnText, pressed && styles.closeBtnTextPressed]}>Close</Text>
+            )}
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.pdfBtn, pressed && styles.pdfBtnPressed]}
+            onPress={handleDownloadPdf}
+          >
+            {({ pressed }) => (
+              <>
+                <Download size={16} color={pressed ? colors.emerald : colors.white} />
+                <Text style={[styles.pdfBtnText, pressed && styles.pdfBtnTextPressed]}>PDF</Text>
+              </>
+            )}
+          </Pressable>
         </View>
       )}
     </View>
@@ -446,10 +507,19 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
 
+  closeBtnPressed: {
+    backgroundColor: colors.ink,
+    borderColor: colors.ink,
+  },
+
   closeBtnText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     color: colors.textSecondary,
+  },
+
+  closeBtnTextPressed: {
+    color: colors.white,
   },
 
   pdfBtn: {
@@ -461,12 +531,23 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     backgroundColor: colors.emerald,
     paddingVertical: spacing.md,
+    borderWidth: 1.5,
+    borderColor: "transparent",
     ...shadow.button,
+  },
+
+  pdfBtnPressed: {
+    backgroundColor: colors.white,
+    borderColor: colors.emerald,
   },
 
   pdfBtnText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.bold,
     color: colors.white,
+  },
+
+  pdfBtnTextPressed: {
+    color: colors.emerald,
   },
 });

@@ -4,6 +4,7 @@ import {
   Image,
   StyleSheet,
   TouchableOpacity,
+  Pressable,
   ScrollView,
   ActivityIndicator,
   useWindowDimensions,
@@ -13,8 +14,6 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
-import StallDetails from "../../app/stall-details";
 import StallPopup from "./StallPopup";
 import { getStalls } from "../../services/stallService";
 import { MARKET_LAYOUT, normalizeStallName, StallHotspot } from "../constants/marketLayout";
@@ -29,8 +28,6 @@ const BLUEPRINT_ASPECT_RATIO = 1053 / 708;
 const MIN_BLUEPRINT_WIDTH = 700;
 const HOTSPOT_SHRINK = 0.94;
 const MAP_CARD_BORDER_WIDTH = 1;
-const MIN_ZOOM = 1;
-const MAX_ZOOM = 3;
 // Desired on-screen breathing room between the hover tooltip's bottom
 // (caret tip) and the stall it's pointing at, at any zoom level.
 const HOVER_TOOLTIP_GAP = 12;
@@ -52,6 +49,14 @@ interface Props {
   eyebrow?: string;
   title?: string;
   description?: string;
+  // The page section wrapping this embed applies its own horizontal padding
+  // (index.tsx's `hPad`) that eats into the real available width -- this
+  // component's internal width math is based on the raw window width, which
+  // doesn't know about that padding, so it has to be told. At very wide
+  // windows that padding is a tiny fraction of the total and barely showed;
+  // at narrower desktop widths it was a much bigger bite, causing the map
+  // card to overflow/clip its own rounded border.
+  outerPaddingH?: number;
 }
 
 const PRIMARY = "#0E7C5A";
@@ -60,31 +65,79 @@ const TEXT_DARK = "#171A19";
 const TEXT_MUTED = "#5B6560";
 const CARD_BG = "#F4F8F5";
 
-export default function MarketMapEmbed({ maxWidth = 620, eyebrow, title, description }: Props) {
+export default function MarketMapEmbed({
+  maxWidth = 620,
+  eyebrow,
+  title,
+  description,
+  outerPaddingH = 0,
+}: Props) {
   const { width: windowWidth } = useWindowDimensions();
   const isMobile = windowWidth <= 480;
-  // Below ~980 there isn't room for a 300px text column + the map's own
+  // Matches the guest site's shared tablet range (rentwise-guest/shared/hooks/
+  // useBreakpoints.ts) so this embed keeps the same side-by-side layout as
+  // desktop through the whole tablet range, just narrower, instead of falling
+  // back to a differently-shaped stacked layout partway through it.
+  const isTabletRange = windowWidth > 480 && windowWidth <= 1024;
+  const isDesktop = windowWidth > 1024;
+  // Mobile now copies the tablet structure wholesale (italic title above the
+  // map, white rounded map card, Market Hours + buttons row below) instead
+  // of its own bespoke layout -- every isTabletRange styling gate below is
+  // paired with isMobile too. Kept as a separate flag rather than editing
+  // isTabletRange's own definition so tablet's behavior/values stay untouched.
+  const isMobileOrTablet = isMobile || isTabletRange;
+  // A narrower fixed text column on tablet leaves the split layout room to
+  // survive down to a lower width than desktop needs.
+  const textColW = isTabletRange ? 220 : isDesktop ? 460 : 300;
+  // Below this there isn't room for the text column + the map's own
   // readable floor side by side, so the split layout collapses to a single
-  // stacked column (text above, map below) instead.
-  const isSplit = windowWidth > 980;
+  // stacked column instead. Tablet always stacks now (map on top, text
+  // below -- see the render order at the bottom of this component), rather
+  // than only falling back to it below a width threshold like desktop does.
+  const isSplit = isTabletRange ? false : windowWidth > 980;
   // Split mode: the map column only has whatever's left of the window after
   // the outer card's padding + the fixed-width text column + its gap.
-  const CARD_CHROME = 36 * 2 + 300 + 48;
-  const available = isSplit ? windowWidth - CARD_CHROME : windowWidth - 32;
-  // On phones, don't force the desktop-readability floor — let the map
-  // shrink to fit so the whole layout is visible without horizontal
-  // scrolling by default (tablet/desktop keep the floor since they have
-  // the width to spare and benefit from the extra legibility).
+  const CARD_CHROME = 36 * 2 + textColW + 48;
+  // The desktop/tablet card wraps the map in its own 20px padding on each
+  // side (see mapCard below) -- that has to be reserved here too, or
+  // blueprintWidth gets computed as if the map could use the full available
+  // width, leaving no room for that padding and squeezing/clipping it
+  // (looked fine at 1920 where there was slack to spare, but visibly lost
+  // its margin at 1440 before this was accounted for).
+  const MAP_CARD_PADDING = isMobileOrTablet ? 8 : 20;
+  const available =
+    (isSplit ? windowWidth - CARD_CHROME : windowWidth - 32) -
+    (isDesktop || isMobileOrTablet ? MAP_CARD_PADDING * 2 : 0) -
+    outerPaddingH * 2;
+  // Tablet gets its own (smaller) cap, independent of the `maxWidth` prop
+  // desktop/mobile still use.
+  const effectiveMaxWidth = isTabletRange ? Math.min(maxWidth, 960) : maxWidth;
+  // On phones/tablet, don't force the desktop-readability floor — let the
+  // map shrink to fit instead (desktop keeps the floor since it has the
+  // width to spare and benefits from the extra legibility).
   const blueprintWidth =
-    isMobile || isSplit
-      ? Math.min(available, maxWidth)
-      : Math.max(MIN_BLUEPRINT_WIDTH, Math.min(available, maxWidth));
+    isMobile
+      ? Math.min(available, effectiveMaxWidth) * 1.1
+      : isSplit || isTabletRange
+      ? Math.min(available, effectiveMaxWidth)
+      : Math.max(MIN_BLUEPRINT_WIDTH, Math.min(available, effectiveMaxWidth));
   const blueprintHeight = blueprintWidth / BLUEPRINT_ASPECT_RATIO;
 
-  const [showVacant, setShowVacant] = useState(false);
   const [stalls, setStalls] = useState<Stall[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedStall, setSelectedStall] = useState<Stall | null>(null);
+
+  // "View Stalls" button push-down feedback on actual press (not hover) --
+  // scales down slightly while held, springs back on release.
+  const viewStallsPressScale = useRef(new Animated.Value(1)).current;
+  const setViewStallsPressed = (pressed: boolean) => {
+    Animated.timing(viewStallsPressScale, {
+      toValue: pressed ? 0.95 : 1,
+      duration: pressed ? 80 : 150,
+      useNativeDriver: true,
+    }).start();
+  };
+
 
   // Mouse-hover tooltip (web only — native has no hover concept, so
   // hoveredStall simply never gets set on those platforms since the
@@ -98,18 +151,11 @@ export default function MarketMapEmbed({ maxWidth = 620, eyebrow, title, descrip
     height: number;
   } | null>(null);
   const hoverAnim = useRef(new Animated.Value(0)).current;
-  // Live pan/zoom transform (positionX/Y + scale) from TransformWrapper below.
-  // Trying to keep the tooltip INSIDE the zoomed content and counter-scale
-  // its own offsets to compensate kept drifting off-position in subtle,
-  // zoom-dependent ways (percentage-based CSS transforms don't resolve the
-  // way you'd expect once a scale is layered on top). The robust fix used by
-  // real map libraries: render the tooltip OUTSIDE the zoomed/panned content
-  // entirely (as a sibling of the reset-zoom button below, which already
-  // proves that positioning works unaffected by zoom), and compute its
-  // screen position ourselves from the hotspot's local blueprint-pixel
-  // coordinates using this same transform math the library applies:
-  // screen = position + local * scale.
-  const [mapTransform, setMapTransform] = useState({ positionX: 0, positionY: 0, scale: 1 });
+  // No pan/zoom anymore -- kept as an identity transform (rather than
+  // reworking the tooltip's screen-position math below to drop the
+  // position/scale terms entirely) since it's already expressed in these
+  // terms: screen = position + local * scale.
+  const mapTransform = { positionX: 0, positionY: 0, scale: 1 };
   // Real rendered size of the tooltip card, measured via onLayout below, so
   // the centering/lift offsets are computed from its true size instead of a
   // guess.
@@ -140,12 +186,19 @@ export default function MarketMapEmbed({ maxWidth = 620, eyebrow, title, descrip
   }, []);
 
   const stallsByName = new Map(stalls.map((s) => [normalizeStallName(s.name ?? ""), s]));
+  // Same binary occupied/vacant split used everywhere else in this file
+  // (isVacant = status !== "occupied") -- there's no third "reserved" status
+  // in the actual stall data, so the mobile Availability card only shows
+  // these two, computed live instead of hardcoded.
+  const occupiedCount = stalls.filter((s) => s.status?.toLowerCase() === "occupied").length;
+  const vacantCount = stalls.length - occupiedCount;
 
   const blueprintContent = (
     <View
       style={[
         styles.blueprintContainer,
         { width: blueprintWidth, height: blueprintHeight },
+        (isDesktop || isMobileOrTablet) && { borderRadius: 14 },
       ]}
     >
       <Image
@@ -182,18 +235,27 @@ export default function MarketMapEmbed({ maxWidth = 620, eyebrow, title, descrip
                   width: `${width}%`,
                   height: `${height}%`,
                   transform: hotspot.rotationDeg ? [{ rotate: `${hotspot.rotationDeg}deg` }] : undefined,
+                  // Only 2 colors now: occupied is green, vacant/unknown
+                  // both share the neutral grey that "unknown" used to be
+                  // the only user of.
                   backgroundColor:
-                    isVacant === true
-                      ? "rgba(76,175,80,0.55)"
-                      : isVacant === false
-                      ? "rgba(198,40,40,0.55)"
-                      : "rgba(120,120,120,0.4)",
+                    isVacant === false
+                      ? "rgba(76,175,80,0.3)"
+                      : "rgba(120,120,120,0.15)",
                 },
               ]}
-              onPress={() =>
-                setSelectedStall(stall ?? { id: hotspot.name, name: hotspot.name, status: "Unknown" })
-              }
-              {...(Platform.OS === "web"
+              // Stalls are desktop-only interactive for now -- tablet/mobile
+              // just see the static blueprint, no tap/hover on individual
+              // stalls.
+              disabled={!isDesktop}
+              onPress={() => {
+                setSelectedStall(stall ?? { id: hotspot.name, name: hotspot.name, status: "Unknown" });
+                // The hover tooltip and the tapped popup showing at once
+                // reads as a bug, not two features -- hide the tooltip
+                // the moment a stall is tapped, on every resolution.
+                setHoveredStall(null);
+              }}
+              {...(Platform.OS === "web" && isDesktop
                 ? {
                     onMouseEnter: () => handleHoverIn(hotspot, stall ?? null, left, top, width, height),
                     onMouseLeave: handleHoverOut,
@@ -209,7 +271,7 @@ export default function MarketMapEmbed({ maxWidth = 620, eyebrow, title, descrip
   // Rendered as a sibling of TransformComponent (outside the zoomed/panned
   // content), positioned via computed screen coordinates -- see the
   // mapTransform comment above for why it doesn't live inside blueprintContent.
-  const hoverTooltip = hoveredStall && (() => {
+  const hoverTooltip = hoveredStall && !selectedStall && (() => {
     const hs = hoveredStall.stall;
     const isVac = hs ? hs.status?.toLowerCase() !== "occupied" : null;
     const statusColor = isVac === true ? "#0E7C5A" : isVac === false ? "#C0392B" : "#787878";
@@ -291,156 +353,253 @@ export default function MarketMapEmbed({ maxWidth = 620, eyebrow, title, descrip
     );
   })();
 
+  // Mobile-only pill: icon-in-circle + label + trailing arrow, reused for
+  // both actions below with just the color/icon/label/onPress swapped.
+  const mobileActionBtn = (
+    key: string,
+    bg: string,
+    icon: keyof typeof Ionicons.glyphMap,
+    label: string,
+    onPress: () => void
+  ) => (
+    <Pressable key={key} onPress={onPress} style={[styles.mobileActionBtn, { backgroundColor: bg }]}>
+      <View style={styles.mobileActionBtnIconWrap}>
+        <Ionicons name={icon} size={18} color="#fff" />
+      </View>
+      <Text style={styles.mobileActionBtnText}>{label}</Text>
+      <Ionicons name="arrow-forward" size={18} color="#fff" />
+    </Pressable>
+  );
+
+  const viewStallsBtn = (
+    <Pressable
+      key="view-stalls"
+      onPress={() => router.push("/map-loading")}
+      onPressIn={() => setViewStallsPressed(true)}
+      onPressOut={() => setViewStallsPressed(false)}
+      style={isTabletRange && { flex: 1 }}
+    >
+      <Animated.View
+        style={[styles.actionBtnPrimary, { transform: [{ scale: viewStallsPressScale }] }]}
+      >
+        <Text style={styles.actionBtnPrimaryText}>View Stalls</Text>
+      </Animated.View>
+    </Pressable>
+  );
+
   const actions = (
-    <View style={styles.actionCol}>
-      <TouchableOpacity style={styles.actionBtnPrimary} onPress={() => setShowVacant(true)}>
-        <Ionicons name="eye-outline" size={16} color="#fff" />
-        <Text style={styles.actionBtnPrimaryText}>Vacant Stalls</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={styles.actionBtnOutline} onPress={() => router.push("/ar-view")}>
-        <Ionicons name="sparkles-outline" size={16} color={PRIMARY_DARK} />
-        <Text style={styles.actionBtnOutlineText}>AR Viewing</Text>
-      </TouchableOpacity>
+    <View
+      style={[
+        styles.actionCol,
+        isTabletRange && { flexDirection: "row", position: "relative", left: -20 },
+        isMobile && { alignItems: "stretch" },
+      ]}
+    >
+      {isMobile ? (
+        <>
+          {mobileActionBtn("view-stalls", PRIMARY_DARK, "storefront-outline", "View Stalls", () =>
+            router.push("/map-loading")
+          )}
+          {mobileActionBtn("ar-view", "#8B5E3C", "cube-outline", "Launch AR Viewing", () =>
+            router.push("/ar-view")
+          )}
+        </>
+      ) : (
+        <>
+          {!isDesktop && viewStallsBtn}
+          {!isDesktop && (
+            <TouchableOpacity
+              style={[styles.actionBtnOutline, isTabletRange && { flex: 1 }]}
+              onPress={() => router.push("/ar-view")}
+            >
+              <Ionicons name="sparkles-outline" size={16} color={PRIMARY_DARK} />
+              <Text style={styles.actionBtnOutlineText}>AR Viewing</Text>
+            </TouchableOpacity>
+          )}
+        </>
+      )}
+    </View>
+  );
+
+  const titleBlock = title && (
+    <Text
+      style={[
+        styles.blueprintTitle,
+        (isDesktop || isMobileOrTablet) && {
+          fontFamily: "PlayfairDisplay_400Regular_Italic",
+          fontWeight: "400",
+          color: PRIMARY_DARK,
+          fontSize: isDesktop ? 55 : 40,
+          // Sizes to the text's own natural width instead of being
+          // stretched (and force-wrapped) to the 300px text column --
+          // lets "Market Blueprint &" sit on one row without widening
+          // the column itself, which would shrink the map's available
+          // space.
+          alignSelf: "flex-start",
+          flexShrink: 0,
+          textAlign: isMobile ? "center" : "left",
+        },
+      ]}
+    >
+      {/* Tablet/mobile render this above the map (see the final return below)
+          as a single row -- the desktop-only "\n" line break baked into the
+          title string doesn't apply there, so it's collapsed to a space. */}
+      {isMobileOrTablet && typeof title === "string" ? title.replace(/\n/g, " ") : title}
+    </Text>
+  );
+
+  const textBlock = (
+    <>
+      {eyebrow && <Text style={styles.eyebrow}>{eyebrow}</Text>}
+      {!isMobileOrTablet && titleBlock}
+      {isDesktop && description && <Text style={styles.blueprintDesc}>{description}</Text>}
+      {(isDesktop || isMobileOrTablet) && (
+        <View
+          style={{
+            marginTop: isTabletRange ? -20 : isMobile ? 0 : 8,
+            marginBottom: 24,
+            paddingLeft: isTabletRange ? 45 : 0,
+          }}
+        >
+          <Text
+            style={{
+              color: PRIMARY,
+              fontSize: 12,
+              fontWeight: "700",
+              letterSpacing: 1.5,
+              textTransform: "uppercase",
+              marginBottom: 10,
+            }}
+          >
+            Market Hours
+          </Text>
+          <View style={{ flexDirection: "row", marginBottom: 8 }}>
+            <Text style={{ color: TEXT_DARK, fontSize: 14, fontWeight: "700", width: 80 }}>
+              Mon - Fri
+            </Text>
+            <Text style={{ color: PRIMARY_DARK, fontSize: 14, fontWeight: "700" }}>
+              04:00 AM - 08:00 PM
+            </Text>
+          </View>
+          <View style={{ flexDirection: "row" }}>
+            <Text style={{ color: TEXT_DARK, fontSize: 14, fontWeight: "700", width: 80 }}>
+              Sat - Sun
+            </Text>
+            <Text style={{ color: PRIMARY_DARK, fontSize: 14, fontWeight: "700" }}>
+              03:00 AM - 09:00 PM
+            </Text>
+          </View>
+        </View>
+      )}
+    </>
+  );
+
+  // Mobile-only: replaces the plain "Market Hours" text block above with two
+  // stacked cards (Availability, Operational Hours) -- doesn't touch
+  // textBlock itself so desktop/tablet's rendering stays exactly as-is.
+  const mobileHoursSection = (
+    <View style={{ gap: 16 }}>
+      <View style={styles.infoCard}>
+        <Text style={styles.infoCardEyebrow}>Availability</Text>
+        <View style={styles.infoCardRow}>
+          <View style={styles.infoCardRowLabel}>
+            <View style={[styles.infoDot, { backgroundColor: "#8B5E3C" }]} />
+            <Text style={styles.infoCardRowText}>Occupied</Text>
+          </View>
+          <Text style={styles.infoCardRowValue}>{occupiedCount}</Text>
+        </View>
+        <View style={[styles.infoCardRow, { marginBottom: 0 }]}>
+          <View style={styles.infoCardRowLabel}>
+            <View style={[styles.infoDot, { backgroundColor: PRIMARY_DARK }]} />
+            <Text style={styles.infoCardRowText}>Vacant</Text>
+          </View>
+          <Text style={styles.infoCardRowValue}>{vacantCount}</Text>
+        </View>
+      </View>
+
+      <View style={styles.infoCard}>
+        <Text style={styles.infoCardEyebrow}>Operational Hours</Text>
+        <View style={{ marginBottom: 12 }}>
+          <Text style={styles.infoCardMuted}>MON — FRI</Text>
+          <Text style={styles.infoCardBold}>04:00 AM — 08:00 PM</Text>
+        </View>
+        <View>
+          <Text style={styles.infoCardMuted}>SAT — SUN</Text>
+          <Text style={styles.infoCardBold}>03:00 AM — 09:00 PM</Text>
+        </View>
+      </View>
     </View>
   );
 
   const textCol = (
-    <View style={[styles.textCol, !isSplit && styles.textColStacked]}>
-      {eyebrow && <Text style={styles.eyebrow}>{eyebrow}</Text>}
-      {title && <Text style={styles.blueprintTitle}>{title}</Text>}
-      {description && <Text style={styles.blueprintDesc}>{description}</Text>}
-      {actions}
+    <View style={[styles.textCol, { width: textColW }, !isSplit && styles.textColStacked]}>
+      {isTabletRange ? (
+        // Tablet: buttons sit beside the text block instead of stacked
+        // below it.
+        <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 20 }}>
+          <View style={{ flex: 1 }}>{textBlock}</View>
+          <View style={{ flex: 1 }}>{actions}</View>
+        </View>
+      ) : isMobile ? (
+        // Mobile: Availability + Operational Hours cards, buttons below them.
+        <>
+          {mobileHoursSection}
+          <View style={{ marginTop: 20 }}>{actions}</View>
+        </>
+      ) : (
+        <>
+          {textBlock}
+          {actions}
+        </>
+      )}
     </View>
   );
 
   const mapColumn = (
-    <View style={[styles.mapCol, !isSplit && styles.mapColStacked]}>
+    <View style={[styles.mapCol, !isSplit && styles.mapColStacked, isMobile && { marginTop: -20 }]}>
       <View style={styles.mapCardOuter}>
-        <View style={styles.mapCard}>
-          {Platform.OS === "web" ? (
-            <TransformWrapper
-              // react-zoom-pan-pinch's centerOnInit only ever runs once, the
-              // moment this component first mounts -- on web, windowWidth
-              // (and therefore blueprintWidth) can still read a stale/wrong
-              // value on that very first render before hydration settles to
-              // the real viewport size, especially on phones. When that
-              // happens, centerOnInit computes its centering offset against
-              // the WRONG size and never gets a chance to redo it once the
-              // real size arrives a moment later, panning the content
-              // off-center so one edge renders outside the clipped wrapper
-              // bounds -- the "map looks cut off" symptom. Keying on the
-              // final computed size forces a clean remount (and a fresh
-              // centerOnInit) whenever it actually changes, instead of
-              // trusting the library to notice on its own.
-              key={`${Math.round(blueprintWidth)}x${Math.round(blueprintHeight)}`}
-              initialScale={MIN_ZOOM}
-              minScale={MIN_ZOOM}
-              maxScale={MAX_ZOOM}
-              centerOnInit
-              // Without this, panning while zoomed in and then zooming back
-              // out leaves the content at its old panned position instead of
-              // re-centering — since limitToBounds only clamps DURING a
-              // gesture, not retroactively once the content becomes smaller
-              // than the viewport again, the map ends up stuck off-center
-              // with empty space on one side and content clipped on the
-              // other. This re-centers it whenever zoomed out.
-              centerZoomedOut
-              limitToBounds
-              // Without this, the library allows dragging up to 100% of the
-              // wrapper size PAST the content's real edge (an elastic
-              // "rubber-band" overscroll that only snaps back on release) —
-              // that's what was showing as white space while actively
-              // dragging. Zeroing it out makes the boundary rigid: panning
-              // simply stops at the content edge, no overscroll at all.
-              autoAlignment={{ sizeX: 0, sizeY: 0 }}
-              doubleClick={{ mode: "toggle" }}
-              wheel={{ step: 0.2 }}
-              pinch={{ step: 5 }}
-              panning={{ velocityDisabled: true }}
-              onTransform={(_ref, state) =>
-                setMapTransform({ positionX: state.positionX, positionY: state.positionY, scale: state.scale })
-              }
-            >
-              {({ resetTransform }) => (
-                <>
-                  {/* contentStyle deliberately omitted — sizing it to the same
-                      fixed dimensions as wrapperStyle let the two drift out of
-                      sync during a live gesture, which let panning escape the
-                      map's actual bounds. Content sizes itself naturally from
-                      blueprintContent's own width/height instead. Panning at
-                      1x is a no-op on its own: limitToBounds + content being
-                      exactly wrapper-sized there means there's nowhere to pan
-                      to, so no need to actively disable it via state. */}
-                  {/* Rounding + clipping here too (not just on the parent
-                      mapCard) -- this is the actual DOM node whose bounds
-                      define the pan/zoom viewport, so relying only on an
-                      ancestor's overflow:hidden left the square corners of
-                      the content poking past the card's rounded ones. */}
-                  <TransformComponent
-                    wrapperStyle={{
-                      width: blueprintWidth,
-                      height: blueprintHeight,
-                      borderRadius: 18,
-                      overflow: "hidden",
-                    }}
-                  >
-                    {blueprintContent}
-                  </TransformComponent>
-
-                  <TouchableOpacity
-                    style={styles.resetZoomBtn}
-                    onPress={() => resetTransform()}
-                    accessibilityLabel="Reset zoom"
-                  >
-                    <Ionicons name="refresh" size={16} color="#0E7C5A" />
-                  </TouchableOpacity>
-
-                  {hoverTooltip}
-                </>
-              )}
-            </TransformWrapper>
-          ) : (
-            <ScrollView
-              horizontal
-              contentContainerStyle={styles.hScroll}
-              showsHorizontalScrollIndicator={false}
-            >
-              {blueprintContent}
-            </ScrollView>
-          )}
-        </View>
-
-        {(selectedStall || showVacant) && (
-          <View style={styles.popupOverlay}>
-            <ScrollView
-              style={styles.popupScroll}
-              contentContainerStyle={styles.popupScrollContent}
-              showsVerticalScrollIndicator={false}
-            >
-              {selectedStall && (
-                <StallPopup
-                  stall={selectedStall}
-                  onClose={() => setSelectedStall(null)}
-                  onViewOthers={() => {
-                    setSelectedStall(null);
-                    setShowVacant(true);
-                  }}
-                />
-              )}
-              {showVacant && <StallDetails onClose={() => setShowVacant(false)} />}
-            </ScrollView>
+        <View
+          style={[
+            styles.mapCard,
+            // Desktop, tablet, and mobile: wraps the (untouched) map in a
+            // white rounded card with breathing room around it, instead of
+            // the map filling the card edge-to-edge.
+            (isDesktop || isMobileOrTablet) && {
+              backgroundColor: "#fff",
+              borderWidth: 0,
+              borderRadius: 24,
+              padding: MAP_CARD_PADDING,
+            },
+          ]}
+        >
+          <View
+            style={{
+              width: blueprintWidth,
+              height: blueprintHeight,
+              overflow: "hidden",
+              borderRadius: isDesktop || isMobileOrTablet ? 14 : 0,
+            }}
+          >
+            {blueprintContent}
           </View>
-        )}
-      </View>
+          {Platform.OS === "web" && hoverTooltip}
 
-      <View style={styles.legendRow}>
-        <View style={styles.legendItem}>
-          <View style={styles.legendSwatchOccupied} />
-          <Text style={styles.legendLabel}>Occupied</Text>
-        </View>
-        <View style={styles.legendItem}>
-          <View style={styles.legendSwatchVacant} />
-          <Text style={styles.legendLabel}>Vacant</Text>
+          {/* Nested inside mapCard (not mapCardOuter) so the dim exactly
+              matches the map's own rendered bounds -- mapCardOuter is the
+              full flex column width, but mapCard is centered and often
+              narrower (capped at blueprintWidth), so anchoring the overlay
+              to the outer box left it wider than the map underneath it. */}
+          {selectedStall && (
+            <View style={[styles.popupOverlay, (isDesktop || isMobileOrTablet) && { borderRadius: 24 }]}>
+              <ScrollView
+                style={styles.popupScroll}
+                contentContainerStyle={styles.popupScrollContent}
+                showsVerticalScrollIndicator={false}
+              >
+                <StallPopup stall={selectedStall} onClose={() => setSelectedStall(null)} />
+              </ScrollView>
+            </View>
+          )}
         </View>
       </View>
     </View>
@@ -448,9 +607,26 @@ export default function MarketMapEmbed({ maxWidth = 620, eyebrow, title, descrip
 
   return (
     <View style={styles.wrap}>
-      <View style={[styles.card, isSplit ? styles.cardSplit : styles.cardStacked]}>
-        {textCol}
-        {mapColumn}
+      <View
+        style={[
+          styles.card,
+          isSplit ? styles.cardSplit : styles.cardStacked,
+          isTabletRange && { position: "relative", top: -40 },
+          isMobile && { position: "relative", top: -40 },
+        ]}
+      >
+        {isMobileOrTablet ? (
+          <>
+            <View style={{ width: "100%", marginBottom: 16, paddingLeft: isTabletRange ? 90 : 10, paddingTop: 20 }}>{titleBlock}</View>
+            {mapColumn}
+            {textCol}
+          </>
+        ) : (
+          <>
+            {textCol}
+            {mapColumn}
+          </>
+        )}
       </View>
     </View>
   );
@@ -461,14 +637,9 @@ const styles = StyleSheet.create({
   card: {
     width: "100%",
     maxWidth: 1500,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 28,
-    borderWidth: 1,
-    borderColor: "#EAEEE9",
-    padding: 36,
   },
   cardSplit: { flexDirection: "row", alignItems: "flex-start", gap: 48 },
-  cardStacked: { flexDirection: "column", padding: 24, gap: 28 },
+  cardStacked: { flexDirection: "column", gap: 28 },
   textCol: { width: 300, flexShrink: 0 },
   textColStacked: { width: "100%" },
   eyebrow: {
@@ -491,6 +662,52 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   actionCol: { gap: 12 },
+  // Mobile-only full-width pill: icon-in-circle, label, trailing arrow.
+  mobileActionBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    width: "100%",
+  },
+  mobileActionBtnIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.22)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  mobileActionBtnText: { flex: 1, color: "#fff", fontSize: 15, fontWeight: "700" },
+  // Mobile-only Availability/Operational Hours cards.
+  infoCard: {
+    backgroundColor: "#EFE8DE",
+    borderRadius: 16,
+    padding: 18,
+    width: "100%",
+  },
+  infoCardEyebrow: {
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+    color: TEXT_MUTED,
+    marginBottom: 12,
+  },
+  infoCardRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  infoCardRowLabel: { flexDirection: "row", alignItems: "center", gap: 8 },
+  infoDot: { width: 8, height: 8, borderRadius: 4 },
+  infoCardRowText: { fontSize: 14, color: TEXT_DARK, fontWeight: "600" },
+  infoCardRowValue: { fontSize: 14, color: TEXT_DARK, fontWeight: "700" },
+  infoCardMuted: { fontSize: 11, color: TEXT_MUTED, marginBottom: 3 },
+  infoCardBold: { fontSize: 14.5, color: TEXT_DARK, fontWeight: "700" },
   actionBtnPrimary: {
     flexDirection: "row",
     alignItems: "center",
@@ -515,33 +732,10 @@ const styles = StyleSheet.create({
   actionBtnOutlineText: { color: PRIMARY_DARK, fontSize: 15, fontWeight: "700" },
   mapCol: { flex: 1, minWidth: 0, alignItems: "center" },
   mapColStacked: { width: "100%" },
-  legendRow: {
-    flexDirection: "row",
-    gap: 20,
-    marginTop: 16,
-    alignSelf: "flex-start",
-  },
-  legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
-  legendSwatchOccupied: {
-    width: 12,
-    height: 12,
-    borderRadius: 3,
-    borderWidth: 1,
-    borderColor: "#C9D1CB",
-    backgroundColor: "#fff",
-  },
-  legendSwatchVacant: {
-    width: 12,
-    height: 12,
-    borderRadius: 3,
-    backgroundColor: "rgba(76,175,80,0.55)",
-  },
-  legendLabel: { fontSize: 12.5, color: TEXT_MUTED, fontWeight: "600" },
   mapCardOuter: {
     position: "relative",
     alignSelf: "center",
     width: "100%",
-    borderRadius: 18,
     // Clips the popup to the map card's own box — it should never visually
     // spill onto the "Vacant Stalls"/"AR Viewing" buttons below.
     overflow: "hidden",
@@ -551,15 +745,12 @@ const styles = StyleSheet.create({
     borderWidth: MAP_CARD_BORDER_WIDTH,
     borderStyle: "solid",
     borderColor: "#E4E8E5",
-    borderRadius: 18,
     padding: 0,
     overflow: "hidden",
     backgroundColor: CARD_BG,
   },
-  hScroll: { flexGrow: 1, alignItems: "center", justifyContent: "center" },
   blueprintContainer: {
     position: "relative",
-    borderRadius: 16,
     overflow: "hidden",
   },
   blueprintImage: { width: "100%", height: "100%" },
@@ -654,25 +845,6 @@ const styles = StyleSheet.create({
   hoverDimsLabel: { fontSize: 8.5, fontWeight: "700", color: "#8A928C", letterSpacing: 0.5, marginBottom: 2 },
   hoverDimsValue: { fontSize: 13, fontWeight: "800", color: "#171A19" },
 
-  resetZoomBtn: {
-    position: "absolute",
-    top: 10,
-    right: 10,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#E7E5DE",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 50,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 3,
-  },
   popupOverlay: {
     position: "absolute",
     top: 0,
@@ -680,7 +852,6 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: "rgba(0,0,0,0.3)",
-    borderRadius: 20,
     padding: 16,
     zIndex: 500,
   },
