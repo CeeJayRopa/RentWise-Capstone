@@ -117,7 +117,7 @@ export const sendPaymentReminders = onSchedule(
             'Thank you.',
           ].join('\n');
 
-          // ── Send with retry ───────────────────────────────────────────────
+          // ── Send SMS (best-effort) ─────────────────────────────────────────
           try {
             await sendSMSWithRetry(tenant.contactNo, message, tenantId);
 
@@ -128,20 +128,30 @@ export const sendPaymentReminders = onSchedule(
               sentAt: FieldValue.serverTimestamp(),
             });
 
-            // Push in-app notification to Firestore
-            await db.collection('notifications').add({
-              userId: tenantId,
-              message: `Hi ${fullName}, your ${schedule} rent for Stall ${stall.spaceId} is due today. Please settle your payment with the admin at the Admin Office.`,
-              read: false,
-              createdAt: FieldValue.serverTimestamp(),
-            });
-
             console.log(
               `[SUCCESS] Reminder sent to ${fullName} at ${tenant.contactNo}`,
             );
           } catch {
             // [FAILED] is already logged inside sendSMSWithRetry
             // Do not rethrow — continue processing remaining tenants
+          }
+
+          // ── Push in-app notification (independent of SMS outcome) ──────────
+          // SMS and the in-app notification are two separate delivery
+          // channels for the same reminder -- the SMS provider failing
+          // (bad number, provider outage, quota) shouldn't silently take
+          // the in-app notification down with it. This used to live inside
+          // the SMS try block above, so any SMS failure meant the tenant
+          // never saw the reminder in-app either.
+          try {
+            await db.collection('notifications').add({
+              userId: tenantId,
+              message: `Hi ${fullName}, your ${schedule} rent for Stall ${stall.spaceId} is due today. Please settle your payment with the admin at the Admin Office.`,
+              read: false,
+              createdAt: FieldValue.serverTimestamp(),
+            });
+          } catch (notifError) {
+            console.log(`[NOTIF FAILED] Could not create in-app notification for ${tenantId}`, notifError);
           }
         } catch (tenantError) {
           // One tenant failing must not stop the rest

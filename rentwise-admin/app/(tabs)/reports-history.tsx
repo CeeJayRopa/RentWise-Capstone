@@ -89,7 +89,13 @@ export default function ReportsHistory() {
   const homeRef = useRef<View>(null);
   const helpRef = useRef<View>(null);
   const summaryRef = useRef<View>(null);
-  const listRef = useRef<View>(null);
+  // The list itself is unbounded height (as many cards as fit the screen),
+  // which made the tour's spotlight cover a different number of cards on
+  // every device. Spotlighting just the first two cards (span from
+  // firstCardRef's top to secondCardRef's bottom, via HelpStep's endRef)
+  // gives a fixed-size example that looks the same everywhere.
+  const firstCardRef = useRef<View>(null);
+  const secondCardRef = useRef<View>(null);
 
   const fetchData = async () => {
     const uid = auth.currentUser?.uid;
@@ -167,7 +173,7 @@ export default function ReportsHistory() {
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
     { key: "summary", ref: summaryRef, title: "Pending / Approved", description: "How many of your submitted reports are still pending the owner's review, and how many were approved this week.", edgeInset: "top", insetXPercent: 0.03, heightTrimPercent: 0.108, nudgeYPercent: 0.018 },
-    { key: "list", ref: listRef, title: "Report history", description: "Every update report you've submitted to the owner, grouped by date, with its current approval status.", edgeInset: "top", clipBottom: 15, nudgeYPercent: 0.05 },
+    { key: "list", ref: firstCardRef, endRef: secondCardRef, title: "Report history", description: "Every update report you've submitted to the owner, grouped by date, with its current approval status.", edgeInset: "top", hideDebug: true },
   ];
 
   return (
@@ -221,33 +227,41 @@ export default function ReportsHistory() {
           title="No reports sent yet."
         />
       ) : (
-        <View style={{ flex: 1 }} ref={listRef} collapsable={false}>
+        <View style={{ flex: 1 }}>
         <FlatList
           data={groups}
           keyExtractor={(item) => item.date}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.emerald} />}
-          renderItem={({ item: group }) => (
+          renderItem={({ item: group, index: groupIndex }) => (
             <View>
               <Text style={styles.groupDate}>{group.date}</Text>
-              {group.items.map((r) => {
+              {group.items.map((r, itemIndex) => {
                 const status = statusLabel(r.approvalStatus);
+                // Flat position of this card across ALL groups (not just
+                // this one) -- used to tag only the very first two cards
+                // for the HelpTour spotlight, see firstCardRef/secondCardRef.
+                const globalIndex =
+                  groups.slice(0, groupIndex).reduce((sum, g) => sum + g.items.length, 0) + itemIndex;
+                const cardRef = globalIndex === 0 ? firstCardRef : globalIndex === 1 ? secondCardRef : undefined;
                 return (
-                  <Card key={r.id} style={styles.reportCard}>
-                    <View style={styles.reportRow}>
-                      <View style={styles.cardIcon}>
-                        <FileText size={16} color={colors.emerald} />
+                  <View key={r.id} ref={cardRef} collapsable={false}>
+                    <Card style={styles.reportCard}>
+                      <View style={styles.reportRow}>
+                        <View style={styles.cardIcon}>
+                          <FileText size={16} color={colors.emerald} />
+                        </View>
+                        <Text style={styles.reportTitle} numberOfLines={1}>
+                          {reportTitle(r)}
+                        </Text>
+                        <Badge label={status} tone={statusTone(status)} />
                       </View>
-                      <Text style={styles.reportTitle} numberOfLines={1}>
-                        {reportTitle(r)}
+                      <Text style={styles.reportDesc} numberOfLines={1}>
+                        {reportDesc(r)}
                       </Text>
-                      <Badge label={status} tone={statusTone(status)} />
-                    </View>
-                    <Text style={styles.reportDesc} numberOfLines={1}>
-                      {reportDesc(r)}
-                    </Text>
-                  </Card>
+                    </Card>
+                  </View>
                 );
               })}
             </View>

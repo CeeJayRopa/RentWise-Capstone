@@ -75,6 +75,10 @@ export type HelpStep = {
   // staying a fixed size regardless of device/content. Adds on top of
   // heightTrim if both are set.
   heightTrimPercent?: number;
+  // Suppresses the __DEV__ calibration readout for just this step -- once a
+  // step's spotlight is confirmed correct, the numbers are only noise for
+  // whoever's using the tour to check on other, still-uncalibrated steps.
+  hideDebug?: boolean;
 };
 
 type Rect = { x: number; y: number; width: number; height: number };
@@ -513,14 +517,15 @@ export default function HelpTour({
             </Text>
             <Text style={styles.tooltipTitle}>{displayedText?.title ?? displayStep.title}</Text>
             <Text style={styles.tooltipDesc}>{displayedText?.description ?? displayStep.description}</Text>
-            {__DEV__ && (
+            {__DEV__ && !displayStep.hideDebug && (
               // Temporary calibration readout -- remove once the spotlight
               // offset is confirmed correct across devices. Screenshot this
               // to report exact numbers instead of eyeballing pixel gaps.
               <Text style={styles.debugText} selectable>
                 step={displayStep.key} rect.x={Math.round(displayRect?.x ?? -1)} rect.y={Math.round(displayRect?.y ?? -1)}{"\n"}
                 rect.w={Math.round(displayRect?.width ?? -1)} rect.h={Math.round(displayRect?.height ?? -1)}{"\n"}
-                spot.x={Math.round(spot.x)} spot.y={Math.round(spot.y)} spot.w={Math.round(spot.width)}{"\n"}
+                endRect.y={displayEndRect ? Math.round(displayEndRect.y) : -1} endRect.h={displayEndRect ? Math.round(displayEndRect.height) : -1}{"\n"}
+                spot.x={Math.round(spot.x)} spot.y={Math.round(spot.y)} spot.w={Math.round(spot.width)} spot.h={Math.round(spot.height)}{"\n"}
                 insets.top={Math.round(insets.top)} insets.bottom={Math.round(insets.bottom)} screenH={Math.round(screenHeight)}{"\n"}
                 containerH={containerHeight != null ? Math.round(containerHeight) : -1}
               </Text>
