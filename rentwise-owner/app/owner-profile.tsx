@@ -13,6 +13,9 @@ import {
   Easing,
   Modal,
   FlatList,
+  KeyboardAvoidingView,
+  Keyboard,
+  Platform,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
@@ -97,6 +100,9 @@ export default function OwnerProfile() {
   const pwSectionRef = useRef<View>(null);
   const secQSectionRef = useRef<View>(null);
   const scrollRef = useRef<ScrollView>(null);
+  // Tracks whichever section's field was focused most recently, so the
+  // keyboardDidShow re-scroll (below) knows what to bring back into view.
+  const focusedSectionRef = useRef<React.RefObject<View | null> | null>(null);
 
   // Scrolls a given section into view and gives the ScrollView time to
   // settle before HelpTour measures it — otherwise a section below the
@@ -115,6 +121,23 @@ export default function OwnerProfile() {
         () => resolve(),
       );
     });
+
+  // Called from a field's onFocus -- scrolls that field's section up so it
+  // isn't hidden behind the keyboard while the owner is typing.
+  function scrollFieldIntoView(sectionRef: React.RefObject<View | null>) {
+    focusedSectionRef.current = sectionRef;
+    scrollSectionIntoView(sectionRef);
+  }
+
+  useEffect(() => {
+    // onFocus fires before the keyboard has finished animating in, so a
+    // fixed delay can land short if the OS is still resizing the window --
+    // scroll again once the keyboard is confirmed fully shown.
+    const sub = Keyboard.addListener("keyboardDidShow", () => {
+      if (focusedSectionRef.current) scrollSectionIntoView(focusedSectionRef.current);
+    });
+    return () => sub.remove();
+  }, []);
 
   const tourSteps: HelpStep[] = [
     { key: "fields", ref: fieldsRef, title: "Your details", description: "Your last name, first name, login username, and contact number.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(fieldsRef) },
@@ -436,6 +459,10 @@ export default function OwnerProfile() {
         </View>
       </LinearGradient>
 
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
       <ScrollView
         ref={scrollRef}
         style={styles.scroll}
@@ -467,7 +494,7 @@ export default function OwnerProfile() {
             onChangeText={(t) => { setLastName(t); if (lastNameError) setLastNameError(""); }}
             placeholder="Last name"
             placeholderTextColor={colors.textMuted}
-            onFocus={() => setFocusedField("lastName")}
+            onFocus={() => { setFocusedField("lastName"); scrollFieldIntoView(fieldsRef); }}
             onBlur={() => setFocusedField(null)}
             editable={isEditing}
           />
@@ -485,7 +512,7 @@ export default function OwnerProfile() {
             onChangeText={(t) => { setFirstName(t); if (firstNameError) setFirstNameError(""); }}
             placeholder="First name"
             placeholderTextColor={colors.textMuted}
-            onFocus={() => setFocusedField("firstName")}
+            onFocus={() => { setFocusedField("firstName"); scrollFieldIntoView(fieldsRef); }}
             onBlur={() => setFocusedField(null)}
             editable={isEditing}
           />
@@ -507,7 +534,7 @@ export default function OwnerProfile() {
               placeholder="username"
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
-              onFocus={() => setFocusedField("username")}
+              onFocus={() => { setFocusedField("username"); scrollFieldIntoView(fieldsRef); }}
               onBlur={() => setFocusedField(null)}
               editable={isEditing}
             />
@@ -536,7 +563,7 @@ export default function OwnerProfile() {
                 placeholderTextColor={colors.textMuted}
                 keyboardType="phone-pad"
                 maxLength={11}
-                onFocus={() => setFocusedField("contactNo")}
+                onFocus={() => { setFocusedField("contactNo"); scrollFieldIntoView(fieldsRef); }}
                 onBlur={() => setFocusedField(null)}
                 editable={isEditing}
               />
@@ -606,6 +633,7 @@ export default function OwnerProfile() {
               placeholder="Current password"
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
+              onFocus={() => scrollFieldIntoView(pwSectionRef)}
               editable={pwEditing}
             />
             <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowOldPass((v) => !v)} activeOpacity={0.7}>
@@ -625,6 +653,7 @@ export default function OwnerProfile() {
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               maxLength={12}
+              onFocus={() => scrollFieldIntoView(pwSectionRef)}
               editable={pwEditing}
             />
             <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowNewPass((v) => !v)} activeOpacity={0.7}>
@@ -645,6 +674,7 @@ export default function OwnerProfile() {
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               maxLength={12}
+              onFocus={() => scrollFieldIntoView(pwSectionRef)}
               editable={pwEditing}
             />
             <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowConfirmPass((v) => !v)} activeOpacity={0.7}>
@@ -731,6 +761,7 @@ export default function OwnerProfile() {
                 placeholder="Your answer"
                 placeholderTextColor={colors.textMuted}
                 autoCapitalize="none"
+                onFocus={() => scrollFieldIntoView(secQSectionRef)}
                 editable={secEditing}
               />
             </View>
@@ -748,6 +779,7 @@ export default function OwnerProfile() {
                   placeholder="Confirm it's you"
                   placeholderTextColor={colors.textMuted}
                   autoCapitalize="none"
+                  onFocus={() => scrollFieldIntoView(secQSectionRef)}
                 />
                 <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowSecCurrentPass((v) => !v)} activeOpacity={0.7}>
                   {showSecCurrentPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
@@ -812,6 +844,7 @@ export default function OwnerProfile() {
           )}
         </Pressable>
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Security question picker */}
       <Modal visible={pickerSlot !== null} transparent animationType="fade" onRequestClose={() => setPickerSlot(null)}>
@@ -1061,7 +1094,7 @@ const styles = StyleSheet.create({
 
   input: {
     width: "100%",
-    backgroundColor: colors.mist,
+    backgroundColor: colors.white,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
@@ -1079,7 +1112,7 @@ const styles = StyleSheet.create({
   },
 
   inputReadOnly: {
-    backgroundColor: colors.white,
+    backgroundColor: colors.mist,
     borderColor: colors.border,
     borderRadius: radius.xl,
     color: colors.ink,
@@ -1098,7 +1131,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.mist,
+    backgroundColor: colors.white,
     overflow: "hidden",
     marginBottom: spacing.lg,
   },
@@ -1109,7 +1142,7 @@ const styles = StyleSheet.create({
   },
 
   rowFieldReadOnly: {
-    backgroundColor: colors.white,
+    backgroundColor: colors.mist,
     borderColor: colors.border,
     borderRadius: radius.xl,
   },
@@ -1154,9 +1187,7 @@ const styles = StyleSheet.create({
   },
 
   phonePrefixReadOnly: {
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: colors.border,
   },
 
   phonePrefixText: {
@@ -1185,7 +1216,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.mist,
+    backgroundColor: colors.white,
     marginBottom: spacing.xs,
   },
 

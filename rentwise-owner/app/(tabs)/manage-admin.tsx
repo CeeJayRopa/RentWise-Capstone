@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -12,9 +12,12 @@ import {
   Animated,
   Easing,
   Modal,
+  KeyboardAvoidingView,
+  Keyboard,
+  Platform,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -111,6 +114,27 @@ export default function ManageAdmin() {
         () => resolve(),
       );
     });
+
+  // Tracks whichever section's field was focused most recently, so the
+  // keyboardDidShow re-scroll (below) knows what to bring back into view.
+  const focusedSectionRef = useRef<React.RefObject<View | null> | null>(null);
+
+  // Called from a field's onFocus -- scrolls that field's section up so it
+  // isn't hidden behind the keyboard while typing.
+  function scrollFieldIntoView(sectionRef: React.RefObject<View | null>) {
+    focusedSectionRef.current = sectionRef;
+    scrollSectionIntoView(sectionRef);
+  }
+
+  useEffect(() => {
+    // onFocus fires before the keyboard has finished animating in, so a
+    // fixed delay can land short if the OS is still resizing the window --
+    // scroll again once the keyboard is confirmed fully shown.
+    const sub = Keyboard.addListener("keyboardDidShow", () => {
+      if (focusedSectionRef.current) scrollSectionIntoView(focusedSectionRef.current);
+    });
+    return () => sub.remove();
+  }, []);
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
@@ -241,6 +265,20 @@ export default function ManageAdmin() {
     setPwEditing(true);
   }
 
+  // This screen lives on a tab, so it stays mounted (not unmounted) when
+  // the owner navigates elsewhere -- without this, coming back would find
+  // Edit Profile / Change Password still open exactly as they were left.
+  // Resetting both sections when the screen loses focus keeps it "closed"
+  // every time it's returned to, same as landing on it fresh.
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        handleCancelEditProfile();
+        handleCancelPasswordEdit();
+      };
+    }, [original]),
+  );
+
   const handleSave = async () => {
     if (!admin) return;
     if (!auth.currentUser?.uid) return;
@@ -367,6 +405,10 @@ export default function ManageAdmin() {
           <Text style={styles.emptyText}>No admin account found.</Text>
         </View>
       ) : (
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+        >
         <ScrollView
           ref={scrollRef}
           style={styles.scroll}
@@ -398,7 +440,7 @@ export default function ManageAdmin() {
               onChangeText={(t) => { setLastName(t); if (lastNameError) setLastNameError(""); }}
               placeholder="Last name"
               placeholderTextColor={colors.textMuted}
-              onFocus={() => setFocusedField("lastName")}
+              onFocus={() => { setFocusedField("lastName"); scrollFieldIntoView(profileFieldsRef); }}
               onBlur={() => setFocusedField(null)}
               editable={isEditing}
             />
@@ -416,7 +458,7 @@ export default function ManageAdmin() {
               onChangeText={(t) => { setFirstName(t); if (firstNameError) setFirstNameError(""); }}
               placeholder="First name"
               placeholderTextColor={colors.textMuted}
-              onFocus={() => setFocusedField("firstName")}
+              onFocus={() => { setFocusedField("firstName"); scrollFieldIntoView(profileFieldsRef); }}
               onBlur={() => setFocusedField(null)}
               editable={isEditing}
             />
@@ -438,7 +480,7 @@ export default function ManageAdmin() {
                 placeholder="username"
                 placeholderTextColor={colors.textMuted}
                 autoCapitalize="none"
-                onFocus={() => setFocusedField("username")}
+                onFocus={() => { setFocusedField("username"); scrollFieldIntoView(profileFieldsRef); }}
                 onBlur={() => setFocusedField(null)}
                 editable={isEditing}
               />
@@ -467,7 +509,7 @@ export default function ManageAdmin() {
                   placeholderTextColor={colors.textMuted}
                   keyboardType="phone-pad"
                   maxLength={11}
-                  onFocus={() => setFocusedField("contactNo")}
+                  onFocus={() => { setFocusedField("contactNo"); scrollFieldIntoView(profileFieldsRef); }}
                   onBlur={() => setFocusedField(null)}
                   editable={isEditing}
                 />
@@ -537,6 +579,7 @@ export default function ManageAdmin() {
                 placeholder="Current password"
                 placeholderTextColor={colors.textMuted}
                 autoCapitalize="none"
+                onFocus={() => scrollFieldIntoView(pwFieldsRef)}
                 editable={pwEditing}
               />
               <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowOldPass((v) => !v)} activeOpacity={0.7}>
@@ -556,6 +599,7 @@ export default function ManageAdmin() {
                 placeholderTextColor={colors.textMuted}
                 autoCapitalize="none"
                 maxLength={12}
+                onFocus={() => scrollFieldIntoView(pwFieldsRef)}
                 editable={pwEditing}
               />
               <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowNewPass((v) => !v)} activeOpacity={0.7}>
@@ -576,6 +620,7 @@ export default function ManageAdmin() {
                 placeholderTextColor={colors.textMuted}
                 autoCapitalize="none"
                 maxLength={12}
+                onFocus={() => scrollFieldIntoView(pwFieldsRef)}
                 editable={pwEditing}
               />
               <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowConfirmPass((v) => !v)} activeOpacity={0.7}>
@@ -638,6 +683,7 @@ export default function ManageAdmin() {
             </View>
           </Card>
         </ScrollView>
+        </KeyboardAvoidingView>
       )}
 
       {/* Toast */}
@@ -814,7 +860,7 @@ const styles = StyleSheet.create({
 
   input: {
     width: "100%",
-    backgroundColor: colors.mist,
+    backgroundColor: colors.white,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
@@ -832,7 +878,7 @@ const styles = StyleSheet.create({
   },
 
   inputReadOnly: {
-    backgroundColor: colors.white,
+    backgroundColor: colors.mist,
     borderColor: colors.border,
     borderRadius: radius.xl,
     color: colors.ink,
@@ -851,7 +897,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.mist,
+    backgroundColor: colors.white,
     overflow: "hidden",
     marginBottom: spacing.lg,
   },
@@ -862,13 +908,13 @@ const styles = StyleSheet.create({
   },
 
   rowFieldReadOnly: {
-    backgroundColor: colors.white,
+    backgroundColor: colors.mist,
     borderColor: colors.border,
     borderRadius: radius.xl,
   },
 
   profileFieldReadOnly: {
-    backgroundColor: colors.white,
+    backgroundColor: colors.mist,
     borderColor: colors.border,
     borderRadius: radius.xl,
   },
@@ -913,9 +959,7 @@ const styles = StyleSheet.create({
   },
 
   phonePrefixReadOnly: {
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: colors.border,
   },
 
   phonePrefixText: {
@@ -931,7 +975,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.mist,
+    backgroundColor: colors.white,
     overflow: "hidden",
   },
 
@@ -944,7 +988,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.mist,
+    backgroundColor: colors.white,
     marginBottom: spacing.xs,
   },
 

@@ -1,6 +1,8 @@
-import { View, Text, Image, StyleSheet, Pressable, Alert } from "react-native";
+import { View, Text, Image, StyleSheet, Pressable, Alert, Platform } from "react-native";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
+import * as FileSystem from "expo-file-system/legacy";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Check, Clock, XCircle, Download } from "lucide-react-native";
 import { computePeriodCharge, consecutivePeriodsEnding, periodLabel } from "../../services/billingSchedule";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
@@ -118,6 +120,50 @@ function buildReceiptHtml(data: any, breakdown: BreakdownLine[], amountPaid: num
   `;
 }
 
+// Cached once granted, so returning tenants aren't asked to pick a folder
+// on every single receipt download -- only the first time, or again if
+// that permission ever gets revoked (handled below).
+const DOWNLOAD_DIR_KEY = "receiptDownloadDirectoryUri";
+
+async function getDownloadDirectoryUri(forceReprompt = false): Promise<string | null> {
+  if (!forceReprompt) {
+    const cached = await AsyncStorage.getItem(DOWNLOAD_DIR_KEY);
+    if (cached) return cached;
+  }
+  const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+  if (!permissions.granted) return null;
+  await AsyncStorage.setItem(DOWNLOAD_DIR_KEY, permissions.directoryUri);
+  return permissions.directoryUri;
+}
+
+async function downloadPdfOnAndroid(sourceUri: string, fileName: string) {
+  const dirUri = await getDownloadDirectoryUri();
+  if (!dirUri) {
+    Alert.alert("Permission needed", "Choose a folder to save the receipt to continue.");
+    return;
+  }
+
+  const base64 = await FileSystem.readAsStringAsync(sourceUri, { encoding: FileSystem.EncodingType.Base64 });
+
+  try {
+    const destUri = await FileSystem.StorageAccessFramework.createFileAsync(dirUri, fileName, "application/pdf");
+    await FileSystem.writeAsStringAsync(destUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+  } catch {
+    // The cached folder permission may have been revoked since it was
+    // granted -- clear it and ask once more before giving up.
+    await AsyncStorage.removeItem(DOWNLOAD_DIR_KEY);
+    const retryDirUri = await getDownloadDirectoryUri(true);
+    if (!retryDirUri) {
+      Alert.alert("Permission needed", "Choose a folder to save the receipt to continue.");
+      return;
+    }
+    const destUri = await FileSystem.StorageAccessFramework.createFileAsync(retryDirUri, fileName, "application/pdf");
+    await FileSystem.writeAsStringAsync(destUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+  }
+
+  Alert.alert("Downloaded", "Receipt saved to your chosen folder.");
+}
+
 // Shared by the receipt content and the standalone action bar below, so a
 // caller can render the buttons OUTSIDE a ScrollView (fixed at the bottom
 // of a modal) while the content itself scrolls independently.
@@ -135,13 +181,26 @@ function useReceiptDerived(data: any, billing: any) {
   async function handleDownloadPdf() {
     try {
       const { uri } = await Print.printToFileAsync({ html: buildReceiptHtml(data, breakdown, amountPaid) });
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, {
-          mimeType: "application/pdf",
-          dialogTitle: "RentWise Receipt",
-        });
+      const fileName = `RentWise-Receipt-${data.receiptNo ?? Date.now()}`;
+
+      if (Platform.OS === "android") {
+        // Android has no "Downloads" folder write access without the user
+        // picking a directory via the Storage Access Framework -- this
+        // actually writes the PDF to disk (a real download), instead of
+        // just handing the file off to another app via the share sheet.
+        await downloadPdfOnAndroid(uri, fileName);
       } else {
-        Alert.alert("Saved", "PDF generated, but sharing isn't available on this device.");
+        // iOS has no equivalent direct-write API for a user-visible folder;
+        // the share sheet's "Save to Files" is the standard way to save a
+        // document to the device there.
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(uri, {
+            mimeType: "application/pdf",
+            dialogTitle: "RentWise Receipt",
+          });
+        } else {
+          Alert.alert("Saved", "PDF generated, but sharing isn't available on this device.");
+        }
       }
     } catch (err) {
       console.log("[receipt pdf] error:", err);

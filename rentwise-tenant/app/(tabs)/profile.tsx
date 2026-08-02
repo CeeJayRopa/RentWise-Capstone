@@ -11,6 +11,9 @@ import {
   Modal,
   TouchableOpacity,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Keyboard,
+  Platform,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -120,6 +123,41 @@ export default function Profile() {
         () => resolve(),
       );
     });
+
+  // Tracks whichever section's field was focused most recently, so the
+  // keyboardDidShow re-scroll (below) knows what to bring back into view.
+  const focusedSectionRef = useRef<React.RefObject<View | null> | null>(null);
+
+  // Locks manual scrolling for as long as a field is focused -- the field
+  // being typed into is already brought into view automatically, so a
+  // stray manual scroll mid-typing would just fight that and confuse
+  // which field is actually focused.
+  const [scrollLocked, setScrollLocked] = useState(false);
+
+  // Called from a field's onFocus -- scrolls that field's section up so it
+  // isn't hidden behind the keyboard while typing, and locks manual scroll
+  // until the keyboard is dismissed.
+  function scrollFieldIntoView(sectionRef: React.RefObject<View | null>) {
+    focusedSectionRef.current = sectionRef;
+    setScrollLocked(true);
+    scrollSectionIntoView(sectionRef);
+  }
+
+  useEffect(() => {
+    // onFocus fires before the keyboard has finished animating in, so a
+    // fixed delay can land short if the OS is still resizing the window --
+    // scroll again once the keyboard is confirmed fully shown.
+    const showSub = Keyboard.addListener("keyboardDidShow", () => {
+      if (focusedSectionRef.current) scrollSectionIntoView(focusedSectionRef.current);
+    });
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => {
+      setScrollLocked(false);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const tourSteps: HelpStep[] = [
     { key: "identity", ref: identityRef, title: "Your space", description: "Your space ID and how long you've been a tenant.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(identityRef) },
@@ -439,12 +477,17 @@ export default function Profile() {
       </LinearGradient>
 
       {/* Body */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
       <ScrollView
         ref={scrollRef}
         style={styles.body}
         contentContainerStyle={[styles.bodyContent, { paddingBottom: insets.bottom + 20 }]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        scrollEnabled={!scrollLocked}
       >
         {/* Identity card */}
         <View style={styles.identityCard} ref={identityRef} collapsable={false}>
@@ -505,7 +548,7 @@ export default function Profile() {
             placeholder="Enter last name"
             placeholderTextColor={colors.textMuted}
             editable={isEditing}
-            onFocus={() => setLastNameFocused(true)}
+            onFocus={() => { setLastNameFocused(true); scrollFieldIntoView(formRef); }}
             onBlur={() => setLastNameFocused(false)}
           />
 
@@ -521,7 +564,7 @@ export default function Profile() {
             placeholder="Enter first name"
             placeholderTextColor={colors.textMuted}
             editable={isEditing}
-            onFocus={() => setFirstNameFocused(true)}
+            onFocus={() => { setFirstNameFocused(true); scrollFieldIntoView(formRef); }}
             onBlur={() => setFirstNameFocused(false)}
           />
 
@@ -543,7 +586,7 @@ export default function Profile() {
               keyboardType="phone-pad"
               maxLength={10}
               editable={isEditing}
-              onFocus={() => setContactFocused(true)}
+              onFocus={() => { setContactFocused(true); scrollFieldIntoView(formRef); }}
               onBlur={() => setContactFocused(false)}
             />
           </View>
@@ -577,7 +620,7 @@ export default function Profile() {
               autoCapitalize="none"
               keyboardType="email-address"
               editable={isEditing && !original.personalEmail}
-              onFocus={() => setEmailFocused(true)}
+              onFocus={() => { setEmailFocused(true); scrollFieldIntoView(emailSectionRef); }}
               onBlur={() => setEmailFocused(false)}
             />
 
@@ -690,6 +733,7 @@ export default function Profile() {
               placeholder="Current password"
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
+              onFocus={() => scrollFieldIntoView(pwSectionRef)}
               editable={pwEditing}
             />
             <Pressable onPress={() => setShowOldPass((v) => !v)} hitSlop={8}>
@@ -715,6 +759,7 @@ export default function Profile() {
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               maxLength={12}
+              onFocus={() => scrollFieldIntoView(pwSectionRef)}
               editable={pwEditing}
             />
             <Pressable onPress={() => setShowNewPass((v) => !v)} hitSlop={8}>
@@ -740,6 +785,7 @@ export default function Profile() {
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               maxLength={12}
+              onFocus={() => scrollFieldIntoView(pwSectionRef)}
               editable={pwEditing}
             />
             <Pressable onPress={() => setShowConfirmPass((v) => !v)} hitSlop={8}>
@@ -821,6 +867,7 @@ export default function Profile() {
         </Pressable>
 
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {showToast && (
         <Animated.View style={[styles.overlay, { opacity: toastOpacity }]}>

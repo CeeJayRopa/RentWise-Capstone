@@ -12,6 +12,9 @@ import {
   Alert,
   ScrollView,
   Modal,
+  KeyboardAvoidingView,
+  Keyboard,
+  Platform,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
@@ -54,6 +57,49 @@ export default function AdminProfile() {
   const editBtnRef = useRef<View>(null);
   const logoutBtnRef = useRef<View>(null);
   const scrollRef = useRef<ScrollView>(null);
+  const scrollViewHeightRef = useRef(0);
+
+  // Always scrolls to the SAME fixed target -- the Edit/Save button below
+  // the fields -- same approach as the login screen, so the field being
+  // typed into (plus the button beneath it) stays clear of the keyboard.
+  // The target is computed against the ScrollView's OWN current height
+  // (shrunk by KeyboardAvoidingView once the keyboard is up), not a
+  // guessed pixel constant.
+  function scrollToRevealForm() {
+    setTimeout(() => {
+      const target = editBtnRef.current;
+      const scroller = scrollRef.current;
+      if (!target || !scroller) return;
+      target.measureLayout(
+        scroller as unknown as React.ComponentRef<typeof View>,
+        (_x: number, y: number, _w: number, h: number) => {
+          const bottomPadding = 24;
+          const desired = y + h + bottomPadding - scrollViewHeightRef.current;
+          scroller.scrollTo({ y: Math.max(desired, 0), animated: true });
+        },
+        () => {},
+      );
+    }, 100);
+  }
+
+  useEffect(() => {
+    // onFocus fires before the keyboard has finished animating in, so a
+    // fixed delay can land short if the OS is still resizing the window --
+    // scroll again once the keyboard is confirmed fully shown.
+    const showSub = Keyboard.addListener("keyboardDidShow", () => {
+      scrollToRevealForm();
+    });
+    // Once the keyboard is dismissed (done typing / tapped away), scroll
+    // back up to where the page started instead of leaving it stuck down
+    // near the button.
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => {
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   // Scrolls a given section into view and gives the ScrollView time to
   // settle before HelpTour measures it — otherwise a section below the
@@ -234,6 +280,10 @@ export default function AdminProfile() {
       </LinearGradient>
 
       {/* BODY */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
       <ScrollView
         ref={scrollRef}
         style={styles.body}
@@ -243,6 +293,7 @@ export default function AdminProfile() {
         ]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        onLayout={(e) => { scrollViewHeightRef.current = e.nativeEvent.layout.height; }}
       >
         {/* IDENTITY CARD */}
         <Card style={styles.identityCard}>
@@ -251,7 +302,7 @@ export default function AdminProfile() {
             <Text style={styles.identityName}>
               {firstName} {lastName}
             </Text>
-            <Text style={styles.identityRole}>Super Admin</Text>
+            <Text style={styles.identityRole}>Market Administrator</Text>
           </View>
         </Card>
 
@@ -270,7 +321,7 @@ export default function AdminProfile() {
             onChangeText={setLastName}
             placeholder="Enter last name"
             placeholderTextColor={colors.textMuted}
-            onFocus={() => setFocusedField("lastName")}
+            onFocus={() => { setFocusedField("lastName"); scrollToRevealForm(); }}
             onBlur={() => setFocusedField(null)}
             editable={isEditing && !saving}
           />
@@ -287,7 +338,7 @@ export default function AdminProfile() {
             onChangeText={setFirstName}
             placeholder="Enter first name"
             placeholderTextColor={colors.textMuted}
-            onFocus={() => setFocusedField("firstName")}
+            onFocus={() => { setFocusedField("firstName"); scrollToRevealForm(); }}
             onBlur={() => setFocusedField(null)}
             editable={isEditing && !saving}
           />
@@ -312,7 +363,7 @@ export default function AdminProfile() {
               keyboardType="phone-pad"
               placeholder="9XXXXXXXXX"
               placeholderTextColor={colors.textMuted}
-              onFocus={() => setFocusedField("contactNo")}
+              onFocus={() => { setFocusedField("contactNo"); scrollToRevealForm(); }}
               onBlur={() => setFocusedField(null)}
               editable={isEditing && !saving}
             />
@@ -394,6 +445,7 @@ export default function AdminProfile() {
         </Pressable>
         </View>
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* SUCCESS TOAST */}
       {saved && (
