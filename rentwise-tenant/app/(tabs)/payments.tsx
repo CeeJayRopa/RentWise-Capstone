@@ -71,7 +71,6 @@ export default function PaymentsScreen() {
 
   const [tenant, setTenant] = useState<any>(null);
   const [stall, setStall] = useState<any>(null);
-  const [stallId, setStallId] = useState<string | null>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -211,7 +210,6 @@ export default function PaymentsScreen() {
       const tenantData = await getTenantData(uid);
       if (!tenantData) return;
       setTenant(tenantData);
-      setStallId(tenantData.stallId ?? null);
     } catch (error) {
       console.log("PROFILE ERROR:", error);
     }
@@ -219,17 +217,24 @@ export default function PaymentsScreen() {
 
   // Live (not one-time) so a change to the stall's location info (used for
   // receipts below) shows up immediately, same reasoning as the tenant
-  // listener below.
+  // listener below. Keyed off `tenant?.stallId` (itself kept live by the
+  // users/{uid} listener right below) rather than a separately-fetched
+  // value -- otherwise, if an admin moves this tenant to a different stall
+  // while this screen is already open and focused, this would keep
+  // watching the OLD stall doc until the tenant next re-focuses the tab,
+  // and a payment made in that window would get tagged with the old
+  // building/space even though its stallId field was already correct.
   useEffect(() => {
-    if (!stallId) {
+    const currentStallId = tenant?.stallId;
+    if (!currentStallId) {
       setStall(null);
       return;
     }
-    const unsubscribe = onSnapshot(doc(db, "stalls", stallId), (snap) => {
+    const unsubscribe = onSnapshot(doc(db, "stalls", currentStallId), (snap) => {
       if (snap.exists()) setStall({ id: snap.id, ...snap.data() });
     });
     return unsubscribe;
-  }, [stallId]);
+  }, [tenant?.stallId]);
 
   // Live (not one-time) so a rate/schedule change the admin makes shows up
   // immediately even if this screen is already open and focused, instead

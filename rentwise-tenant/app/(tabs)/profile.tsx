@@ -172,16 +172,24 @@ export default function Profile() {
     loadProfile();
   }, []);
 
-  // Live-syncs market category with the tenant's own doc (the source of
-  // truth for their billing terms and category) — the admin can change it
-  // from Edit Rental Info and it shows up here (and vice versa) without
-  // needing to reopen the page. Skipped while actively editing so an
-  // incoming update can't clobber a selection the tenant hasn't saved yet.
+  // Live-syncs market category AND stallId with the tenant's own doc (the
+  // source of truth for their billing terms, category, and current stall) —
+  // the admin can change either from Edit Rental Info/a relocation and it
+  // shows up here (and vice versa) without needing to reopen the page.
+  // stallId in particular used to only ever be set once on mount, so a
+  // tenant relocated to a different stall while this screen was already
+  // open would keep showing (and, if they edited category, keep WRITING
+  // to) their old stall until they fully reloaded the app. Category-sync is
+  // skipped while actively editing so an incoming update can't clobber a
+  // selection the tenant hasn't saved yet; stallId always stays current
+  // regardless, since it's not something the tenant edits themselves here.
   useEffect(() => {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (!snap.exists() || isEditingRef.current) return;
+      if (!snap.exists()) return;
+      setStallId((snap.data().stallId as string) || "");
+      if (isEditingRef.current) return;
       const liveCategory = ((snap.data().category as string) || "") as MarketCategory | "";
       setCategory(liveCategory);
       setOriginal((prev) => ({ ...prev, category: liveCategory }));

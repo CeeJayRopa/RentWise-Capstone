@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   StyleSheet,
+  Modal,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { collection, getDocs, query, where } from "firebase/firestore";
@@ -52,6 +53,7 @@ export default function TenantRelocation() {
   const [selectedStall, setSelectedStall] = useState<StallOption | null>(null);
   const [loading, setLoading] = useState(true);
   const [restoring, setRestoring] = useState(false);
+  const [showTransferConfirm, setShowTransferConfirm] = useState(false);
   const [tourVisible, setTourVisible] = useState(false);
   const stallListRef = useRef<View>(null);
   const restoreBtnRef = useRef<View>(null);
@@ -109,22 +111,28 @@ export default function TenantRelocation() {
     }
   };
 
-  const handleRestore = async () => {
+  const handleConfirmPress = () => {
     if (!selectedStall) {
       Alert.alert("No Stall Selected", "Please select an available stall first.");
       return;
     }
+    setShowTransferConfirm(true);
+  };
+
+  const performRelocation = async (transferPreviousInfo: boolean) => {
+    if (!selectedStall) return;
+    setShowTransferConfirm(false);
     setRestoring(true);
     try {
       if (isMove) {
-        await relocateActiveTenant(uid, stallId, selectedStall.id);
+        await relocateActiveTenant(uid, stallId, selectedStall.id, transferPreviousInfo);
         Alert.alert(
           "Tenant Moved",
           `${fullName} has been moved to Building ${selectedStall.buildingNumber} · Space ${selectedStall.spaceId}.`,
-          [{ text: "OK", onPress: () => router.replace("/tenant-management") }],
+          [{ text: "OK", onPress: () => router.replace("/building") }],
         );
       } else {
-        await restoreTenantToNewStall(uid, selectedStall.id);
+        await restoreTenantToNewStall(uid, selectedStall.id, transferPreviousInfo);
         Alert.alert(
           "Account Restored",
           `${fullName} has been assigned to Building ${selectedStall.buildingNumber} · Space ${selectedStall.spaceId}.`,
@@ -259,13 +267,69 @@ export default function TenantRelocation() {
         <View ref={restoreBtnRef} collapsable={false}>
         <Button
           label={isMove ? "Move Tenant" : "Restore account"}
-          onPress={handleRestore}
+          onPress={handleConfirmPress}
           disabled={!selectedStall || restoring}
           loading={restoring}
           style={styles.moveBtn}
         />
         </View>
       </View>
+
+      {/* TRANSFER PREVIOUS RENTAL INFO CONFIRMATION */}
+      <Modal
+        visible={showTransferConfirm}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!restoring) setShowTransferConfirm(false); }}
+      >
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => { if (!restoring) setShowTransferConfirm(false); }}
+          />
+          <View style={styles.modalCard}>
+            <View style={styles.modalTitleBar}>
+              <Text style={styles.modalTitle}>Transfer previous rental info?</Text>
+            </View>
+            <View style={styles.modalBody}>
+              <Text style={styles.modalMessage}>
+                Would you like to transfer the previous rental info (Market Category and
+                Payment Schedule) to the new stall?
+              </Text>
+              <View style={styles.modalBtns}>
+                <Pressable
+                  style={({ pressed }) => [styles.modalBtn, styles.modalBtnOutline, pressed && styles.modalBtnOutlinePressed]}
+                  onPress={() => performRelocation(false)}
+                  disabled={restoring}
+                >
+                  {({ pressed }) => (
+                    <Text style={[styles.modalBtnOutlineText, pressed && styles.modalBtnOutlineTextPressed]}>No</Text>
+                  )}
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.modalBtn,
+                    styles.modalBtnPrimary,
+                    restoring && styles.modalBtnDisabled,
+                    pressed && !restoring && styles.modalBtnPrimaryPressed,
+                  ]}
+                  onPress={() => performRelocation(true)}
+                  disabled={restoring}
+                >
+                  {({ pressed }) =>
+                    restoring ? (
+                      <ActivityIndicator color={colors.white} size="small" />
+                    ) : (
+                      <Text style={[styles.modalBtnPrimaryText, pressed && styles.modalBtnPrimaryTextPressed]}>Yes</Text>
+                    )
+                  }
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
     </View>
@@ -459,5 +523,99 @@ const styles = StyleSheet.create({
   moveBtn: {
     borderRadius: radius.pill,
     backgroundColor: colors.ink,
+  },
+
+  // ── Transfer-info confirmation modal ─────────────────────────────────────────
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: colors.overlay,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: spacing.xxl,
+  },
+
+  modalCard: {
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    width: "100%",
+    overflow: "hidden",
+    ...shadow.raised,
+  },
+
+  modalTitleBar: {
+    backgroundColor: colors.emeraldSoft,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.lg,
+  },
+
+  modalTitle: {
+    fontSize: fontSize.lg - 1,
+    fontFamily: fontFamily.bold,
+    color: colors.emerald,
+  },
+
+  modalBody: {
+    padding: spacing.xl,
+  },
+
+  modalMessage: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+    lineHeight: 22,
+    marginBottom: spacing.xl,
+  },
+
+  modalBtns: {
+    flexDirection: "row",
+    gap: spacing.sm + 2,
+  },
+
+  modalBtn: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    borderRadius: radius.sm,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 44,
+  },
+
+  modalBtnOutline: {
+    borderWidth: 1.5,
+    borderColor: colors.emerald,
+  },
+  modalBtnOutlinePressed: {
+    backgroundColor: colors.emerald,
+  },
+
+  modalBtnOutlineText: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
+  },
+  modalBtnOutlineTextPressed: {
+    color: colors.white,
+  },
+
+  modalBtnPrimary: {
+    backgroundColor: colors.emerald,
+    ...shadow.button,
+  },
+  modalBtnPrimaryPressed: {
+    backgroundColor: colors.white,
+  },
+
+  modalBtnPrimaryText: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.semibold,
+    color: colors.white,
+  },
+  modalBtnPrimaryTextPressed: {
+    color: colors.emerald,
+  },
+
+  modalBtnDisabled: {
+    opacity: 0.5,
   },
 });

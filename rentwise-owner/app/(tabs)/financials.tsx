@@ -19,6 +19,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
   getDocs,
+  onSnapshot,
   query,
   where,
   Timestamp,
@@ -196,14 +197,28 @@ export default function Financials() {
 
   useFocusEffect(useCallback(() => { if (!checking) fetchData(); }, [checking, dateFilter]));
 
+  // Live-refreshes the tenant/stall join whenever a tenant doc changes (e.g.
+  // an admin relocates one to a different stall) -- without this, a tenant
+  // relocated while this screen is already open and focused would keep
+  // showing their OLD building/space until the owner switches tabs or pulls
+  // to refresh. `silent` skips the full-screen loading spinner since this
+  // fires in the background, not from an explicit user action.
+  useEffect(() => {
+    if (checking) return;
+    const unsub = onSnapshot(query(collection(db, "users"), where("role", "==", "tenant")), () => {
+      fetchData(true);
+    });
+    return unsub;
+  }, [checking, dateFilter]);
+
   const onRefresh = async () => {
     setRefreshing(true);
     await fetchData();
     setRefreshing(false);
   };
 
-  const fetchData = async () => {
-    setLoading(true);
+  const fetchData = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [usersSnap, stallsSnap, paymentsSnap] = await Promise.all([
         getDocs(query(collection(db, "users"), where("role", "==", "tenant"))),
@@ -301,7 +316,7 @@ export default function Financials() {
     } catch (err) {
       console.error("OWNER FINANCIALS ERROR:", err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 

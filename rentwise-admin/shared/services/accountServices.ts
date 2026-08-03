@@ -413,6 +413,7 @@ export const relocateActiveTenant = async (
   uid: string,
   oldStallId: string,
   newStallId: string,
+  transferPreviousInfo: boolean,
 ): Promise<void> => {
   const userSnap = await getDoc(doc(db, "users", uid));
   if (!userSnap.exists()) throw new Error("User not found.");
@@ -421,11 +422,23 @@ export const relocateActiveTenant = async (
 
   const newStallSnap = await getDoc(doc(db, "stalls", newStallId));
   if (!newStallSnap.exists()) throw new Error("Selected stall not found.");
-  if (newStallSnap.data().status !== "unoccupied") {
+  const newStallData = newStallSnap.data();
+  if (newStallData.status !== "unoccupied") {
     throw new Error("Selected stall is no longer available.");
   }
-  const newSpaceNo = String(newStallSnap.data().spaceId ?? newStallId);
-  const newBuildingNo = String(newStallSnap.data().buildingNumber ?? "");
+  const newSpaceNo = String(newStallData.spaceId ?? newStallId);
+  const newBuildingNo = String(newStallData.buildingNumber ?? "");
+
+  // Rental Rate always adopts the new stall's own listed price -- unlike
+  // category/paymentSchedule below, this is never carried over from the
+  // tenant's previous stall, regardless of transferPreviousInfo.
+  const resolvedPrice = Number(newStallData.price ?? 0);
+  const resolvedPaymentSchedule = transferPreviousInfo
+    ? (user.paymentSchedule ?? "monthly")
+    : (newStallData.paymentSchedule ?? "monthly");
+  const resolvedCategory = transferPreviousInfo
+    ? (user.category ?? "")
+    : (newStallData.category ?? "");
 
   let oldSpaceNo = "";
   let oldBuildingNo = "";
@@ -444,20 +457,22 @@ export const relocateActiveTenant = async (
 
   const batch = writeBatch(db);
 
-  batch.update(doc(db, "users", uid), { stallId: newStallId });
+  // Price always follows the new stall; category/paymentSchedule follow
+  // whichever source the admin picked in the transfer-info confirmation.
+  batch.update(doc(db, "users", uid), {
+    stallId: newStallId,
+    price: resolvedPrice,
+    paymentSchedule: resolvedPaymentSchedule,
+    category: resolvedCategory,
+  });
 
-  // The tenant's own price/paymentSchedule/category (their billing terms)
-  // travel with them automatically since they live on `users/{uid}`, which
-  // isn't touched here beyond `stallId` -- this just syncs the new stall's
-  // denormalized display copy (guest app) to match, so it doesn't keep
-  // showing whoever rented this stall before.
   batch.update(doc(db, "stalls", newStallId), {
     tenantId: uid,
     tenantName,
     status: "occupied",
-    price: user.price ?? 0,
-    paymentSchedule: user.paymentSchedule ?? "monthly",
-    category: user.category ?? "",
+    price: resolvedPrice,
+    paymentSchedule: resolvedPaymentSchedule,
+    category: resolvedCategory,
   });
 
   if (oldStallId && oldStallBelongsToTenant) {
@@ -487,6 +502,7 @@ export const relocateActiveTenant = async (
 export const restoreTenantToNewStall = async (
   uid: string,
   newStallId: string,
+  transferPreviousInfo: boolean,
 ): Promise<void> => {
   const archiveSnap = await getDoc(doc(db, "archives", uid));
   if (!archiveSnap.exists()) throw new Error("Archive record not found.");
@@ -497,17 +513,28 @@ export const restoreTenantToNewStall = async (
   // Verify the new stall is still unoccupied before committing
   const stallSnap = await getDoc(doc(db, "stalls", newStallId));
   if (!stallSnap.exists()) throw new Error("Selected stall not found.");
-  if (stallSnap.data().status !== "unoccupied") {
+  const stallData = stallSnap.data();
+  if (stallData.status !== "unoccupied") {
     throw new Error("Selected stall is no longer available.");
   }
 
-  const newSpaceNo = String(stallSnap.data().spaceId ?? newStallId);
+  const newSpaceNo = String(stallData.spaceId ?? newStallId);
 
   // The tenant's own price/paymentSchedule/category never left their doc
-  // while archived -- fetched here just to sync the new stall's
-  // denormalized display copy (guest app) to match.
+  // while archived -- fetched here for the transfer-info resolution below.
   const userSnap = await getDoc(doc(db, "users", uid));
   const user = userSnap.exists() ? userSnap.data() : {};
+
+  // Rental Rate always adopts the new stall's own listed price -- unlike
+  // category/paymentSchedule below, this is never carried over from the
+  // tenant's previous stall, regardless of transferPreviousInfo.
+  const resolvedPrice = Number(stallData.price ?? 0);
+  const resolvedPaymentSchedule = transferPreviousInfo
+    ? (user.paymentSchedule ?? "monthly")
+    : (stallData.paymentSchedule ?? "monthly");
+  const resolvedCategory = transferPreviousInfo
+    ? (user.category ?? "")
+    : (stallData.category ?? "");
 
   // Re-enable login before committing the restore.
   await setTenantAccountDisabled(uid, false);
@@ -517,15 +544,18 @@ export const restoreTenantToNewStall = async (
   batch.update(doc(db, "users", uid), {
     status: "active",
     stallId: newStallId,
+    price: resolvedPrice,
+    paymentSchedule: resolvedPaymentSchedule,
+    category: resolvedCategory,
   });
 
   batch.update(doc(db, "stalls", newStallId), {
     tenantId: uid,
     tenantName,
     status: "occupied",
-    price: user.price ?? 0,
-    paymentSchedule: user.paymentSchedule ?? "monthly",
-    category: user.category ?? "",
+    price: resolvedPrice,
+    paymentSchedule: resolvedPaymentSchedule,
+    category: resolvedCategory,
   });
 
   batch.delete(doc(db, "archives", uid));

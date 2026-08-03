@@ -72,6 +72,7 @@ export const restoreTenant = async (uid: string): Promise<void> => {
 export const restoreTenantToNewStall = async (
   uid: string,
   newStallId: string,
+  transferPreviousInfo: boolean,
 ): Promise<void> => {
   const archiveSnap = await getDoc(doc(db, "archives", uid));
   if (!archiveSnap.exists()) throw new Error("Archive record not found.");
@@ -82,9 +83,26 @@ export const restoreTenantToNewStall = async (
   // Verify the new stall is still unoccupied before committing
   const stallSnap = await getDoc(doc(db, "stalls", newStallId));
   if (!stallSnap.exists()) throw new Error("Selected stall not found.");
-  if (stallSnap.data().status !== "unoccupied") {
+  const stallData = stallSnap.data();
+  if (stallData.status !== "unoccupied") {
     throw new Error("Selected stall is no longer available.");
   }
+
+  // The tenant's own price/paymentSchedule/category never left their doc
+  // while archived -- fetched here for the transfer-info resolution below.
+  const userSnap = await getDoc(doc(db, "users", uid));
+  const user = userSnap.exists() ? userSnap.data() : {};
+
+  // Rental Rate always adopts the new stall's own listed price -- unlike
+  // category/paymentSchedule below, this is never carried over from the
+  // tenant's previous stall, regardless of transferPreviousInfo.
+  const resolvedPrice = Number(stallData.price ?? 0);
+  const resolvedPaymentSchedule = transferPreviousInfo
+    ? (user.paymentSchedule ?? "monthly")
+    : (stallData.paymentSchedule ?? "monthly");
+  const resolvedCategory = transferPreviousInfo
+    ? (user.category ?? "")
+    : (stallData.category ?? "");
 
   // Re-enable login before committing the restore.
   await setTenantAccountDisabled(uid, false);
@@ -94,12 +112,18 @@ export const restoreTenantToNewStall = async (
   batch.update(doc(db, "users", uid), {
     status: "active",
     stallId: newStallId,
+    price: resolvedPrice,
+    paymentSchedule: resolvedPaymentSchedule,
+    category: resolvedCategory,
   });
 
   batch.update(doc(db, "stalls", newStallId), {
     tenantId: uid,
     tenantName,
     status: "occupied",
+    price: resolvedPrice,
+    paymentSchedule: resolvedPaymentSchedule,
+    category: resolvedCategory,
   });
 
   batch.delete(doc(db, "archives", uid));
