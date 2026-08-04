@@ -1,0 +1,23 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // AR catalog models/thumbnails for the guest site -- public,
+    // unauthenticated read (the guest app has no login at all), matching
+    // the same "public read, no client write" model already used by the
+    // `arObjects` Firestore collection these files are referenced from.
+    // Uploads are managed entirely out-of-band (Firebase Console / a seed
+    // script), not through any app -- no client anywhere writes here.
+    match /ar-models/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Everything else stays locked down -- no other path in the bucket is
+    // used by any client today (payment receipts go to Cloudinary, avatars
+    // are initials-only, no profile-photo upload exists anywhere in the
+    // tenant/admin/owner apps).
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

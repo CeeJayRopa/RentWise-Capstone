@@ -9,7 +9,9 @@ import {
   Easing,
   ActivityIndicator,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
+  ScrollView,
   StyleSheet,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
@@ -29,6 +31,18 @@ import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared
 
 type Schedule = "daily" | "weekly" | "semi-monthly" | "monthly";
 type MarketCategory = "Wet Market" | "Dry Market" | "Home Essential";
+
+// The "Rental Rate" field on this screen is monthly-first (what the admin
+// actually enters/sees), but `price` in Firestore has always been -- and
+// everywhere else in the codebase still is -- a DAILY rate (tenant billing,
+// admin financials, the reminder Cloud Function, the public guest listing,
+// etc). This flat 30/15/7-day model converts at exactly the two boundaries
+// (load and save) so nothing downstream has to change; it deliberately
+// doesn't use the real day-count for the current month the way the actual
+// billing math elsewhere does, since it's just a live estimate while typing.
+const DAYS_PER_MONTH = 30;
+const DAYS_PER_HALF_MONTH = 15;
+const DAYS_PER_WEEK = 7;
 
 export default function EditRentalInfo() {
   const insets = useSafeAreaInsets();
@@ -96,6 +110,45 @@ export default function EditRentalInfo() {
   const rateRef = useRef<View>(null);
   const scheduleRef = useRef<View>(null);
   const modifyBtnRef = useRef<View>(null);
+  const scrollRef = useRef<ScrollView>(null);
+
+  // Scrolls a given section into view -- reused both for the HelpTour (see
+  // onBeforeMeasure below) and for keyboard-aware scrolling on field focus,
+  // same pattern as the other screens in this app.
+  const scrollSectionIntoView = (targetRef: React.RefObject<View | null>) =>
+    new Promise<void>((resolve) => {
+      const scrollNode = scrollRef.current?.getNativeScrollRef?.();
+      if (!scrollNode || !targetRef.current) { resolve(); return; }
+      targetRef.current.measureLayout(
+        scrollNode as any,
+        (_x: number, y: number) => {
+          scrollRef.current?.scrollTo({ y: Math.max(0, y - 100), animated: true });
+          setTimeout(resolve, 400);
+        },
+        () => resolve(),
+      );
+    });
+
+  // Tracks whichever section's field was focused most recently, so the
+  // keyboardDidShow re-scroll (below) knows what to bring back into view.
+  const focusedSectionRef = useRef<React.RefObject<View | null> | null>(null);
+
+  // Called from a field's onFocus -- scrolls that field's section up so it
+  // isn't hidden behind the keyboard while typing.
+  function scrollFieldIntoView(sectionRef: React.RefObject<View | null>) {
+    focusedSectionRef.current = sectionRef;
+    scrollSectionIntoView(sectionRef);
+  }
+
+  useEffect(() => {
+    // onFocus fires before the keyboard has finished animating in, so a
+    // fixed delay can land short if the OS is still resizing the window --
+    // scroll again once the keyboard is confirmed fully shown.
+    const sub = Keyboard.addListener("keyboardDidShow", () => {
+      if (focusedSectionRef.current) scrollSectionIntoView(focusedSectionRef.current);
+    });
+    return () => sub.remove();
+  }, []);
 
   const tourSteps: HelpStep[] = [
     { key: "stall", ref: stallPillRef, title: "Stall", description: "The stall whose rental info you're editing.", edgeInset: "top" },
@@ -190,7 +243,7 @@ export default function EditRentalInfo() {
       setSpaceId((data.spaceId as string) ?? "");
       setLength(String(data.length ?? ""));
       setWidth(String(data.width ?? ""));
-      setRentalRate(String(data.price ?? ""));
+      setRentalRate(String((data.price ?? 0) * DAYS_PER_MONTH));
       setPaymentSchedule(
         ((data.paymentSchedule as string) || "monthly") as Schedule,
       );
@@ -199,7 +252,7 @@ export default function EditRentalInfo() {
       originalRef.current = {
         length: String(data.length ?? ""),
         width: String(data.width ?? ""),
-        rentalRate: String(data.price ?? ""),
+        rentalRate: String((data.price ?? 0) * DAYS_PER_MONTH),
         paymentSchedule: ((data.paymentSchedule as string) || "monthly") as Schedule,
         category: loadedCategory,
       };
@@ -215,13 +268,13 @@ export default function EditRentalInfo() {
           // of truth once occupied -- the stall's copy (just read above)
           // is only a denormalized display value that can lag behind if
           // this tenant relocated here after it was last edited.
-          setRentalRate(String(td.price ?? data.price ?? ""));
+          setRentalRate(String((td.price ?? data.price ?? 0) * DAYS_PER_MONTH));
           setPaymentSchedule(((td.paymentSchedule as string) || (data.paymentSchedule as string) || "monthly") as Schedule);
           const tenantCategory = ((td.category as string) || loadedCategory) as MarketCategory | "";
           setCategory(tenantCategory);
           originalRef.current = {
             ...originalRef.current!,
-            rentalRate: String(td.price ?? data.price ?? ""),
+            rentalRate: String((td.price ?? data.price ?? 0) * DAYS_PER_MONTH),
             paymentSchedule: ((td.paymentSchedule as string) || (data.paymentSchedule as string) || "monthly") as Schedule,
             category: tenantCategory,
           };
@@ -292,17 +345,22 @@ export default function EditRentalInfo() {
       // display copy (the guest app reads a stall's price/category
       // regardless of who's renting it) -- but when occupied, the TENANT's
       // own doc below is the real source of truth for billing.
+      // rentalRate is the MONTHLY figure the admin sees/typed -- convert
+      // back to the daily rate `price` has always stored, so every other
+      // screen/function reading it keeps working unchanged.
+      const dailyPrice = parseFloat(rentalRate) / DAYS_PER_MONTH;
+
       await updateDoc(doc(db, "stalls", stallId), {
         length: parseFloat(length),
         width: parseFloat(width),
-        price: parseFloat(rentalRate), // field in Firestore is `price`, not `rentalRate`
+        price: dailyPrice, // field in Firestore is `price`, not `rentalRate`
         paymentSchedule,
         category,
       });
 
       if (tenantId) {
         await updateDoc(doc(db, "users", tenantId), {
-          price: parseFloat(rentalRate),
+          price: dailyPrice,
           paymentSchedule,
           category,
         });
@@ -366,6 +424,20 @@ export default function EditRentalInfo() {
     }
   };
 
+  // Live per-schedule preview shown inside the Payment Schedule buttons --
+  // recomputes on every keystroke since it's derived straight from the
+  // (monthly) rentalRate state. Same flat 30/15/7-day model as the
+  // load/save conversion above, not the real day-count for the current
+  // month (see DAYS_PER_MONTH comment).
+  const monthlyRateForPreview = parseFloat(rentalRate) || 0;
+  const dailyRateForPreview = monthlyRateForPreview / DAYS_PER_MONTH;
+  const scheduleAmounts: Record<Schedule, number> = {
+    daily: dailyRateForPreview,
+    weekly: dailyRateForPreview * DAYS_PER_WEEK,
+    "semi-monthly": dailyRateForPreview * DAYS_PER_HALF_MONTH,
+    monthly: monthlyRateForPreview,
+  };
+
   if (checking) {
     return (
       <View style={styles.fullCenter}>
@@ -398,11 +470,15 @@ export default function EditRentalInfo() {
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
-        <View
-          style={[
+        <ScrollView
+          ref={scrollRef}
+          style={{ flex: 1 }}
+          contentContainerStyle={[
             styles.scrollContent,
-            { flex: 1, paddingBottom: insets.bottom + 32 },
+            { paddingBottom: insets.bottom + 32 },
           ]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
           {loading ? (
             <View style={styles.centeredBox}>
@@ -488,7 +564,7 @@ export default function EditRentalInfo() {
                         setLength(t);
                         if (lengthError) setLengthError("");
                       }}
-                      onFocus={() => setFocusedField("length")}
+                      onFocus={() => { setFocusedField("length"); scrollFieldIntoView(dimensionsRef); }}
                       onBlur={() => setFocusedField(null)}
                       editable={isEditing && !saving && !saved}
                     />
@@ -517,7 +593,7 @@ export default function EditRentalInfo() {
                         setWidth(t);
                         if (widthError) setWidthError("");
                       }}
-                      onFocus={() => setFocusedField("width")}
+                      onFocus={() => { setFocusedField("width"); scrollFieldIntoView(dimensionsRef); }}
                       onBlur={() => setFocusedField(null)}
                       editable={isEditing && !saving && !saved}
                     />
@@ -548,7 +624,7 @@ export default function EditRentalInfo() {
                       setRentalRate(t);
                       if (rateError) setRateError("");
                     }}
-                    onFocus={() => setFocusedField("rate")}
+                    onFocus={() => { setFocusedField("rate"); scrollFieldIntoView(rateRef); }}
                     onBlur={() => setFocusedField(null)}
                     editable={isEditing && !saving && !saved}
                   />
@@ -582,6 +658,14 @@ export default function EditRentalInfo() {
                       >
                         {s.charAt(0).toUpperCase() + s.slice(1)}
                       </Text>
+                      <Text
+                        style={[
+                          styles.scheduleTabAmount,
+                          paymentSchedule === s && styles.scheduleTabAmountActive,
+                        ]}
+                      >
+                        {scheduleAmounts[s].toFixed(2)}
+                      </Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -603,7 +687,7 @@ export default function EditRentalInfo() {
               </View>
             </>
           )}
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
 
       {/* SUCCESS TOAST */}
@@ -749,11 +833,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: colors.white,
     borderRadius: radius.lg,
+    borderWidth: 1.5,
+    borderColor: "transparent",
     ...shadow.subtle,
   },
 
   inputWrapperFocused: {
-    borderWidth: 1.5,
     borderColor: colors.emerald,
   },
 
@@ -762,7 +847,6 @@ const styles = StyleSheet.create({
   },
 
   inputWrapperError: {
-    borderWidth: 1.5,
     borderColor: colors.error,
   },
 
@@ -838,6 +922,18 @@ const styles = StyleSheet.create({
   scheduleTabTextActive: {
     color: colors.white,
     fontFamily: fontFamily.bold,
+  },
+
+  scheduleTabAmount: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.textMuted,
+    textAlign: "center",
+    marginTop: 2,
+  },
+
+  scheduleTabAmountActive: {
+    color: colors.white,
   },
 
   modifyBtn: {

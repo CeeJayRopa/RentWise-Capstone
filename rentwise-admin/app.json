@@ -59,10 +59,14 @@
     ],
     "extra": {
       "router": {},
+      "expo-navigation-bar": {
+        "enforceContrast": false,
+        "style": "dark"
+      },
       "eas": {
-        "projectId": "a01a140b-f0e7-4012-8a50-e5fe0acfd03f"
+        "projectId": "db1ecc2d-5d77-4283-84df-fbed1c7b9f53"
       }
     },
-    "owner": "rentwiseee"
+    "owner": "rentwiseeeee"
   }
 }
