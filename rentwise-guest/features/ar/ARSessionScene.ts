@@ -88,6 +88,15 @@ const RETICLE_ROTATION_DEADZONE_DEG = 1.5;
 // full frame count, and a hit that lands on a plane too small to trust is shown as
 // "invalid" (red) regardless of how stable it's been.
 const RETICLE_STABLE_FRAMES_THRESHOLD = 10;
+// Fallback for a hit that never gets corroborated by a real detected plane or the
+// hardware depth sensor (see the `corroborated` check in onFrame) — e.g. a genuinely
+// featureless surface, or a device/moment with no plane data at all. Requiring a much
+// longer hold than RETICLE_STABLE_FRAMES_THRESHOLD before trusting an uncorroborated hit
+// closes the gap where a wrong-but-stationary point (the deadzone freezes it) could
+// otherwise reach "confident" in well under a second just by sitting still — it also gives
+// ARCore far more time to actually classify a real plane there first, which would let the
+// hit qualify the normal (fast) way instead.
+const UNCORROBORATED_FALLBACK_FRAMES = 45;
 const RETICLE_COLOR_SEARCHING = 0xffaa00;
 const RETICLE_COLOR_CONFIDENT = 0x4caf50;
 const RETICLE_COLOR_INVALID = 0xf44336;
@@ -227,6 +236,11 @@ export class ARSessionScene {
   // read by onSelect's placement gate. Written every frame in onFrame (see there for the
   // combined stability + plane-validity logic).
   private isPlacementConfident = false;
+  // Set true for the current frame only when tryDepthConfidenceBoost's hardware corroboration
+  // actually fired — distinct from reticleStableFrames itself, since that counter also rises
+  // from plain frame-to-frame stillness alone, which onFrame's confidence gate now treats as
+  // weaker evidence than a real depth-sensor or plane match.
+  private depthCorroborated = false;
 
   // Wireframe box that reparents onto whichever placed object is currently selected, so it
   // inherits that object's position/rotation/scale automatically instead of needing to be
@@ -284,6 +298,9 @@ export class ARSessionScene {
   private lastReportedDim: boolean | null = null;
   private onCameraAngleChange: (isPointingWrong: boolean) => void = () => {};
   private lastReportedPointingWrong: boolean | null = null;
+  // Relays validateBoundingBox's console warnings on-screen too — chrome://inspect needs a
+  // tethered desktop, which isn't always available while testing on an actual device.
+  private onModelWarning: (objectId: string, message: string) => void = () => {};
   private scratchCameraForward = new THREE.Vector3();
   private resizeHandler = () => this.handleResize();
 
@@ -340,6 +357,10 @@ export class ARSessionScene {
 
   setCameraAngleCallback(onCameraAngleChange: (isPointingWrong: boolean) => void) {
     this.onCameraAngleChange = onCameraAngleChange;
+  }
+
+  setModelWarningCallback(onModelWarning: (objectId: string, message: string) => void) {
+    this.onModelWarning = onModelWarning;
   }
 
   // Only fires the callback when the cause actually changes, so the UI layer's own
@@ -496,6 +517,7 @@ export class ARSessionScene {
     this.hasLastKnownGood = false;
     this.wasTrackingLost = false;
     this.isPlacementConfident = false;
+    this.depthCorroborated = false;
     this.reticle.visible = false;
 
     this.placedGroup.clear();
@@ -728,6 +750,11 @@ export class ARSessionScene {
   // bug report later. Runs once per model load (guarded by the `!cached` check above), not
   // once per placement.
   private validateBoundingBox(box: THREE.Box3, objectId: string): void {
+    const warn = (message: string) => {
+      console.warn(`[AR] "${objectId}" ${message}`);
+      this.onModelWarning(objectId, message);
+    };
+
     const size = new THREE.Vector3();
     box.getSize(size);
 
@@ -739,33 +766,27 @@ export class ARSessionScene {
       Number.isFinite(box.max.y) &&
       Number.isFinite(box.max.z);
     if (!finite) {
-      console.warn(`[AR] "${objectId}" has a non-finite bounding box — model geometry may be malformed.`);
+      warn("has a non-finite bounding box — model geometry may be malformed.");
       return; // further checks below assume finite values
     }
 
     if (size.x <= 0 || size.y <= 0 || size.z <= 0) {
-      console.warn(
-        `[AR] "${objectId}" has a zero-size bounding box on at least one axis — model may be empty or degenerate.`
-      );
+      warn("has a zero-size bounding box on at least one axis — model may be empty or degenerate.");
     }
 
     if (!box.containsPoint(new THREE.Vector3(0, 0, 0))) {
-      console.warn(
-        `[AR] "${objectId}"'s origin is outside its own bounding box — placement offsets (ground) may look wrong.`
-      );
+      warn("'s origin is outside its own bounding box — placement offsets (ground) may look wrong.");
     }
 
     const maxDim = Math.max(size.x, size.y, size.z);
     const minDim = Math.min(size.x, size.y, size.z);
     if (minDim > 0 && maxDim / minDim > 20) {
-      console.warn(
-        `[AR] "${objectId}" has an extreme aspect ratio (${(maxDim / minDim).toFixed(1)}:1) — check for stray/misplaced geometry.`
-      );
+      warn(`has an extreme aspect ratio (${(maxDim / minDim).toFixed(1)}:1) — check for stray/misplaced geometry.`);
     }
 
     if (maxDim > 10 || (minDim > 0 && minDim < 0.01)) {
-      console.warn(
-        `[AR] "${objectId}" has implausible real-world scale (size ${size.x.toFixed(2)}×${size.y.toFixed(2)}×${size.z.toFixed(2)}m) — check the .glb's export scale/units.`
+      warn(
+        `has implausible real-world scale (size ${size.x.toFixed(2)}×${size.y.toFixed(2)}×${size.z.toFixed(2)}m) — check the .glb's export scale/units.`
       );
     }
   }
@@ -1061,6 +1082,7 @@ export class ARSessionScene {
     const reticleDistance = this.camera.position.distanceTo(this.reticlePosition);
     if (Math.abs(reticleDistance - depthMeters) < 0.15) {
       this.reticleStableFrames = Math.max(this.reticleStableFrames, RETICLE_STABLE_FRAMES_THRESHOLD);
+      this.depthCorroborated = true;
     }
   }
 
@@ -1166,6 +1188,7 @@ export class ARSessionScene {
           this.reticleQuaternion.slerp(this.reticleTargetQuaternion, RETICLE_SMOOTHING);
         }
 
+        this.depthCorroborated = false;
         this.tryDepthConfidenceBoost(frame, viewerPose);
 
         const planeValidity = this.classifyPlaneValidity(this.candidatePosition, frame, referenceSpace);
@@ -1177,7 +1200,17 @@ export class ARSessionScene {
         }
 
         this.reticle.matrix.compose(this.reticlePosition, this.reticleQuaternion, ARSessionScene.UNIT_SCALE);
-        const isConfident = planeValidity !== "invalid" && this.reticleStableFrames >= RETICLE_STABLE_FRAMES_THRESHOLD;
+        // A hit backed by neither a real detected plane nor hardware depth agreement is
+        // just "stationary," not "verified" — plain stillness alone (RETICLE_STABLE_FRAMES_
+        // THRESHOLD) used to be enough to place on, which let a wrong-but-motionless point
+        // hit (e.g. a stray feature point among cluttered geometry) reach placement in well
+        // under a second. Requiring the much longer UNCORROBORATED_FALLBACK_FRAMES hold in
+        // that case closes that gap while still not blocking placement forever on a device
+        // or moment with no plane/depth data at all.
+        const corroborated = planeValidity === "valid" || this.depthCorroborated;
+        const isConfident =
+          planeValidity !== "invalid" &&
+          this.reticleStableFrames >= (corroborated ? RETICLE_STABLE_FRAMES_THRESHOLD : UNCORROBORATED_FALLBACK_FRAMES);
         this.isPlacementConfident = isConfident;
         if (isConfident) {
           this.lastKnownGoodPosition.copy(this.reticlePosition);
@@ -1200,6 +1233,7 @@ export class ARSessionScene {
         this.reticleHasTarget = false;
         this.reticleStableFrames = 0;
         this.isPlacementConfident = false;
+        this.depthCorroborated = false;
         if (this.reticle.visible) this.onReticleVisible(false);
         this.reticle.visible = false;
 

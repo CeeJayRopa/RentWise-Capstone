@@ -94,6 +94,9 @@ export default function ARView() {
   const [isDim, setIsDim] = useState(false);
   const [isPointingWrong, setIsPointingWrong] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Relays ARSessionScene's validateBoundingBox warnings on-screen — chrome://inspect needs
+  // a tethered desktop, which isn't always available while testing on an actual device.
+  const [modelWarnings, setModelWarnings] = useState<string[]>([]);
   const wasReticleVisibleRef = useRef(false);
   const scanPulseAnim = useRef(new Animated.Value(0)).current;
 
@@ -229,6 +232,9 @@ export default function ARView() {
     scene.setSurfaceIssueCallback(setSurfaceIssue);
     scene.setLightLevelCallback(setIsDim);
     scene.setCameraAngleCallback(setIsPointingWrong);
+    scene.setModelWarningCallback((objectId, message) =>
+      setModelWarnings((prev) => [...prev, `"${objectId}" ${message}`])
+    );
     scene.mount(canvas);
     sceneRef.current = scene;
 
@@ -592,6 +598,36 @@ export default function ARView() {
           </View>
         )}
 
+        {/* Relays validateBoundingBox's model warnings on-screen (see ARSessionScene) — lets
+            a bad .glb export show up right here on the device instead of needing a tethered
+            desktop console to notice. */}
+        {sessionActive && modelWarnings.length > 0 && (
+          <View style={styles.modelWarningPanel}>
+            <View style={styles.modelWarningHeader}>
+              <Text style={styles.modelWarningTitle}>⚠ Model warnings ({modelWarnings.length})</Text>
+              <TouchableOpacity
+                onPressIn={suppressPressIn}
+                onPressOut={suppressPressOut}
+                onPress={() => setModelWarnings([])}
+              >
+                <Text style={styles.modelWarningClear}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView
+              style={styles.modelWarningScroll}
+              onTouchStart={suppressPressIn}
+              onTouchEnd={suppressPressOut}
+              onTouchCancel={suppressPressOut}
+            >
+              {modelWarnings.map((warning, i) => (
+                <Text key={i} style={styles.modelWarningText}>
+                  {warning}
+                </Text>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+
         {measurement && measurement.visible && (
           <View
             style={[
@@ -905,6 +941,30 @@ const styles = StyleSheet.create({
     marginTop: 6,
     color: "#FF8A80",
   },
+
+  modelWarningPanel: {
+    position: "absolute",
+    top: 90,
+    right: 16,
+    width: 190,
+    maxHeight: 160,
+    backgroundColor: "rgba(59,26,10,0.92)",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#FFAA00",
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  modelWarningHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
+  modelWarningTitle: { color: "#FFD27A", fontSize: 10, fontWeight: "700", flexShrink: 1 },
+  modelWarningClear: { color: "#fff", fontSize: 10, fontWeight: "700", opacity: 0.8, marginLeft: 6 },
+  modelWarningScroll: { maxHeight: 120 },
+  modelWarningText: { color: "#fff", fontSize: 9, lineHeight: 13, marginBottom: 4 },
 
   measurementLabel: {
     position: "absolute",
