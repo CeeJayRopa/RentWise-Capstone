@@ -24,13 +24,16 @@ export type ScaleAxis = "x" | "y" | "z";
 // been found yet (keep scanning); "bad-angle" means something WAS found but rejected for
 // being too steep to count as a floor (try a flatter spot); "not-stable" means a valid
 // floor was found but hasn't been tracked long enough yet to trust; "surface-too-small"
-// means the floor found there is a real, classified plane but too small to place on.
+// means the floor found there is a real, classified plane but too small to place on;
+// "near-wall" means the floor spot is real but too close to a detected wall for an object
+// to sit there without its footprint clipping into the wall.
 export type SurfaceIssue =
   | "tracking-lost"
   | "no-results"
   | "bad-angle"
   | "not-stable"
   | "surface-too-small"
+  | "near-wall"
   | null;
 
 export interface SelectedMeasurement {
@@ -111,6 +114,20 @@ const RETICLE_COLOR_INVALID = 0xf44336;
 // by this threshold — see classifyPlaneValidity's "unknown" case. Starting value; expect to
 // tune after on-device testing in a real cluttered space.
 const MIN_PLANE_AREA_M2 = 0.15;
+
+// Minimum horizontal clearance (meters) a floor placement point must keep from any
+// detected vertical (wall-like) plane, so an object's own footprint doesn't visually clip
+// into a wall or corner even though it's anchored on the floor right next to it — this is
+// the fix for the original "object floats/clips at a wall corner" complaint, now that wall
+// placement itself is gone: walls are still detected (see isTooCloseToWall), just to keep
+// floor placement clear of them, not to place on them. Uses the Plane Detection API's own
+// `orientation` field to find wall-like planes and treats each as an infinite vertical
+// barrier rather than bounding the check to its exact polygon extent — a deliberate
+// simplification, since market-stall walls/railings are typically continuous runs rather
+// than isolated fragments, so being slightly over-cautious past a wall segment's real end
+// is an acceptable trade for a simpler, more robust check. Starting value; expect to tune
+// after on-device testing.
+const WALL_CLEARANCE_M = 0.15;
 
 // Lightweight surface memory: position already snaps instantly on any reacquisition (see
 // the `!reticleHasTarget` branch below), so the real gap after recovering from a brief
@@ -1053,6 +1070,30 @@ export class ARSessionScene {
     return "unknown";
   }
 
+  // Guards floor placement from clipping into a nearby wall/corner: for each detected
+  // vertical plane, a plane's own local Y axis is always its surface normal by WebXR
+  // convention (true regardless of whether the plane itself is horizontal or vertical), so
+  // the local-space hit's Y component is directly the hit's perpendicular distance to that
+  // wall — the same transform trick classifyPlaneValidity uses, just reading a different
+  // axis of the result. Deliberately does NOT bound the check to the wall's own polygon
+  // extent (see WALL_CLEARANCE_M's own comment for why that's an acceptable trade-off).
+  private isTooCloseToWall(hitWorldPos: THREE.Vector3, frame: any, referenceSpace: any): boolean {
+    const detectedPlanes: Set<any> | undefined = frame.detectedPlanes;
+    if (!detectedPlanes) return false;
+
+    for (const plane of detectedPlanes) {
+      if (plane.orientation !== "vertical") continue;
+      const pose = frame.getPose(plane.planeSpace, referenceSpace);
+      if (!pose) continue;
+
+      this.scratchPlaneInverse.fromArray(pose.transform.matrix).invert();
+      this.scratchLocalHit.copy(hitWorldPos).applyMatrix4(this.scratchPlaneInverse);
+
+      if (Math.abs(this.scratchLocalHit.y) < WALL_CLEARANCE_M) return true;
+    }
+    return false;
+  }
+
   // Progressive upgrade: on devices with a real depth sensor (LiDAR on iPhone Pro models,
   // time-of-flight on some higher-end Android phones), the sensor measures distance
   // directly instead of piecing it together from camera-motion parallax like standard
@@ -1198,6 +1239,7 @@ export class ARSessionScene {
           // confidence can jump ahead instead of waiting out the full stable-frame count.
           this.reticleStableFrames = Math.max(this.reticleStableFrames, RETICLE_STABLE_FRAMES_THRESHOLD);
         }
+        const tooCloseToWall = this.isTooCloseToWall(this.candidatePosition, frame, referenceSpace);
 
         this.reticle.matrix.compose(this.reticlePosition, this.reticleQuaternion, ARSessionScene.UNIT_SCALE);
         // A hit backed by neither a real detected plane nor hardware depth agreement is
@@ -1210,6 +1252,7 @@ export class ARSessionScene {
         const corroborated = planeValidity === "valid" || this.depthCorroborated;
         const isConfident =
           planeValidity !== "invalid" &&
+          !tooCloseToWall &&
           this.reticleStableFrames >= (corroborated ? RETICLE_STABLE_FRAMES_THRESHOLD : UNCORROBORATED_FALLBACK_FRAMES);
         this.isPlacementConfident = isConfident;
         if (isConfident) {
@@ -1217,12 +1260,18 @@ export class ARSessionScene {
           this.hasLastKnownGood = true;
         }
         (this.reticle.material as THREE.MeshBasicMaterial).color.setHex(
-          planeValidity === "invalid" ? RETICLE_COLOR_INVALID : isConfident ? RETICLE_COLOR_CONFIDENT : RETICLE_COLOR_SEARCHING
+          planeValidity === "invalid" || tooCloseToWall
+            ? RETICLE_COLOR_INVALID
+            : isConfident
+            ? RETICLE_COLOR_CONFIDENT
+            : RETICLE_COLOR_SEARCHING
         );
         if (!wasVisible) this.onReticleVisible(true);
         this.reticle.visible = true;
 
-        if (planeValidity === "invalid") {
+        if (tooCloseToWall) {
+          this.reportSurfaceIssue("near-wall");
+        } else if (planeValidity === "invalid") {
           this.reportSurfaceIssue("surface-too-small");
         } else if (!isConfident) {
           this.reportSurfaceIssue("not-stable");

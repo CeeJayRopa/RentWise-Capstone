@@ -364,6 +364,8 @@ export default function ARView() {
       ? "Hold steady — locking onto the surface…"
       : surfaceIssue === "surface-too-small"
       ? "This spot looks too small or unreliable — try a bigger clear patch"
+      : surfaceIssue === "near-wall"
+      ? "Too close to a wall — try a spot further out"
       : surfaceIssue === "no-results" && isPointingWrong
       ? "Point your camera down toward the floor"
       : surfaceIssue === "no-results" && isDim
