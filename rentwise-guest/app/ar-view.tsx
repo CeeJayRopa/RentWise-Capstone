@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { getARObjects, getModelDownloadUrl, logArPlacement } from "../services/modelService";
 import type { ARObject } from "../shared/types/arObject";
-import { ARSessionScene, PlacedState, ScaleAxis, SurfaceType, SelectedMeasurement, SurfaceIssue } from "../features/ar/ARSessionScene";
+import { ARSessionScene, PlacedState, ScaleAxis, SelectedMeasurement, SurfaceIssue } from "../features/ar/ARSessionScene";
 import ModelViewer from "../features/ar/ModelViewer";
 
 // ─── Theme (AR-specific blue/teal "tech" palette — intentionally distinct
@@ -62,7 +62,7 @@ const AR_TOUR_STORAGE_KEY = "rentwise-guest:ar-tour-seen";
 const AR_TOUR_STEPS = [
   {
     title: "Point & Scan",
-    text: "Tap \"Start AR,\" then slowly move your phone around to find a flat floor, tabletop, or wall.",
+    text: "Tap \"Start AR,\" then slowly move your phone around to find a flat floor or tabletop.",
   },
   {
     title: "Place an Item",
@@ -88,7 +88,6 @@ export default function ARView() {
   const [arming, setArming] = useState(false);
   const [sessionActive, setSessionActive] = useState(false);
   const [reticleVisible, setReticleVisible] = useState(false);
-  const [surfaceType, setSurfaceType] = useState<SurfaceType | null>(null);
   const [placedState, setPlacedState] = useState<PlacedState>({ placed: [], selectedId: null, canUndo: false });
   const [measurement, setMeasurement] = useState<SelectedMeasurement | null>(null);
   const [surfaceIssue, setSurfaceIssue] = useState<SurfaceIssue>(null);
@@ -212,7 +211,7 @@ export default function ARView() {
     container.appendChild(canvas);
 
     const scene = new ARSessionScene();
-    scene.setCallbacks(setPlacedState, (visible, type) => {
+    scene.setCallbacks(setPlacedState, (visible) => {
       // Rising edge only (not every visible frame) — a quick vibration the instant a
       // surface is first found, so there's a physical confirmation cue even if you're not
       // staring at exactly the right spot on screen to notice the reticle pop in.
@@ -225,7 +224,6 @@ export default function ARView() {
       }
       wasReticleVisibleRef.current = visible;
       setReticleVisible(visible);
-      setSurfaceType(type);
     });
     scene.setMeasurementCallback(setMeasurement);
     scene.setSurfaceIssueCallback(setSurfaceIssue);
@@ -356,12 +354,16 @@ export default function ARView() {
       ? "Lost tracking — hold your phone steady and slowly look around"
       : surfaceIssue === "bad-angle"
       ? "Surface found, but it's at an odd angle — try a flatter spot"
+      : surfaceIssue === "not-stable"
+      ? "Hold steady — locking onto the surface…"
+      : surfaceIssue === "surface-too-small"
+      ? "This spot looks too small or unreliable — try a bigger clear patch"
       : surfaceIssue === "no-results" && isPointingWrong
       ? "Point your camera down toward the floor"
       : surfaceIssue === "no-results" && isDim
       ? "It's quite dark — try a brighter area"
       : showSurfaceTip
-      ? "Still looking… try a flat, well-lit, textured floor, tabletop, or wall (avoid glass, mirrors, or glossy/plain white surfaces)"
+      ? "Still looking… try a flat, well-lit, textured floor or tabletop (avoid glass, mirrors, or glossy/plain white surfaces)"
       : "Move your phone slowly to find a surface…";
 
   // AR Status checklist — a persistent, glanceable readout of everything the diagnostics
@@ -580,7 +582,7 @@ export default function ARView() {
                   : !reticleVisible
                   ? surfaceHintText
                   : armedObject
-                  ? `Tap the ${surfaceType === "wall" ? "wall" : "surface"} to place: ${armedObject.name}`
+                  ? `Tap the floor to place: ${armedObject.name}`
                   : "Tap an item below to place it"}
               </Text>
               {error && (

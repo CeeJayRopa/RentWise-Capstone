@@ -17,14 +17,21 @@ export interface PlacedState {
 }
 
 export type ScaleAxis = "x" | "y" | "z";
-export type SurfaceType = "floor" | "wall";
 
 // Distinguishes *why* no reticle is currently showing, since the underlying causes need
 // completely different guidance: "tracking-lost" means the phone doesn't know where it is
 // at all (hold steady); "no-results" means tracking is fine but nothing plane-shaped has
 // been found yet (keep scanning); "bad-angle" means something WAS found but rejected for
-// being neither floor- nor wall-like (try a flatter spot).
-export type SurfaceIssue = "tracking-lost" | "no-results" | "bad-angle" | null;
+// being too steep to count as a floor (try a flatter spot); "not-stable" means a valid
+// floor was found but hasn't been tracked long enough yet to trust; "surface-too-small"
+// means the floor found there is a real, classified plane but too small to place on.
+export type SurfaceIssue =
+  | "tracking-lost"
+  | "no-results"
+  | "bad-angle"
+  | "not-stable"
+  | "surface-too-small"
+  | null;
 
 export interface SelectedMeasurement {
   widthM: number;
@@ -45,14 +52,12 @@ interface PlacedObject extends PlacedObjectInfo {
   group: THREE.Group;
   scale: AxisScale;
   groundOffset: number;
-  wallOffset: number;
-  surfaceType: SurfaceType;
   spawnStartTime: number;
   // Set once updateSpawnAnimations has written the exact final scale, so the object's
   // scale isn't touched every frame forever after it finishes popping in.
   spawnAnimDone: boolean;
   // Cumulative manual rotation (degrees) applied via rotateSelected, on top of whatever
-  // base facing orientTowardCamera/orientTowardWall computes. Tracked separately because
+  // base facing orientTowardCamera computes. Tracked separately because
   // moveSelectedToReticle recomputes that base facing from scratch on every move, which
   // would otherwise silently wipe out any rotation the user dialed in beforehand.
   userYawDeg: number;
@@ -77,10 +82,26 @@ const RETICLE_ROTATION_DEADZONE_DEG = 1.5;
 // fully-classified plane or a rawer point-hit (see the "point" entityType comment in
 // onFrame), so this approximates confidence from our own observed stability instead — a
 // hit that hasn't moved beyond the deadzone for this many consecutive frames is treated as
-// "locked in" (green); anything still settling is "searching" (amber).
+// "locked in" (green); anything still settling is "searching" (amber). A hit that DOES
+// cross-reference against a real, adequately-sized detected plane (see
+// classifyPlaneValidity) short-circuits straight to "locked in" instead of waiting out the
+// full frame count, and a hit that lands on a plane too small to trust is shown as
+// "invalid" (red) regardless of how stable it's been.
 const RETICLE_STABLE_FRAMES_THRESHOLD = 10;
 const RETICLE_COLOR_SEARCHING = 0xffaa00;
 const RETICLE_COLOR_CONFIDENT = 0x4caf50;
+const RETICLE_COLOR_INVALID = 0xf44336;
+
+// Minimum real-world area (square meters) a detected plane must have for a hit landing
+// inside it to be trusted. Deliberately low: ARCore/ARKit often emit small, transient plane
+// fragments (well under 0.1m²) before they grow or merge into the true surface, so this
+// sits just above that noise floor rather than the footprint of any real placement — a
+// small but genuinely usable floor gap in a cluttered market stall should still clear it
+// once ARCore has locked onto it at all. A hit that matches NO plane (device without
+// plane-detection support, or a point-hit ARCore hasn't classified yet) is never penalized
+// by this threshold — see classifyPlaneValidity's "unknown" case. Starting value; expect to
+// tune after on-device testing in a real cluttered space.
+const MIN_PLANE_AREA_M2 = 0.15;
 
 // Lightweight surface memory: position already snaps instantly on any reacquisition (see
 // the `!reticleHasTarget` branch below), so the real gap after recovering from a brief
@@ -97,18 +118,51 @@ const RECOVERY_SNAP_RADIUS = 0.3;
 // won't find a floor no matter how long it searches.
 const CAMERA_DOWNWARD_THRESHOLD = -0.15;
 
-// Surface classification, by angle between the hit-test surface normal and world-up:
-// near 0° = floor/tabletop/desk, near 90° = wall. Anything in between (slanted surfaces,
-// ramps) is ambiguous and rejected outright.
+// Floor acceptance, by angle between the hit-test surface normal and world-up: near 0° is
+// a flat floor/tabletop/desk. Anything past this is rejected outright — wall placement was
+// removed (the real deployment is a market with railings, not solid walls, which AR can't
+// reliably classify as flat surfaces anyway), so there's no separate "wall window" to carve
+// out here anymore.
 const MAX_FLOOR_TILT_DEG = 25;
-const WALL_TILT_MIN_DEG = 65;
-const WALL_TILT_MAX_DEG = 115;
 
 // Placement pop-in animation duration, in ms.
 const SPAWN_ANIM_DURATION_MS = 220;
 
 function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
+}
+
+// "valid": the hit lands inside a detected plane's polygon whose area clears
+// MIN_PLANE_AREA_M2. "invalid": it lands inside a detected plane's polygon that's too
+// small to trust. "unknown": no detected plane covers this hit at all (no plane-detection
+// support, or ARCore hasn't classified a plane there yet) — deliberately NOT treated the
+// same as "invalid", since absence of plane data isn't evidence of a bad surface.
+type PlaneValidity = "valid" | "invalid" | "unknown";
+
+// Standard ray-casting (PNPOLY) point-in-polygon test, operating in a plane's local XZ
+// space — same convention updatePlaneVisualizations already uses for polygon[i].x/z.
+function pointInPolygonXZ(px: number, pz: number, polygon: { x: number; z: number }[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x;
+    const zi = polygon[i].z;
+    const xj = polygon[j].x;
+    const zj = polygon[j].z;
+    const crosses = zi > pz !== zj > pz;
+    if (crosses && px < ((xj - xi) * (pz - zi)) / (zj - zi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// Shoelace formula, same local XZ polygon, winding-order independent via Math.abs.
+function polygonAreaXZ(polygon: { x: number; z: number }[]): number {
+  let sum = 0;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    sum += (polygon[j].x + polygon[i].x) * (polygon[i].z - polygon[j].z);
+  }
+  return Math.abs(sum) / 2;
 }
 
 function cloneWithOwnMaterials(source: THREE.Object3D): THREE.Group {
@@ -158,15 +212,21 @@ export class ARSessionScene {
 
   private modelCache = new Map<
     string,
-    { template: THREE.Group; groundOffset: number; wallOffset: number; boundingBox: THREE.Box3 }
+    { template: THREE.Group; groundOffset: number; boundingBox: THREE.Box3 }
   >();
   private armedObjectId: string | null = null;
   private armedModel: THREE.Group | null = null;
   private armedGroundOffset = 0;
-  private armedWallOffset = 0;
-  private currentSurfaceType: SurfaceType | null = null;
   private scratchCamDir = new THREE.Vector3();
   private scratchLookMatrix = new THREE.Matrix4();
+  // Scratch space for classifyPlaneValidity's per-plane local-space hit transform, reused
+  // to avoid GC churn (same convention as the reticle scratch fields above).
+  private scratchPlaneInverse = new THREE.Matrix4();
+  private scratchLocalHit = new THREE.Vector3();
+  // Whether the currently-tracked reticle position is confident+valid enough to place on —
+  // read by onSelect's placement gate. Written every frame in onFrame (see there for the
+  // combined stability + plane-validity logic).
+  private isPlacementConfident = false;
 
   // Wireframe box that reparents onto whichever placed object is currently selected, so it
   // inherits that object's position/rotation/scale automatically instead of needing to be
@@ -216,7 +276,7 @@ export class ARSessionScene {
   private pendingCapture: ((dataUrl: string | null) => void) | null = null;
 
   private onPlacedChange: (state: PlacedState) => void = () => {};
-  private onReticleVisible: (visible: boolean, surfaceType: SurfaceType | null) => void = () => {};
+  private onReticleVisible: (visible: boolean) => void = () => {};
   private onMeasurementChange: (measurement: SelectedMeasurement | null) => void = () => {};
   private onSurfaceIssue: (issue: SurfaceIssue) => void = () => {};
   private lastSurfaceIssue: SurfaceIssue = null;
@@ -261,10 +321,7 @@ export class ARSessionScene {
     this.selectionOutline.visible = false;
   }
 
-  setCallbacks(
-    onPlacedChange: (state: PlacedState) => void,
-    onReticleVisible: (visible: boolean, surfaceType: SurfaceType | null) => void
-  ) {
+  setCallbacks(onPlacedChange: (state: PlacedState) => void, onReticleVisible: (visible: boolean) => void) {
     this.onPlacedChange = onPlacedChange;
     this.onReticleVisible = onReticleVisible;
   }
@@ -438,7 +495,7 @@ export class ARSessionScene {
     this.reticleStableFrames = 0;
     this.hasLastKnownGood = false;
     this.wasTrackingLost = false;
-    this.currentSurfaceType = null;
+    this.isPlacementConfident = false;
     this.reticle.visible = false;
 
     this.placedGroup.clear();
@@ -447,7 +504,7 @@ export class ARSessionScene {
     this.updateSelectionOutline();
     this.history = [];
     this.onPlacedChange({ placed: [], selectedId: null, canUndo: false });
-    this.onReticleVisible(false, null);
+    this.onReticleVisible(false);
     this.onMeasurementChange(null);
     this.reportSurfaceIssue(null);
     this.lastReportedDim = null;
@@ -488,13 +545,17 @@ export class ARSessionScene {
   private onSelect(controller: THREE.Object3D) {
     if (this.uiInteractionActive) return;
 
-    // If something is armed, a tap always places it at the reticle — even when the tap also
-    // geometrically lines up with an already-placed object. This matters because placing a
-    // second item ON or right next to the first (the whole point of arranging multiple
-    // objects together) means the reticle and an existing object's mesh are often in the
-    // same direction, and placement should win that ambiguity, not object-selection.
+    // If something is armed, a tap always tries to place it at the reticle — even when the
+    // tap also geometrically lines up with an already-placed object. This matters because
+    // placing a second item ON or right next to the first (the whole point of arranging
+    // multiple objects together) means the reticle and an existing object's mesh are often
+    // in the same direction, and placement should win that ambiguity, not object-selection.
+    // Still returns (doesn't fall through to tap-to-select below) even when not yet
+    // confident — the per-frame "not-stable"/"surface-too-small" surface-issue hint already
+    // tells the user why nothing happened, and an impatient tap shouldn't accidentally
+    // select an unrelated placed object instead.
     if (this.reticle.visible && this.armedModel) {
-      this.placeArmedAtReticle();
+      if (this.isPlacementConfident) this.placeArmedAtReticle();
       return;
     }
 
@@ -602,22 +663,15 @@ export class ARSessionScene {
   private placeArmedAtReticle() {
     if (!this.armedModel || !this.armedObjectId) return;
 
-    const surfaceType = this.currentSurfaceType ?? "floor";
     const group = cloneWithOwnMaterials(this.armedModel);
     group.matrixAutoUpdate = true;
     group.position.setFromMatrixPosition(this.reticle.matrix);
 
-    if (surfaceType === "wall") {
-      this.orientTowardWall(group);
-      group.translateZ(this.armedWallOffset);
-    } else {
-      this.orientTowardCamera(group);
-      group.translateY(this.armedGroundOffset);
+    this.orientTowardCamera(group);
+    group.translateY(this.armedGroundOffset);
 
-      // Wall-mounted items don't rest on a floor, so a ground blob doesn't make sense there.
-      const cached = this.modelCache.get(this.armedObjectId);
-      if (cached) group.add(this.createGroundShadowMesh(cached));
-    }
+    const cached = this.modelCache.get(this.armedObjectId);
+    if (cached) group.add(this.createGroundShadowMesh(cached));
 
     group.scale.setScalar(0.001); // spawn-animated up to full size in onFrame
 
@@ -627,8 +681,6 @@ export class ARSessionScene {
       group,
       scale: { x: 1, y: 1, z: 1 },
       groundOffset: this.armedGroundOffset,
-      wallOffset: this.armedWallOffset,
-      surfaceType,
       spawnStartTime: performance.now(),
       spawnAnimDone: false,
       userYawDeg: 0,
@@ -655,22 +707,67 @@ export class ARSessionScene {
     if (!cached) {
       const template = await this.loadModel(modelUrl);
       const box = new THREE.Box3().setFromObject(template);
+      this.validateBoundingBox(box, objectId);
       // Ground offset: shifts the model up/down so its lowest point sits exactly at the
-      // reticle instead of floating above or sinking into a floor/tabletop.
+      // reticle instead of floating above or sinking into a floor/tabletop. Measured once
+      // per model here, not assumed, since it depends on where each .glb's own origin
+      // happens to be.
       const groundOffset = Number.isFinite(box.min.y) ? -box.min.y : 0;
-      // Wall offset: same idea but for depth — shifts the model so its back (assumed to be
-      // the +Z side, given the glTF/three.js front-is--Z convention) sits flush against a
-      // wall instead of floating in front of it or clipping through it. Both are measured
-      // once per model here, not assumed, since it depends on where each .glb's own origin
-      // and orientation happen to be.
-      const wallOffset = Number.isFinite(box.max.z) ? -box.max.z : 0;
-      cached = { template, groundOffset, wallOffset, boundingBox: box };
+      cached = { template, groundOffset, boundingBox: box };
       this.modelCache.set(objectId, cached);
     }
     this.armedObjectId = objectId;
     this.armedModel = cached.template;
     this.armedGroundOffset = cached.groundOffset;
-    this.armedWallOffset = cached.wallOffset;
+  }
+
+  // .glb catalog assets are authored entirely outside this app (manual Firebase upload, no
+  // in-app validation pipeline) — this is a cheap sanity check on load, flagging models
+  // whose exported geometry/origin/scale looks suspicious, so a bad export shows up as a
+  // console warning during testing instead of a silently mysterious "floating/sunk object"
+  // bug report later. Runs once per model load (guarded by the `!cached` check above), not
+  // once per placement.
+  private validateBoundingBox(box: THREE.Box3, objectId: string): void {
+    const size = new THREE.Vector3();
+    box.getSize(size);
+
+    const finite =
+      Number.isFinite(box.min.x) &&
+      Number.isFinite(box.min.y) &&
+      Number.isFinite(box.min.z) &&
+      Number.isFinite(box.max.x) &&
+      Number.isFinite(box.max.y) &&
+      Number.isFinite(box.max.z);
+    if (!finite) {
+      console.warn(`[AR] "${objectId}" has a non-finite bounding box — model geometry may be malformed.`);
+      return; // further checks below assume finite values
+    }
+
+    if (size.x <= 0 || size.y <= 0 || size.z <= 0) {
+      console.warn(
+        `[AR] "${objectId}" has a zero-size bounding box on at least one axis — model may be empty or degenerate.`
+      );
+    }
+
+    if (!box.containsPoint(new THREE.Vector3(0, 0, 0))) {
+      console.warn(
+        `[AR] "${objectId}"'s origin is outside its own bounding box — placement offsets (ground) may look wrong.`
+      );
+    }
+
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const minDim = Math.min(size.x, size.y, size.z);
+    if (minDim > 0 && maxDim / minDim > 20) {
+      console.warn(
+        `[AR] "${objectId}" has an extreme aspect ratio (${(maxDim / minDim).toFixed(1)}:1) — check for stray/misplaced geometry.`
+      );
+    }
+
+    if (maxDim > 10 || (minDim > 0 && minDim < 0.01)) {
+      console.warn(
+        `[AR] "${objectId}" has implausible real-world scale (size ${size.x.toFixed(2)}×${size.y.toFixed(2)}×${size.z.toFixed(2)}m) — check the .glb's export scale/units.`
+      );
+    }
   }
 
   private loadModel(url: string): Promise<THREE.Group> {
@@ -685,9 +782,7 @@ export class ARSessionScene {
   }
 
   // Builds a pure-yaw orientation (object stays upright, no pitch/roll) with the object's
-  // forward (-Z) facing `direction`, flattened to the horizontal plane. Shared by floor
-  // placement (faces the camera) and wall placement (faces away from the wall, into the
-  // room) — both just need a horizontal facing direction, nothing else differs.
+  // forward (-Z) facing `direction`, flattened to the horizontal plane.
   private applyYawOrientation(group: THREE.Group, direction: THREE.Vector3) {
     this.scratchCamDir.copy(direction);
     this.scratchCamDir.y = 0;
@@ -704,14 +799,6 @@ export class ARSessionScene {
   private orientTowardCamera(group: THREE.Group) {
     this.camera.getWorldDirection(this.scratchCamDir);
     this.applyYawOrientation(group, this.scratchCamDir);
-  }
-
-  // Orients `group` to face away from the wall it's being placed on (into the room), using
-  // the wall's own surface normal — derived from the current (smoothed) reticle orientation,
-  // since a hit-test pose's local Y-axis always represents the surface normal by convention.
-  private orientTowardWall(group: THREE.Group) {
-    const wallNormal = new THREE.Vector3(0, 1, 0).applyQuaternion(this.reticleQuaternion);
-    this.applyYawOrientation(group, wallNormal);
   }
 
   rotateSelected(deltaDeg: number) {
@@ -736,38 +823,28 @@ export class ARSessionScene {
     this.selected.scale[axis] = next;
     this.selected.group.scale.set(this.selected.scale.x, this.selected.scale.y, this.selected.scale.z);
 
-    if (this.selected.surfaceType === "wall" && axis === "z") {
-      // Keep the object's back flush against the wall as its depth changes, instead of
-      // growing/shrinking from its origin point (which would push it through the wall or
-      // pull it away as the depth scale changes).
-      this.selected.group.translateZ(this.selected.wallOffset * (next - prev));
-    } else if (this.selected.surfaceType !== "wall" && axis === "y") {
-      // Same idea for floor placement: keep the base anchored as height changes.
+    if (axis === "y") {
+      // Keep the object's base anchored to the floor as its height changes, instead of
+      // growing/shrinking from its origin point (which would lift it off the ground or
+      // sink it into the floor as the height scale changes).
       this.selected.group.translateY(this.selected.groundOffset * (next - prev));
     }
   }
 
   moveSelectedToReticle() {
     if (!this.selected || !this.reticle.visible) return;
-    const surfaceType = this.currentSurfaceType ?? "floor";
-    this.selected.surfaceType = surfaceType;
     this.selected.group.position.setFromMatrixPosition(this.reticle.matrix);
 
     // translate* moves along the local axis irrespective of the group's own scale, so the
     // raw offset (measured against the unscaled model) must be scaled up/down to match
     // however big this particular instance currently is.
-    if (surfaceType === "wall") {
-      this.orientTowardWall(this.selected.group);
-      this.selected.group.translateZ(this.selected.wallOffset * this.selected.scale.z);
-    } else {
-      this.orientTowardCamera(this.selected.group);
-      this.selected.group.translateY(this.selected.groundOffset * this.selected.scale.y);
-    }
+    this.orientTowardCamera(this.selected.group);
+    this.selected.group.translateY(this.selected.groundOffset * this.selected.scale.y);
 
-    // orientTowardWall/orientTowardCamera above just reset the group's facing to a fresh
-    // base orientation for the new spot — reapply whatever manual rotation the user had
-    // already dialed in so the object keeps facing the way they left it, instead of
-    // snapping back to that default facing on every move.
+    // orientTowardCamera above just reset the group's facing to a fresh base orientation
+    // for the new spot — reapply whatever manual rotation the user had already dialed in so
+    // the object keeps facing the way they left it, instead of snapping back to that
+    // default facing on every move.
     if (this.selected.userYawDeg !== 0) {
       this.selected.group.rotateY(THREE.MathUtils.degToRad(this.selected.userYawDeg));
     }
@@ -872,7 +949,7 @@ export class ARSessionScene {
   }
 
   // Renders each currently-tracked plane's real boundary as a translucent green overlay, so
-  // the user can see how big the detected floor/table/wall actually is, not just a small
+  // the user can see how big the detected floor/table actually is, not just a small
   // fixed-size ring at the raycast point. Meshes are reused across frames (only rebuilt when
   // a plane's polygon actually changes, per its lastChangedTime) since recreating geometry
   // every frame for every tracked plane would be wasteful.
@@ -921,6 +998,38 @@ export class ARSessionScene {
 
       if (mesh) mesh.matrix.fromArray(pose.transform.matrix);
     }
+  }
+
+  // Answers "is this hit-test position actually on a real, adequately-sized detected
+  // plane" by reusing the same frame.detectedPlanes data updatePlaneVisualizations reads
+  // for visualization — the WebXR spec doesn't expose which entityType (plane vs point)
+  // produced a given hit-test result (see the "point" entityType comment in onFrame), so
+  // this is how "prefer plane hits" is actually implemented: not by inspecting the hit
+  // itself, but by cross-referencing its position against the plane boundaries already
+  // being tracked. Deliberately recomputes each plane's pose independently rather than
+  // sharing updatePlaneVisualizations' pose lookup from earlier in the same frame — plane
+  // counts are small ("a handful," per that method's own comment), so the extra per-frame
+  // cost is negligible, and it keeps the two code paths decoupled.
+  private classifyPlaneValidity(hitWorldPos: THREE.Vector3, frame: any, referenceSpace: any): PlaneValidity {
+    const detectedPlanes: Set<any> | undefined = frame.detectedPlanes;
+    if (!detectedPlanes || detectedPlanes.size === 0) return "unknown";
+
+    for (const plane of detectedPlanes) {
+      const pose = frame.getPose(plane.planeSpace, referenceSpace);
+      if (!pose) continue;
+
+      this.scratchPlaneInverse.fromArray(pose.transform.matrix).invert();
+      this.scratchLocalHit.copy(hitWorldPos).applyMatrix4(this.scratchPlaneInverse);
+
+      const polygon = plane.polygon as { x: number; z: number }[];
+      if (polygon.length < 3) continue;
+      if (!pointInPolygonXZ(this.scratchLocalHit.x, this.scratchLocalHit.z, polygon)) continue;
+
+      return polygonAreaXZ(polygon) >= MIN_PLANE_AREA_M2 ? "valid" : "invalid";
+    }
+    // No plane covers this hit at all — could mean no plane-detection support, or a
+    // point-hit ARCore hasn't classified into a plane yet. Neither is negative evidence.
+    return "unknown";
   }
 
   // Progressive upgrade: on devices with a real depth sensor (LiDAR on iPhone Pro models,
@@ -1000,6 +1109,9 @@ export class ARSessionScene {
         // findValidHit's tilt-angle filter below has to treat all results the same way —
         // a point hit's orientation is occasionally less reliable than a classified
         // plane's, which is an accepted cost for detecting noticeably faster in practice.
+        // (classifyPlaneValidity, called below once a hit is found, is what recovers the
+        // plane-vs-point distinction after the fact, by cross-referencing the hit's
+        // position against frame.detectedPlanes.)
         session.requestHitTestSource({ space: viewerSpace, entityTypes: ["plane", "point"] }).then((source: any) => {
           this.hitTestSource = source;
         });
@@ -1016,10 +1128,9 @@ export class ARSessionScene {
       const hit = viewerPose ? this.findValidHit(hitTestResults, referenceSpace) : null;
 
       if (hit) {
-        const typeChanged = this.currentSurfaceType !== hit.surfaceType;
-        this.currentSurfaceType = hit.surfaceType;
-        this.candidatePosition.setFromMatrixPosition(hit.matrix);
-        this.candidateQuaternion.setFromRotationMatrix(hit.matrix);
+        const wasVisible = this.reticle.visible;
+        this.candidatePosition.setFromMatrixPosition(hit);
+        this.candidateQuaternion.setFromRotationMatrix(hit);
 
         if (!this.reticleHasTarget) {
           // First acquisition this session: snap instead of lerping from the origin.
@@ -1057,23 +1168,39 @@ export class ARSessionScene {
 
         this.tryDepthConfidenceBoost(frame, viewerPose);
 
+        const planeValidity = this.classifyPlaneValidity(this.candidatePosition, frame, referenceSpace);
+        if (planeValidity === "valid") {
+          // Real, adequately-sized detected plane under the hit is strong independent
+          // evidence — same corroboration pattern as tryDepthConfidenceBoost above, so
+          // confidence can jump ahead instead of waiting out the full stable-frame count.
+          this.reticleStableFrames = Math.max(this.reticleStableFrames, RETICLE_STABLE_FRAMES_THRESHOLD);
+        }
+
         this.reticle.matrix.compose(this.reticlePosition, this.reticleQuaternion, ARSessionScene.UNIT_SCALE);
-        const isConfident = this.reticleStableFrames >= RETICLE_STABLE_FRAMES_THRESHOLD;
+        const isConfident = planeValidity !== "invalid" && this.reticleStableFrames >= RETICLE_STABLE_FRAMES_THRESHOLD;
+        this.isPlacementConfident = isConfident;
         if (isConfident) {
           this.lastKnownGoodPosition.copy(this.reticlePosition);
           this.hasLastKnownGood = true;
         }
         (this.reticle.material as THREE.MeshBasicMaterial).color.setHex(
-          isConfident ? RETICLE_COLOR_CONFIDENT : RETICLE_COLOR_SEARCHING
+          planeValidity === "invalid" ? RETICLE_COLOR_INVALID : isConfident ? RETICLE_COLOR_CONFIDENT : RETICLE_COLOR_SEARCHING
         );
-        if (!this.reticle.visible || typeChanged) this.onReticleVisible(true, hit.surfaceType);
+        if (!wasVisible) this.onReticleVisible(true);
         this.reticle.visible = true;
-        this.reportSurfaceIssue(null);
+
+        if (planeValidity === "invalid") {
+          this.reportSurfaceIssue("surface-too-small");
+        } else if (!isConfident) {
+          this.reportSurfaceIssue("not-stable");
+        } else {
+          this.reportSurfaceIssue(null);
+        }
       } else {
         this.reticleHasTarget = false;
         this.reticleStableFrames = 0;
-        this.currentSurfaceType = null;
-        if (this.reticle.visible) this.onReticleVisible(false, null);
+        this.isPlacementConfident = false;
+        if (this.reticle.visible) this.onReticleVisible(false);
         this.reticle.visible = false;
 
         if (!viewerPose) {
@@ -1098,18 +1225,13 @@ export class ARSessionScene {
     }
   }
 
-  // Returns whichever valid hit-test result (floor/tabletop/desk OR wall, per the surface
-  // normal's angle from world-up — slanted surfaces in between are rejected) is closest to
-  // what's currently being tracked, or null if nothing qualifies. Preferring the
+  // Returns whichever valid hit-test result (floor/tabletop/desk, per the surface normal's
+  // angle from world-up — anything past MAX_FLOOR_TILT_DEG is rejected) is closest to what's
+  // currently being tracked, or null if nothing qualifies. Preferring the
   // closest-to-current-target result (instead of always the first) avoids flicker when two
-  // valid surfaces are both in view (e.g. a tabletop and the floor beneath it, or a wall and
-  // the floor meeting it in a corner).
-  private findValidHit(
-    hitTestResults: any[],
-    referenceSpace: any
-  ): { matrix: THREE.Matrix4; surfaceType: SurfaceType } | null {
+  // valid surfaces are both in view (e.g. a tabletop and the floor beneath it).
+  private findValidHit(hitTestResults: any[], referenceSpace: any): THREE.Matrix4 | null {
     let best: THREE.Matrix4 | null = null;
-    let bestType: SurfaceType | null = null;
     let bestDist = Infinity;
 
     for (const result of hitTestResults) {
@@ -1119,13 +1241,9 @@ export class ARSessionScene {
       this.hitCheckMatrix.fromArray(pose.transform.matrix);
       this.hitCheckNormal.setFromMatrixColumn(this.hitCheckMatrix, 1).normalize();
       const tiltDeg = THREE.MathUtils.radToDeg(this.hitCheckNormal.angleTo(ARSessionScene.WORLD_UP));
+      if (tiltDeg > MAX_FLOOR_TILT_DEG) continue;
 
-      let surfaceType: SurfaceType | null = null;
-      if (tiltDeg <= MAX_FLOOR_TILT_DEG) surfaceType = "floor";
-      else if (tiltDeg >= WALL_TILT_MIN_DEG && tiltDeg <= WALL_TILT_MAX_DEG) surfaceType = "wall";
-      if (!surfaceType) continue;
-
-      if (!this.reticleHasTarget) return { matrix: this.hitCheckMatrix.clone(), surfaceType };
+      if (!this.reticleHasTarget) return this.hitCheckMatrix.clone();
 
       const dist = this.hitCheckPosition
         .setFromMatrixPosition(this.hitCheckMatrix)
@@ -1133,10 +1251,9 @@ export class ARSessionScene {
       if (dist < bestDist) {
         bestDist = dist;
         best = this.hitCheckMatrix.clone();
-        bestType = surfaceType;
       }
     }
-    return best && bestType ? { matrix: best, surfaceType: bestType } : null;
+    return best;
   }
 
   dispose() {
