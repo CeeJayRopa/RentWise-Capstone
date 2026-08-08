@@ -129,6 +129,17 @@ const MIN_PLANE_AREA_M2 = 0.15;
 // after on-device testing.
 const WALL_CLEARANCE_M = 0.15;
 
+// Vertical clearance kept between an object's measured lowest point and the floor after a
+// floor-contact snap (see snapToFloor), matching the ground-shadow mesh's own epsilon —
+// purely to avoid z-fighting with the floor itself, not a meaningful visual gap.
+const FLOOR_CONTACT_EPSILON = 0.001;
+
+// Dev-only: set to a specific AR catalog object id, or true for every model, to log
+// floor-contact diagnostics (dimensions, original vs. current bounding box, applied
+// correction) each time that model is placed/moved/scaled — see snapToFloor, the only
+// place this is read. Never fires per-frame. Leave false in normal use.
+const DEV_LOG_FLOOR_CONTACT: string | boolean = false;
+
 // Lightweight surface memory: position already snaps instantly on any reacquisition (see
 // the `!reticleHasTarget` branch below), so the real gap after recovering from a brief
 // tracking-loss is confidence, not position — it still ramps back up from amber even when
@@ -676,10 +687,14 @@ export class ARSessionScene {
     return new THREE.CanvasTexture(canvas);
   }
 
-  // Sized to the model's own local footprint so bigger objects get bigger shadows, and
-  // positioned at the model's own local bottom (not just local Y=0) so it sits flush under
-  // the model regardless of where the source .glb's own origin happens to be.
-  private createGroundShadowMesh(cached: { boundingBox: THREE.Box3 }): THREE.Mesh {
+  // Sized to the model's own local footprint so bigger objects get bigger shadows.
+  // `localFloorY` is the shadow's own vertical position, expressed in the SAME local
+  // (pre-parent-transform) space the model's geometry lives in — this comes from whichever
+  // caller placed/moved the object (see placeArmedAtReticle), not from `cached.boundingBox`
+  // directly, since once the model's own floor contact is corrected by snapToFloor rather
+  // than trusted from the cached box, using the stale cached value here too would let the
+  // shadow drift out of sync with where the model actually ends up resting.
+  private createGroundShadowMesh(cached: { boundingBox: THREE.Box3 }, localFloorY: number): THREE.Mesh {
     const size = new THREE.Vector3();
     const center = new THREE.Vector3();
     cached.boundingBox.getSize(size);
@@ -694,9 +709,54 @@ export class ARSessionScene {
       toneMapped: false,
     });
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.set(center.x, cached.boundingBox.min.y + 0.001, center.z);
+    mesh.position.set(center.x, localFloorY + FLOOR_CONTACT_EPSILON, center.z);
     mesh.renderOrder = -1;
     return mesh;
+  }
+
+  // Computes the object's CURRENT, fully-transformed world-space bounding box — unlike
+  // `cached.boundingBox` from armObject (the model's original, untransformed geometry),
+  // this reflects reality after whatever position/rotation/scale is applied right now.
+  // Forces an explicit matrix-world update first: a position/rotation/scale change isn't
+  // reflected in matrixWorld until the next render pass otherwise, and this is always
+  // called before that pass happens (see snapToFloor, the only real consumer).
+  private computeWorldBoundingBox(group: THREE.Group): THREE.Box3 {
+    group.updateWorldMatrix(true, true);
+    return new THREE.Box3().setFromObject(group);
+  }
+
+  // The authoritative floor-contact fix: measures the object's CURRENT world-space
+  // bounding box and vertically corrects its position so the box's true lowest point sits
+  // exactly at targetFloorY (plus a tiny epsilon), instead of trusting the model's cached,
+  // pre-transform groundOffset math to still be accurate after rotation/scaling. On paper
+  // that math is exact for this file's floor-only, yaw-only rotation (a pure Y-axis
+  // rotation never changes a point's Y-coordinate, so box.min.y shouldn't move) — but
+  // measuring reality after the fact is robust to whatever's actually causing drift in
+  // practice (GLTF export quirks, a bounding box computed before the loader's matrices
+  // were fully settled, accumulated float error across repeated scale/move operations,
+  // etc.) without needing to chase each cause individually. Called only at discrete events
+  // (place/move/scale) — never per-frame, see onFrame, which doesn't call this at all.
+  private snapToFloor(group: THREE.Group, targetFloorY: number, objectId?: string): void {
+    const box = this.computeWorldBoundingBox(group);
+    if (!Number.isFinite(box.min.y)) return;
+
+    const delta = targetFloorY + FLOOR_CONTACT_EPSILON - box.min.y;
+    group.position.y += delta;
+
+    if (objectId && (DEV_LOG_FLOOR_CONTACT === true || DEV_LOG_FLOOR_CONTACT === objectId)) {
+      const cached = this.modelCache.get(objectId);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      console.log(`[AR floor-contact] "${objectId}"`, {
+        originalLocalMinY: cached ? -cached.groundOffset : undefined,
+        originalLocalMaxY: cached?.boundingBox.max.y,
+        currentWorldMinY: box.min.y,
+        currentWorldMaxY: box.max.y,
+        dimensions: { x: size.x, y: size.y, z: size.z },
+        targetFloorY,
+        appliedCorrection: delta,
+      });
+    }
   }
 
   private placeArmedAtReticle() {
@@ -704,13 +764,23 @@ export class ARSessionScene {
 
     const group = cloneWithOwnMaterials(this.armedModel);
     group.matrixAutoUpdate = true;
+    const floorY = this.reticlePosition.y;
     group.position.setFromMatrixPosition(this.reticle.matrix);
-
     this.orientTowardCamera(group);
-    group.translateY(this.armedGroundOffset);
+
+    // Calibrate floor contact at the object's real target scale (always uniform 1 for a
+    // fresh placement) BEFORE shrinking for the spawn-in animation below — snapping at the
+    // tiny spawn-start scale instead would leave the object resting slightly off the floor
+    // once it finishes growing to full size, since the correction wouldn't be measured at
+    // the scale it actually settles at.
+    group.scale.set(1, 1, 1);
+    this.snapToFloor(group, floorY, this.armedObjectId);
 
     const cached = this.modelCache.get(this.armedObjectId);
-    if (cached) group.add(this.createGroundShadowMesh(cached));
+    if (cached) {
+      const localFloorY = floorY - group.position.y;
+      group.add(this.createGroundShadowMesh(cached, localFloorY));
+    }
 
     group.scale.setScalar(0.001); // spawn-animated up to full size in onFrame
 
@@ -856,28 +926,31 @@ export class ARSessionScene {
   // point, kept separate so other callers could set an absolute value if ever needed.
   private setAxisScale(axis: ScaleAxis, targetValue: number) {
     if (!this.selected) return;
-    const prev = this.selected.scale[axis];
+
+    // Read where the object is CURRENTLY resting before touching its scale at all — this
+    // is "the floor" for the purposes of this operation, not a value re-derived from the
+    // live reticle (which might not even be visible, or pointed elsewhere, while the user
+    // is scaling an already-placed object).
+    const preScaleBox = this.computeWorldBoundingBox(this.selected.group);
+    const floorY = Number.isFinite(preScaleBox.min.y) ? preScaleBox.min.y : null;
+
     const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, targetValue));
     this.selected.scale[axis] = next;
     this.selected.group.scale.set(this.selected.scale.x, this.selected.scale.y, this.selected.scale.z);
 
-    if (axis === "y") {
-      // Keep the object's base anchored to the floor as its height changes, instead of
-      // growing/shrinking from its origin point (which would lift it off the ground or
-      // sink it into the floor as the height scale changes).
-      this.selected.group.translateY(this.selected.groundOffset * (next - prev));
-    }
+    // Re-snap to that same floor Y regardless of which axis changed (cheap — one measured
+    // bounding box per button press, not per frame) instead of only correcting for Y-axis
+    // scale via the object's cached, pre-transform groundOffset — see snapToFloor's own
+    // comment for why measuring reality after the fact is the robust choice here.
+    if (floorY !== null) this.snapToFloor(this.selected.group, floorY, this.selected.objectId);
   }
 
   moveSelectedToReticle() {
     if (!this.selected || !this.reticle.visible) return;
+    const floorY = this.reticlePosition.y;
     this.selected.group.position.setFromMatrixPosition(this.reticle.matrix);
 
-    // translate* moves along the local axis irrespective of the group's own scale, so the
-    // raw offset (measured against the unscaled model) must be scaled up/down to match
-    // however big this particular instance currently is.
     this.orientTowardCamera(this.selected.group);
-    this.selected.group.translateY(this.selected.groundOffset * this.selected.scale.y);
 
     // orientTowardCamera above just reset the group's facing to a fresh base orientation
     // for the new spot — reapply whatever manual rotation the user had already dialed in so
@@ -886,6 +959,8 @@ export class ARSessionScene {
     if (this.selected.userYawDeg !== 0) {
       this.selected.group.rotateY(THREE.MathUtils.degToRad(this.selected.userYawDeg));
     }
+
+    this.snapToFloor(this.selected.group, floorY, this.selected.objectId);
   }
 
   deleteSelected() {
