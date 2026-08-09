@@ -963,7 +963,7 @@ export class ARSessionScene {
   }
 
   moveSelectedToReticle() {
-    if (!this.selected || !this.reticle.visible) return;
+    if (!this.selected || !this.reticle.visible || !this.isPlacementConfident) return;
     const floorY = this.reticlePosition.y;
     this.selected.group.position.setFromMatrixPosition(this.reticle.matrix);
 
