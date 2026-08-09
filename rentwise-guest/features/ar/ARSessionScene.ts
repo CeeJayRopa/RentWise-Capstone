@@ -1346,7 +1346,14 @@ export class ARSessionScene {
         // under a second. Requiring the much longer UNCORROBORATED_FALLBACK_FRAMES hold in
         // that case closes that gap while still not blocking placement forever on a device
         // or moment with no plane/depth data at all.
-        const corroborated = planeValidity === "valid" || this.depthCorroborated;
+        // Depth-sensor distance agreement only confirms "something solid is here at this
+        // distance" — it says nothing about orientation, so it's just as satisfiable by a
+        // wall as a floor (see tryDepthConfidenceBoost's own comment). It only remains
+        // meaningful when there's no plane data to consult at all, same restriction already
+        // applied to the stillness fallback below — on a plane-detection-capable device,
+        // only a genuine classified horizontal plane can grant the fast path.
+        const corroborated =
+          planeValidity === "valid" || (planeValidity === "unsupported" && this.depthCorroborated);
         // Only a device/browser with no plane-detection capability at all ("unsupported")
         // falls back to trusting raw stillness alone. "unclassified" does NOT qualify --
         // that's the state any vertical surface (a door, a cabinet) sits in right up until
