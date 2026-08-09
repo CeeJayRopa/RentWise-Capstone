@@ -150,6 +150,16 @@ const FLOOR_CONTACT_EPSILON = 0.001;
 // place this is read. Never fires per-frame. Leave false in normal use.
 const DEV_LOG_FLOOR_CONTACT: string | boolean = false;
 
+// Dev-only, temporary investigation diagnostic: set true to log each WebXR-detected
+// plane's geometry (orientation, polygon point count, computed area, local X/Z bounds) to
+// the console whenever plane.lastChangedTime reports it actually changed — lets ARCore's
+// own plane-tracking stability near a wall/corner be inspected directly, instead of
+// inferred from how the translucent plane-outline visualization looks on screen. Purely
+// observational: never read by any placement/confidence logic, and fully independent of
+// updatePlaneVisualizations' own state — see logPlaneDiagnostics. Leave false in normal
+// use; this whole diagnostic is meant to be removed once the investigation is done.
+const DEV_LOG_PLANE_DIAGNOSTICS = false;
+
 // Lightweight surface memory: position already snaps instantly on any reacquisition (see
 // the `!reticleHasTarget` branch below), so the real gap after recovering from a brief
 // tracking-loss is confidence, not position — it still ramps back up from amber even when
@@ -316,6 +326,17 @@ export class ARSessionScene {
     side: THREE.DoubleSide,
     depthWrite: false,
   });
+
+  // Dev-diagnostic only (see DEV_LOG_PLANE_DIAGNOSTICS / logPlaneDiagnostics) — deliberately
+  // separate Maps from detectedPlaneMeshes above, so this diagnostic can be deleted later
+  // without touching the real plane-visualization state at all. Assigns each plane a
+  // small, stable log-friendly id the first time it's seen (plane objects are stable
+  // references across frames, same assumption detectedPlaneMeshes already relies on), and
+  // remembers the lastChangedTime last logged for it, so a plane is only logged again once
+  // WebXR reports its geometry actually changed.
+  private planeDiagnosticIds = new Map<any, number>();
+  private planeDiagnosticLastLoggedChange = new Map<any, number>();
+  private nextPlaneDiagnosticId = 1;
 
   private placed: PlacedObject[] = [];
   private selected: PlacedObject | null = null;
@@ -1130,6 +1151,66 @@ export class ARSessionScene {
     }
   }
 
+  // TEMPORARY dev-only investigation diagnostic (see DEV_LOG_PLANE_DIAGNOSTICS) — logs each
+  // detected plane's geometry whenever WebXR reports it changed, to directly observe
+  // whether ARCore's plane tracking itself is stable near a wall/corner. Deliberately fully
+  // independent of updatePlaneVisualizations above — its own separate id/change-tracking
+  // Maps, no shared state, no calls into it and no calls from it — so this method (and its
+  // two Map fields and the DEV_LOG_PLANE_DIAGNOSTICS constant) can be deleted cleanly once
+  // the investigation is done, without touching any real behavior.
+  private logPlaneDiagnostics(frame: any, referenceSpace: any): void {
+    const detectedPlanes: Set<any> | undefined = frame.detectedPlanes;
+    if (!detectedPlanes) return;
+
+    for (const plane of detectedPlanes) {
+      const lastLogged = this.planeDiagnosticLastLoggedChange.get(plane);
+      if (lastLogged === plane.lastChangedTime) continue; // unchanged since last log
+
+      let id = this.planeDiagnosticIds.get(plane);
+      if (id === undefined) {
+        id = this.nextPlaneDiagnosticId++;
+        this.planeDiagnosticIds.set(plane, id);
+      }
+      this.planeDiagnosticLastLoggedChange.set(plane, plane.lastChangedTime);
+
+      const polygon = (plane.polygon as { x: number; z: number }[]) ?? [];
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minZ = Infinity;
+      let maxZ = -Infinity;
+      for (const p of polygon) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.z < minZ) minZ = p.z;
+        if (p.z > maxZ) maxZ = p.z;
+      }
+
+      console.log(
+        `[AR plane-diagnostic] #${id} (${plane.orientation === "horizontal" ? "FLOOR-CANDIDATE" : "WALL-CANDIDATE"})`,
+        {
+          orientation: plane.orientation,
+          pointCount: polygon.length,
+          areaM2: polygon.length >= 3 ? Number(polygonAreaXZ(polygon).toFixed(4)) : null,
+          localBoundsXZ:
+            polygon.length > 0
+              ? { x: [Number(minX.toFixed(3)), Number(maxX.toFixed(3))], z: [Number(minZ.toFixed(3)), Number(maxZ.toFixed(3))] }
+              : null,
+          lastChangedTime: plane.lastChangedTime,
+        }
+      );
+    }
+
+    // Detected planes can also disappear (merged into another plane, or lost entirely) --
+    // exactly the kind of instability this diagnostic is meant to surface.
+    for (const plane of this.planeDiagnosticIds.keys()) {
+      if (!detectedPlanes.has(plane)) {
+        console.log(`[AR plane-diagnostic] #${this.planeDiagnosticIds.get(plane)} removed/merged`);
+        this.planeDiagnosticIds.delete(plane);
+        this.planeDiagnosticLastLoggedChange.delete(plane);
+      }
+    }
+  }
+
   // Answers "is this hit-test position actually on a real, adequately-sized detected
   // plane" by reusing the same frame.detectedPlanes data updatePlaneVisualizations reads
   // for visualization — the WebXR spec doesn't expose which entityType (plane vs point)
@@ -1253,6 +1334,7 @@ export class ARSessionScene {
     const referenceSpace = this.renderer.xr.getReferenceSpace();
 
     if (referenceSpace) this.updatePlaneVisualizations(frame, referenceSpace);
+    if (DEV_LOG_PLANE_DIAGNOSTICS && referenceSpace) this.logPlaneDiagnostics(frame, referenceSpace);
 
     // Kick off hit-test-source setup once, without awaiting: an XRFrame is only valid
     // synchronously during this callback, so any `await` here would leave later lines
