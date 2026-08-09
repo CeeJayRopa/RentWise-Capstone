@@ -111,8 +111,8 @@ const RETICLE_COLOR_INVALID = 0xf44336;
 // small but genuinely usable floor gap in a cluttered market stall should still clear it
 // once ARCore has locked onto it at all. A hit that matches NO plane (device without
 // plane-detection support, or a point-hit ARCore hasn't classified yet) is never penalized
-// by this threshold — see classifyPlaneValidity's "unknown" case. Starting value; expect to
-// tune after on-device testing in a real cluttered space.
+// by this threshold — see classifyPlaneValidity's "unclassified"/"unsupported" cases.
+// Starting value; expect to tune after on-device testing in a real cluttered space.
 const MIN_PLANE_AREA_M2 = 0.15;
 
 // Maximum perpendicular distance (meters) a hit may sit from a horizontal plane's own
@@ -179,12 +179,19 @@ function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
 }
 
-// "valid": the hit lands inside a detected plane's polygon whose area clears
-// MIN_PLANE_AREA_M2. "invalid": it lands inside a detected plane's polygon that's too
-// small to trust. "unknown": no detected plane covers this hit at all (no plane-detection
-// support, or ARCore hasn't classified a plane there yet) — deliberately NOT treated the
-// same as "invalid", since absence of plane data isn't evidence of a bad surface.
-type PlaneValidity = "valid" | "invalid" | "unknown";
+// "valid": the hit lands inside a detected horizontal plane's polygon, close enough to its
+// surface, whose area clears MIN_PLANE_AREA_M2. "invalid": same, but the plane is too small
+// to trust. Neither "unsupported" nor "unclassified" below are treated the same as
+// "invalid", since absence of plane data isn't evidence of a bad surface on its own.
+// "unsupported": frame.detectedPlanes is undefined -- this device/browser has no
+// plane-detection capability for this session at all, so no amount of waiting will ever
+// produce plane data here. "unclassified": detectedPlanes exists (plane detection IS
+// active) but nothing covers this hit yet -- ARCore may still be about to build a real
+// plane here, or this may turn out to be a surface (e.g. a door) that never becomes a
+// horizontal one. These two are deliberately distinct: only "unsupported" is a legitimate
+// reason to fall back to trusting raw stillness alone (see UNCORROBORATED_FALLBACK_FRAMES
+// in onFrame) -- "unclassified" must wait for real corroboration instead.
+type PlaneValidity = "valid" | "invalid" | "unclassified" | "unsupported";
 
 // Standard ray-casting (PNPOLY) point-in-polygon test, operating in a plane's local XZ
 // space — same convention updatePlaneVisualizations already uses for polygon[i].x/z.
@@ -1135,7 +1142,8 @@ export class ARSessionScene {
   // cost is negligible, and it keeps the two code paths decoupled.
   private classifyPlaneValidity(hitWorldPos: THREE.Vector3, frame: any, referenceSpace: any): PlaneValidity {
     const detectedPlanes: Set<any> | undefined = frame.detectedPlanes;
-    if (!detectedPlanes || detectedPlanes.size === 0) return "unknown";
+    if (!detectedPlanes) return "unsupported";
+    if (detectedPlanes.size === 0) return "unclassified";
 
     for (const plane of detectedPlanes) {
       if (plane.orientation !== "horizontal") continue;
@@ -1154,9 +1162,9 @@ export class ARSessionScene {
 
       return polygonAreaXZ(polygon) >= MIN_PLANE_AREA_M2 ? "valid" : "invalid";
     }
-    // No plane covers this hit at all — could mean no plane-detection support, or a
-    // point-hit ARCore hasn't classified into a plane yet. Neither is negative evidence.
-    return "unknown";
+    // No plane covers this hit at all — plane detection is active, ARCore just hasn't
+    // classified anything here yet. Not negative evidence, but not "unsupported" either.
+    return "unclassified";
   }
 
   // Guards floor placement from clipping into a nearby wall/corner: for each detected
@@ -1339,10 +1347,19 @@ export class ARSessionScene {
         // that case closes that gap while still not blocking placement forever on a device
         // or moment with no plane/depth data at all.
         const corroborated = planeValidity === "valid" || this.depthCorroborated;
+        // Only a device/browser with no plane-detection capability at all ("unsupported")
+        // falls back to trusting raw stillness alone. "unclassified" does NOT qualify --
+        // that's the state any vertical surface (a door, a cabinet) sits in right up until
+        // ARCore gets around to building a plane there, and stillness alone can't tell that
+        // apart from a genuinely uncorroborated floor spot. On a plane-detection-capable
+        // device, an uncorroborated hit is simply not placeable until it's corroborated.
+        const fallbackEligible = planeValidity === "unsupported";
         const isConfident =
           planeValidity !== "invalid" &&
           !tooCloseToWall &&
-          this.reticleStableFrames >= (corroborated ? RETICLE_STABLE_FRAMES_THRESHOLD : UNCORROBORATED_FALLBACK_FRAMES);
+          (corroborated
+            ? this.reticleStableFrames >= RETICLE_STABLE_FRAMES_THRESHOLD
+            : fallbackEligible && this.reticleStableFrames >= UNCORROBORATED_FALLBACK_FRAMES);
         this.isPlacementConfident = isConfident;
         if (isConfident) {
           this.lastKnownGoodPosition.copy(this.reticlePosition);
