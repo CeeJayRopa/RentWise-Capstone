@@ -115,6 +115,16 @@ const RETICLE_COLOR_INVALID = 0xf44336;
 // tune after on-device testing in a real cluttered space.
 const MIN_PLANE_AREA_M2 = 0.15;
 
+// Maximum perpendicular distance (meters) a hit may sit from a horizontal plane's own
+// surface for that plane to corroborate it — without this, classifyPlaneValidity only
+// checked the hit's 2D (local x/z) projection against a plane's polygon, never its actual
+// distance from the plane along the plane's own normal (local y). That let a floor-level
+// hit near a wall/floor corner get matched against the WALL's polygon (whose local x/z
+// represent along-wall and up-the-wall extents, not perpendicular distance), since the
+// vertical-plane filter added alongside this constant wasn't enough on its own to catch a
+// hit that's genuinely far from a plane's surface but still projects inside its outline.
+const FLOOR_PLANE_PERPENDICULAR_TOLERANCE_M = 0.05;
+
 // Minimum horizontal clearance (meters) a floor placement point must keep from any
 // detected vertical (wall-like) plane, so an object's own footprint doesn't visually clip
 // into a wall or corner even though it's anchored on the floor right next to it — this is
@@ -1128,11 +1138,15 @@ export class ARSessionScene {
     if (!detectedPlanes || detectedPlanes.size === 0) return "unknown";
 
     for (const plane of detectedPlanes) {
+      if (plane.orientation !== "horizontal") continue;
+
       const pose = frame.getPose(plane.planeSpace, referenceSpace);
       if (!pose) continue;
 
       this.scratchPlaneInverse.fromArray(pose.transform.matrix).invert();
       this.scratchLocalHit.copy(hitWorldPos).applyMatrix4(this.scratchPlaneInverse);
+
+      if (Math.abs(this.scratchLocalHit.y) > FLOOR_PLANE_PERPENDICULAR_TOLERANCE_M) continue;
 
       const polygon = plane.polygon as { x: number; z: number }[];
       if (polygon.length < 3) continue;
