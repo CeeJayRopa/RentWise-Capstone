@@ -587,7 +587,7 @@ export default function ARView() {
               <Text style={styles.statusHintText}>
                 {arming
                   ? `Loading ${armedObject?.name ?? "item"}…`
-                  : !reticleVisible
+                  : surfaceIssue
                   ? surfaceHintText
                   : armedObject
                   ? `Tap the floor to place: ${armedObject.name}`
