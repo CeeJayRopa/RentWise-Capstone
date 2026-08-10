@@ -378,6 +378,11 @@ export class ARSessionScene {
   // Relays validateBoundingBox's console warnings on-screen too — chrome://inspect needs a
   // tethered desktop, which isn't always available while testing on an actual device.
   private onModelWarning: (objectId: string, message: string) => void = () => {};
+  // TEMPORARY, same reasoning as onModelWarning above — relays logPlaneDiagnostics' console
+  // output on-screen too, since QA-only testing (a pushed build, no tethered debugging
+  // session) means chrome://inspect isn't reachable at all for this investigation. Remove
+  // alongside DEV_LOG_PLANE_DIAGNOSTICS/logPlaneDiagnostics once the investigation concludes.
+  private onPlaneDiagnostic: (message: string) => void = () => {};
   private scratchCameraForward = new THREE.Vector3();
   private resizeHandler = () => this.handleResize();
 
@@ -438,6 +443,10 @@ export class ARSessionScene {
 
   setModelWarningCallback(onModelWarning: (objectId: string, message: string) => void) {
     this.onModelWarning = onModelWarning;
+  }
+
+  setPlaneDiagnosticCallback(onPlaneDiagnostic: (message: string) => void) {
+    this.onPlaneDiagnostic = onPlaneDiagnostic;
   }
 
   // Only fires the callback when the cause actually changes, so the UI layer's own
@@ -1203,26 +1212,33 @@ export class ARSessionScene {
         if (p.z > maxZ) maxZ = p.z;
       }
 
-      console.log(
-        `[AR plane-diagnostic] #${id} (${plane.orientation === "horizontal" ? "FLOOR-CANDIDATE" : "WALL-CANDIDATE"})`,
-        {
-          orientation: plane.orientation,
-          pointCount: polygon.length,
-          areaM2: polygon.length >= 3 ? Number(polygonAreaXZ(polygon).toFixed(4)) : null,
-          localBoundsXZ:
-            polygon.length > 0
-              ? { x: [Number(minX.toFixed(3)), Number(maxX.toFixed(3))], z: [Number(minZ.toFixed(3)), Number(maxZ.toFixed(3))] }
-              : null,
-          lastChangedTime: plane.lastChangedTime,
-        }
-      );
+      const kind = plane.orientation === "horizontal" ? "FLOOR-CANDIDATE" : "WALL-CANDIDATE";
+      const areaM2 = polygon.length >= 3 ? Number(polygonAreaXZ(polygon).toFixed(4)) : null;
+      const boundsText =
+        polygon.length > 0
+          ? `x[${minX.toFixed(2)},${maxX.toFixed(2)}] z[${minZ.toFixed(2)},${maxZ.toFixed(2)}]`
+          : "no polygon";
+
+      console.log(`[AR plane-diagnostic] #${id} (${kind})`, {
+        orientation: plane.orientation,
+        pointCount: polygon.length,
+        areaM2,
+        localBoundsXZ:
+          polygon.length > 0
+            ? { x: [Number(minX.toFixed(3)), Number(maxX.toFixed(3))], z: [Number(minZ.toFixed(3)), Number(maxZ.toFixed(3))] }
+            : null,
+        lastChangedTime: plane.lastChangedTime,
+      });
+      this.onPlaneDiagnostic(`#${id} ${kind} area=${areaM2 ?? "n/a"}m² ${boundsText}`);
     }
 
     // Detected planes can also disappear (merged into another plane, or lost entirely) --
     // exactly the kind of instability this diagnostic is meant to surface.
     for (const plane of this.planeDiagnosticIds.keys()) {
       if (!detectedPlanes.has(plane)) {
-        console.log(`[AR plane-diagnostic] #${this.planeDiagnosticIds.get(plane)} removed/merged`);
+        const id = this.planeDiagnosticIds.get(plane);
+        console.log(`[AR plane-diagnostic] #${id} removed/merged`);
+        this.onPlaneDiagnostic(`#${id} removed/merged`);
         this.planeDiagnosticIds.delete(plane);
         this.planeDiagnosticLastLoggedChange.delete(plane);
       }

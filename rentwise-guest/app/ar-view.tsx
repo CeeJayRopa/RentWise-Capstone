@@ -97,6 +97,11 @@ export default function ARView() {
   // Relays ARSessionScene's validateBoundingBox warnings on-screen — chrome://inspect needs
   // a tethered desktop, which isn't always available while testing on an actual device.
   const [modelWarnings, setModelWarnings] = useState<string[]>([]);
+  // TEMPORARY, same reasoning as modelWarnings above — relays the plane-geometry
+  // investigation diagnostic on-screen, since QA-only testing (a pushed build, no tethered
+  // debugging session) means chrome://inspect isn't reachable at all right now. Remove
+  // alongside ARSessionScene's DEV_LOG_PLANE_DIAGNOSTICS once the investigation concludes.
+  const [planeDiagnostics, setPlaneDiagnostics] = useState<string[]>([]);
   const wasReticleVisibleRef = useRef(false);
   const scanPulseAnim = useRef(new Animated.Value(0)).current;
 
@@ -235,6 +240,10 @@ export default function ARView() {
     scene.setModelWarningCallback((objectId, message) =>
       setModelWarnings((prev) => [...prev, `"${objectId}" ${message}`])
     );
+    // Capped at the most recent 30 lines -- this can fire far more often than model
+    // warnings (once per plane-geometry change, not once per model load), so an unbounded
+    // list would grow indefinitely over a long test session.
+    scene.setPlaneDiagnosticCallback((message) => setPlaneDiagnostics((prev) => [...prev.slice(-29), message]));
     scene.mount(canvas);
     sceneRef.current = scene;
 
@@ -630,6 +639,37 @@ export default function ARView() {
           </View>
         )}
 
+        {/* TEMPORARY — relays ARSessionScene's plane-geometry investigation diagnostic
+            on-screen (see setPlaneDiagnosticCallback), for the same reason as the model-
+            warnings panel above: QA-only pushed-build testing has no tethered console
+            access at all. Remove alongside DEV_LOG_PLANE_DIAGNOSTICS once done. */}
+        {sessionActive && planeDiagnostics.length > 0 && (
+          <View style={styles.planeDiagnosticPanel}>
+            <View style={styles.modelWarningHeader}>
+              <Text style={styles.planeDiagnosticTitle}>Plane diagnostics ({planeDiagnostics.length})</Text>
+              <TouchableOpacity
+                onPressIn={suppressPressIn}
+                onPressOut={suppressPressOut}
+                onPress={() => setPlaneDiagnostics([])}
+              >
+                <Text style={styles.modelWarningClear}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView
+              style={styles.modelWarningScroll}
+              onTouchStart={suppressPressIn}
+              onTouchEnd={suppressPressOut}
+              onTouchCancel={suppressPressOut}
+            >
+              {planeDiagnostics.map((line, i) => (
+                <Text key={i} style={styles.modelWarningText}>
+                  {line}
+                </Text>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+
         {measurement && measurement.visible && (
           <View
             style={[
@@ -957,6 +997,22 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 10,
   },
+  // TEMPORARY — same shape as modelWarningPanel, stacked below it so both can show at once
+  // without overlapping, distinct blue border to read as "diagnostic" rather than "warning."
+  planeDiagnosticPanel: {
+    position: "absolute",
+    top: 260,
+    right: 16,
+    width: 210,
+    maxHeight: 180,
+    backgroundColor: "rgba(10,30,59,0.92)",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#4FC3F7",
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  planeDiagnosticTitle: { color: "#8ED6FB", fontSize: 10, fontWeight: "700", flexShrink: 1 },
   modelWarningHeader: {
     flexDirection: "row",
     alignItems: "center",
