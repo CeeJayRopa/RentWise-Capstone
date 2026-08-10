@@ -319,8 +319,19 @@ export class ARSessionScene {
   // there. Keyed by the browser's own XRPlane objects so each gets one persistent mesh
   // instead of being recreated every frame.
   private detectedPlaneMeshes = new Map<any, THREE.Mesh>();
-  private planeVisualizationMaterial = new THREE.MeshBasicMaterial({
+  // Floor (horizontal) planes stay green — walls (vertical) render in a visibly different
+  // color so it's obvious at a glance which real-world surfaces ARCore currently believes
+  // are floor vs. wall, instead of both tinting identically. Purely visual — neither
+  // material is read by any placement/confidence logic.
+  private planeVisualizationMaterialFloor = new THREE.MeshBasicMaterial({
     color: 0x4caf50,
+    transparent: true,
+    opacity: 0.15,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  private planeVisualizationMaterialWall = new THREE.MeshBasicMaterial({
+    color: 0xff7043,
     transparent: true,
     opacity: 0.15,
     side: THREE.DoubleSide,
@@ -1099,11 +1110,12 @@ export class ARSessionScene {
     this.onMeasurementChange({ widthM, heightM, depthM, screenX, screenY, visible });
   }
 
-  // Renders each currently-tracked plane's real boundary as a translucent green overlay, so
-  // the user can see how big the detected floor/table actually is, not just a small
-  // fixed-size ring at the raycast point. Meshes are reused across frames (only rebuilt when
-  // a plane's polygon actually changes, per its lastChangedTime) since recreating geometry
-  // every frame for every tracked plane would be wasteful.
+  // Renders each currently-tracked plane's real boundary as a translucent overlay — green
+  // for floor/table (horizontal), orange for walls (vertical) — so the user can see both
+  // how big a detected surface actually is and which real-world surfaces are currently
+  // classified as which, instead of a small fixed-size ring at the raycast point. Meshes
+  // are reused across frames (only rebuilt when a plane's polygon actually changes, per its
+  // lastChangedTime) since recreating geometry every frame would be wasteful.
   private updatePlaneVisualizations(frame: any, referenceSpace: any) {
     const detectedPlanes: Set<any> | undefined = frame.detectedPlanes;
     if (!detectedPlanes) return; // Browser doesn't support/grant plane-detection — no-op.
@@ -1138,7 +1150,7 @@ export class ARSessionScene {
             mesh.geometry.dispose();
             mesh.geometry = geometry;
           } else {
-            mesh = new THREE.Mesh(geometry, this.planeVisualizationMaterial);
+            mesh = new THREE.Mesh(geometry, this.planeVisualizationMaterialFloor);
             mesh.matrixAutoUpdate = false;
             this.detectedPlaneMeshes.set(plane, mesh);
             this.scene.add(mesh);
@@ -1147,7 +1159,13 @@ export class ARSessionScene {
         }
       }
 
-      if (mesh) mesh.matrix.fromArray(pose.transform.matrix);
+      // Reassigned every frame, not just on creation — cheap, and keeps the tint correct if
+      // ARCore ever reclassifies a plane's orientation after it was first created.
+      if (mesh) {
+        mesh.material =
+          plane.orientation === "vertical" ? this.planeVisualizationMaterialWall : this.planeVisualizationMaterialFloor;
+        mesh.matrix.fromArray(pose.transform.matrix);
+      }
     }
   }
 
