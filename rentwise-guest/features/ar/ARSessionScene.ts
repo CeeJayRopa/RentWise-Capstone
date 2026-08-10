@@ -139,6 +139,17 @@ const FLOOR_PLANE_PERPENDICULAR_TOLERANCE_M = 0.05;
 // after on-device testing.
 const WALL_CLEARANCE_M = 0.15;
 
+// isTooCloseToWall() is a raw, single-frame geometric check with no memory of its own — a
+// hit sitting right around the WALL_CLEARANCE_M boundary (exactly where a phone naturally
+// ends up when someone is actually standing near a wall) can flip true/false frame to frame
+// from ordinary ARCore tracking noise, even while held steady, causing the reticle to
+// visibly glitch green/red. This is how many consecutive frames that raw result must agree
+// with itself before the debounced value actually used for confidence/color is allowed to
+// change (see the tooCloseToWallDebounced fields and its onFrame usage). Starting value;
+// expect to tune on-device — too low doesn't filter the glitch, too high adds noticeable
+// lag to genuine close/far transitions.
+const WALL_CLEARANCE_DEBOUNCE_FRAMES = 5;
+
 // Vertical clearance kept between an object's measured lowest point and the floor after a
 // floor-contact snap (see snapToFloor), matching the ground-shadow mesh's own epsilon —
 // purely to avoid z-fighting with the floor itself, not a meaningful visual gap.
@@ -266,6 +277,11 @@ export class ARSessionScene {
   private lastKnownGoodPosition = new THREE.Vector3();
   private hasLastKnownGood = false;
   private wasTrackingLost = false;
+  // Debounce state for isTooCloseToWall's raw per-frame result — see
+  // WALL_CLEARANCE_DEBOUNCE_FRAMES's own comment for why this exists.
+  private tooCloseToWallRawStreak = 0;
+  private lastTooCloseToWallRaw = false;
+  private tooCloseToWallDebounced = false;
   private candidatePosition = new THREE.Vector3();
   private candidateQuaternion = new THREE.Quaternion();
   private hitCheckMatrix = new THREE.Matrix4();
@@ -604,6 +620,9 @@ export class ARSessionScene {
     this.wasTrackingLost = false;
     this.isPlacementConfident = false;
     this.depthCorroborated = false;
+    this.tooCloseToWallRawStreak = 0;
+    this.lastTooCloseToWallRaw = false;
+    this.tooCloseToWallDebounced = false;
     this.reticle.visible = false;
 
     this.placedGroup.clear();
@@ -1452,7 +1471,17 @@ export class ARSessionScene {
           // confidence can jump ahead instead of waiting out the full stable-frame count.
           this.reticleStableFrames = Math.max(this.reticleStableFrames, RETICLE_STABLE_FRAMES_THRESHOLD);
         }
-        const tooCloseToWall = this.isTooCloseToWall(this.candidatePosition, frame, referenceSpace);
+        const tooCloseToWallRaw = this.isTooCloseToWall(this.candidatePosition, frame, referenceSpace);
+        if (tooCloseToWallRaw === this.lastTooCloseToWallRaw) {
+          this.tooCloseToWallRawStreak++;
+        } else {
+          this.lastTooCloseToWallRaw = tooCloseToWallRaw;
+          this.tooCloseToWallRawStreak = 1;
+        }
+        if (this.tooCloseToWallRawStreak >= WALL_CLEARANCE_DEBOUNCE_FRAMES) {
+          this.tooCloseToWallDebounced = tooCloseToWallRaw;
+        }
+        const tooCloseToWall = this.tooCloseToWallDebounced;
 
         this.reticle.matrix.compose(this.reticlePosition, this.reticleQuaternion, ARSessionScene.UNIT_SCALE);
         // A hit backed by neither a real detected plane nor hardware depth agreement is
@@ -1512,6 +1541,9 @@ export class ARSessionScene {
         this.reticleStableFrames = 0;
         this.isPlacementConfident = false;
         this.depthCorroborated = false;
+        this.tooCloseToWallRawStreak = 0;
+        this.lastTooCloseToWallRaw = false;
+        this.tooCloseToWallDebounced = false;
         if (this.reticle.visible) this.onReticleVisible(false);
         this.reticle.visible = false;
 
