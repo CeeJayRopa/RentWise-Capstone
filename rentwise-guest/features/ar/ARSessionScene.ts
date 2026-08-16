@@ -169,7 +169,7 @@ const DEV_LOG_FLOOR_CONTACT: string | boolean = false;
 // observational: never read by any placement/confidence logic, and fully independent of
 // updatePlaneVisualizations' own state — see logPlaneDiagnostics. Leave false in normal
 // use; this whole diagnostic is meant to be removed once the investigation is done.
-const DEV_LOG_PLANE_DIAGNOSTICS = true;
+const DEV_LOG_PLANE_DIAGNOSTICS = false;
 
 // Lightweight surface memory: position already snaps instantly on any reacquisition (see
 // the `!reticleHasTarget` branch below), so the real gap after recovering from a brief
