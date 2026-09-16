@@ -284,6 +284,57 @@ export default function ARView() {
   const suppressPressIn = () => sceneRef.current?.beginUIInteraction();
   const suppressPressOut = () => sceneRef.current?.endUIInteraction();
 
+  useEffect(() => {
+    if (Platform.OS !== "web" || !sessionActive || !placedState.selectedId) return;
+
+    let pinching = false;
+    let previousDistance = 0;
+    const distanceBetween = (touches: TouchList) => {
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.hypot(dx, dy);
+    };
+
+    const onTouchStart = (event: TouchEvent) => {
+      if (event.touches.length !== 2) return;
+      pinching = true;
+      previousDistance = distanceBetween(event.touches);
+      sceneRef.current?.beginUIInteraction();
+      event.preventDefault();
+    };
+
+    const onTouchMove = (event: TouchEvent) => {
+      if (!pinching || event.touches.length !== 2) return;
+      const nextDistance = distanceBetween(event.touches);
+      if (previousDistance > 0 && nextDistance > 0) {
+        const incrementalFactor = Math.min(1.15, Math.max(0.85, nextDistance / previousDistance));
+        sceneRef.current?.scaleSelectedUniform(incrementalFactor);
+        previousDistance = nextDistance;
+      }
+      event.preventDefault();
+    };
+
+    const finishPinch = (event: TouchEvent) => {
+      if (!pinching || event.touches.length >= 2) return;
+      pinching = false;
+      previousDistance = 0;
+      sceneRef.current?.endUIInteraction();
+    };
+
+    document.addEventListener("touchstart", onTouchStart, { passive: false, capture: true });
+    document.addEventListener("touchmove", onTouchMove, { passive: false, capture: true });
+    document.addEventListener("touchend", finishPinch, { capture: true });
+    document.addEventListener("touchcancel", finishPinch, { capture: true });
+
+    return () => {
+      document.removeEventListener("touchstart", onTouchStart, true);
+      document.removeEventListener("touchmove", onTouchMove, true);
+      document.removeEventListener("touchend", finishPinch, true);
+      document.removeEventListener("touchcancel", finishPinch, true);
+      if (pinching) sceneRef.current?.endUIInteraction();
+    };
+  }, [sessionActive, placedState.selectedId]);
+
   const arm = async (o: ARObject) => {
     setArming(true);
     setError(null);
@@ -463,28 +514,30 @@ export default function ARView() {
       <View ref={overlayRef} style={StyleSheet.absoluteFill} pointerEvents="box-none">
         {/* Header */}
         <View style={styles.header} pointerEvents="box-none">
-          <TouchableOpacity onPress={endAR} style={styles.doneBtn}>
-            <Text style={styles.doneBtnText}>{sessionActive ? "Done" : "Back"}</Text>
+          <TouchableOpacity onPress={endAR} style={[styles.topAction, styles.topActionPrimary]}>
+            <Text style={styles.topActionPrimaryText}>{sessionActive ? "Done" : "Back"}</Text>
           </TouchableOpacity>
           <View style={styles.headerRightGroup}>
             {sessionActive && placedState.canUndo && (
               <TouchableOpacity
-                style={styles.doneBtn}
+                style={styles.topAction}
                 onPress={() => sceneRef.current?.undo()}
                 onPressIn={suppressPressIn}
                 onPressOut={suppressPressOut}
               >
-                <Text style={styles.doneBtnText}>Undo</Text>
+                <Text style={styles.topActionIcon}>↶</Text>
+                <Text style={styles.topActionText}>Undo</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity
-              style={styles.doneBtn}
+              style={styles.topAction}
               onPress={() => {
                 setTourStep(0);
                 setTourVisible(true);
               }}
             >
-              <Text style={styles.doneBtnText}>Help</Text>
+              <Text style={styles.topActionIcon}>?</Text>
+              <Text style={styles.topActionText}>Help</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -582,12 +635,24 @@ export default function ARView() {
 
         {sessionActive && (
           <View style={styles.statusPanel} pointerEvents="none">
+            <View style={styles.statusSummaryRow}>
+              <View
+                style={[
+                  styles.statusSummaryDot,
+                  reticleVisible ? styles.statusDotOk : styles.statusDotBad,
+                ]}
+              />
+              <Text style={styles.statusSummaryText}>
+                {reticleVisible ? "Ready to place" : "Scanning surroundings"}
+              </Text>
+            </View>
             <View style={styles.statusGrid}>
               {statusRows.map((row) => (
                 <View key={row.label} style={styles.statusCell}>
                   <View style={[styles.statusDot, row.ok ? styles.statusDotOk : styles.statusDotBad]} />
-                  <Text style={styles.statusLabel}>{row.label}</Text>
-                  <Text style={[styles.statusValue, !row.ok && styles.statusValueBad]}>{row.text}</Text>
+                  <Text style={[styles.statusValue, !row.ok && styles.statusValueBad]}>
+                    {row.label} {row.text}
+                  </Text>
                 </View>
               ))}
             </View>
@@ -692,9 +757,15 @@ export default function ARView() {
 
         {placedState.selectedId && (
           <View style={styles.controlPanel} pointerEvents="box-none">
-            <Text style={styles.controlLabel} numberOfLines={1}>
-              {selectedCatalogObject?.name ?? "Selected item"}
-            </Text>
+            <View style={styles.controlHeader}>
+              <View style={styles.controlTitleGroup}>
+                <Text style={styles.controlEyebrow}>SELECTED ITEM</Text>
+                <Text style={styles.controlLabel} numberOfLines={1}>
+                  {selectedCatalogObject?.name ?? "Selected item"}
+                </Text>
+              </View>
+              <Text style={styles.controlHint}>Pinch to resize · swipe for tools</Text>
+            </View>
 
             <ScrollView
               horizontal
@@ -812,29 +883,46 @@ export default function ARView() {
 
         {/* Catalog rail — arms which item gets placed on the next tap */}
         {objects.length > 0 && (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.catalogRow}
-            style={styles.catalogScroll}
-          >
-            {objects.map((o) => (
-              <TouchableOpacity
-                key={o.id}
-                style={[styles.catalogThumb, armedId === o.id && styles.catalogThumbActive]}
-                onPressIn={suppressPressIn}
-                onPressOut={suppressPressOut}
-                onPress={() => arm(o)}
-              >
-                {thumbnailUrls[o.id] && (
-                  <Image source={{ uri: thumbnailUrls[o.id] }} style={styles.catalogThumbImage} />
-                )}
-                {arming && armedId === o.id && (
-                  <ActivityIndicator size="small" color="#fff" style={StyleSheet.absoluteFill} />
-                )}
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+          <View style={styles.catalogPanel}>
+            <View style={styles.catalogHeader}>
+              <View>
+                <Text style={styles.catalogEyebrow}>ADD TO SCENE</Text>
+                <Text style={styles.catalogTitle}>Market fixtures</Text>
+              </View>
+              <Text style={styles.catalogCount}>{objects.length} items</Text>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.catalogRow}
+              style={styles.catalogScroll}
+            >
+              {objects.map((o) => (
+                <TouchableOpacity
+                  key={o.id}
+                  style={styles.catalogItem}
+                  onPressIn={suppressPressIn}
+                  onPressOut={suppressPressOut}
+                  onPress={() => arm(o)}
+                >
+                  <View style={[styles.catalogThumb, armedId === o.id && styles.catalogThumbActive]}>
+                    {thumbnailUrls[o.id] && (
+                      <Image source={{ uri: thumbnailUrls[o.id] }} style={styles.catalogThumbImage} />
+                    )}
+                    {arming && armedId === o.id && (
+                      <ActivityIndicator size="small" color={PRIMARY} style={StyleSheet.absoluteFill} />
+                    )}
+                  </View>
+                  <Text
+                    style={[styles.catalogItemName, armedId === o.id && styles.catalogItemNameActive]}
+                    numberOfLines={1}
+                  >
+                    {o.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
         )}
       </View>
     </View>
@@ -846,17 +934,34 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#000" },
 
   header: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "rgba(8,28,38,0.82)",
     paddingHorizontal: 16,
     paddingTop: 48,
-    paddingBottom: 12,
+    paddingBottom: 8,
   },
-  headerRightGroup: { flexDirection: "row", alignItems: "center", gap: 4 },
-  doneBtn: { width: 48, alignItems: "center" },
-  doneBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  headerRightGroup: { flexDirection: "row", alignItems: "center", gap: 8 },
+  topAction: {
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    paddingHorizontal: 14,
+    borderRadius: 22,
+    backgroundColor: "rgba(8,28,38,0.78)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
+  },
+  topActionPrimary: { backgroundColor: "rgba(255,255,255,0.94)", borderColor: "#fff" },
+  topActionPrimaryText: { color: PRIMARY_DARK, fontSize: 14, fontWeight: "800" },
+  topActionIcon: { color: "#fff", fontSize: 17, fontWeight: "800" },
+  topActionText: { color: "#fff", fontSize: 13, fontWeight: "700" },
 
   centerPrompt: {
     position: "absolute",
@@ -919,39 +1024,46 @@ const styles = StyleSheet.create({
 
   statusPanel: {
     position: "absolute",
-    top: 90,
+    top: 104,
     left: 16,
-    width: 230,
-    backgroundColor: "rgba(8,28,38,0.82)",
-    borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
+    right: 16,
+    backgroundColor: "rgba(8,28,38,0.76)",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    paddingVertical: 11,
+    paddingHorizontal: 14,
   },
+  statusSummaryRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  statusSummaryDot: { width: 9, height: 9, borderRadius: 5 },
+  statusSummaryText: { color: "#fff", fontSize: 13, fontWeight: "800", flex: 1 },
   // 2x2 grid — two status readouts per row instead of one long stacked column.
-  statusGrid: { flexDirection: "row", flexWrap: "wrap" },
+  statusGrid: { flexDirection: "row", flexWrap: "wrap", marginTop: 8, gap: 6 },
   statusCell: {
-    width: "50%",
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    paddingVertical: 3,
+    gap: 5,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.08)",
   },
   statusDot: { width: 6, height: 6, borderRadius: 3 },
   statusDotOk: { backgroundColor: "#4CAF50" },
   statusDotBad: { backgroundColor: "#FFAA00" },
   statusLabel: { color: "rgba(255,255,255,0.7)", fontSize: 9, fontWeight: "600" },
-  statusValue: { color: "#fff", fontSize: 9, fontWeight: "700" },
+  statusValue: { color: "#fff", fontSize: 10, fontWeight: "700" },
   statusValueBad: { color: "#FFD27A" },
   statusDivider: {
     height: 1,
     backgroundColor: "rgba(255,255,255,0.15)",
-    marginTop: 6,
-    marginBottom: 8,
+    marginTop: 9,
+    marginBottom: 9,
   },
   // Hint text now lives at the bottom of the same card as the 2x2 status
   // grid above, instead of being a separate floating banner.
   statusHintRow: { alignItems: "center" },
-  statusHintText: { color: "#fff", fontSize: 12, textAlign: "center" },
+  statusHintText: { color: "#fff", fontSize: 12, lineHeight: 17, textAlign: "center", fontWeight: "600" },
 
   scanPulseWrap: {
     position: "absolute",
@@ -1027,55 +1139,72 @@ const styles = StyleSheet.create({
   measurementLabel: {
     position: "absolute",
     transform: [{ translateX: "-50%" }, { translateY: "-100%" }],
-    backgroundColor: "rgba(8,28,38,0.85)",
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 10,
+    backgroundColor: "rgba(8,28,38,0.88)",
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.25)",
     marginTop: -8,
   },
-  measurementLabelText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  measurementLabelText: { color: "#fff", fontSize: 11, fontWeight: "800" },
 
   controlPanel: {
     position: "absolute",
-    bottom: 110,
-    left: 16,
-    right: 16,
-    backgroundColor: "rgba(8,28,38,0.92)",
-    borderRadius: 14,
-    padding: 10,
-    gap: 6,
+    bottom: 142,
+    left: 12,
+    right: 12,
+    backgroundColor: "rgba(8,28,38,0.9)",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.15)",
+    paddingVertical: 12,
+    gap: 10,
   },
-  controlLabel: { color: "#fff", fontSize: 12, fontWeight: "700", textAlign: "center" },
-  controlRow: { flexDirection: "row", alignItems: "flex-end", gap: 10, paddingHorizontal: 4 },
-  carouselItem: { alignItems: "center", gap: 3 },
-  carouselItemLabel: { color: "#fff", fontSize: 10, fontWeight: "600" },
-  controlBtnPair: { flexDirection: "row", gap: 6 },
+  controlHeader: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", paddingHorizontal: 14 },
+  controlTitleGroup: { flex: 1, marginRight: 12 },
+  controlEyebrow: { color: "rgba(255,255,255,0.55)", fontSize: 8, fontWeight: "800", letterSpacing: 1.1 },
+  controlLabel: { color: "#fff", fontSize: 15, fontWeight: "800", marginTop: 2 },
+  controlHint: { color: "rgba(255,255,255,0.55)", fontSize: 9, fontWeight: "600" },
+  controlRow: { flexDirection: "row", alignItems: "flex-end", gap: 14, paddingHorizontal: 14 },
+  carouselItem: { alignItems: "flex-start", gap: 6 },
+  carouselItemLabel: { color: "rgba(255,255,255,0.72)", fontSize: 10, fontWeight: "700" },
+  controlBtnPair: { flexDirection: "row", gap: 7 },
   controlBtn: {
     backgroundColor: PRIMARY_DARK,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 12,
+    minWidth: 42,
+    minHeight: 38,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 13,
     alignItems: "center",
     justifyContent: "center",
   },
   controlBtnDisabled: { opacity: 0.4 },
-  controlBtnText: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  controlBtnText: { color: "#fff", fontSize: 12, fontWeight: "800" },
   deleteBtn: { backgroundColor: DANGER },
 
-  catalogScroll: {
+  catalogPanel: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: "rgba(8,28,38,0.82)",
+    backgroundColor: "rgba(8,28,38,0.9)",
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingTop: 10,
   },
-  catalogRow: { paddingHorizontal: 16, paddingVertical: 14, gap: 10 },
+  catalogHeader: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", paddingHorizontal: 16 },
+  catalogEyebrow: { color: "rgba(255,255,255,0.5)", fontSize: 8, fontWeight: "800", letterSpacing: 1.1 },
+  catalogTitle: { color: "#fff", fontSize: 14, fontWeight: "800", marginTop: 1 },
+  catalogCount: { color: "rgba(255,255,255,0.55)", fontSize: 10, fontWeight: "600" },
+  catalogScroll: { marginTop: 8 },
+  catalogRow: { paddingHorizontal: 16, paddingBottom: 12, gap: 12 },
+  catalogItem: { width: 70, alignItems: "center", gap: 4 },
   catalogThumb: {
-    width: 60,
-    height: 60,
-    borderRadius: 6,
+    width: 68,
+    height: 58,
+    borderRadius: 12,
     backgroundColor: SURFACE,
     overflow: "hidden",
     borderWidth: 2,
@@ -1083,6 +1212,8 @@ const styles = StyleSheet.create({
   },
   catalogThumbActive: { borderColor: ACCENT },
   catalogThumbImage: { width: "100%", height: "100%" },
+  catalogItemName: { color: "rgba(255,255,255,0.65)", fontSize: 9, fontWeight: "600", maxWidth: 68 },
+  catalogItemNameActive: { color: "#fff", fontWeight: "800" },
 
   webScreen: {
     flex: 1,

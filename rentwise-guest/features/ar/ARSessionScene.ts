@@ -345,6 +345,18 @@ export class ARSessionScene {
     opacity: 0.15,
     side: THREE.DoubleSide,
     depthWrite: false,
+    // Every detected floor plane uses this same stencil value. The first
+    // floor fragment drawn in a screen pixel writes `1`; later overlapping
+    // floor fragments fail the NotEqual test, so rescanned/replaced XRPlane
+    // meshes form one dim-green union instead of repeatedly blending darker.
+    // This affects visualization only -- the raw detected planes remain
+    // available unchanged to all placement and validation logic.
+    stencilWrite: true,
+    stencilRef: 1,
+    stencilFunc: THREE.NotEqualStencilFunc,
+    stencilFail: THREE.KeepStencilOp,
+    stencilZFail: THREE.KeepStencilOp,
+    stencilZPass: THREE.ReplaceStencilOp,
   });
   private planeVisualizationMaterialWall = new THREE.MeshBasicMaterial({
     color: 0xff7043,
@@ -352,6 +364,14 @@ export class ARSessionScene {
     opacity: 0.15,
     side: THREE.DoubleSide,
     depthWrite: false,
+    // Walls use a separate stencil value so duplicate wall overlays are
+    // flattened too without preventing a floor and wall from meeting.
+    stencilWrite: true,
+    stencilRef: 2,
+    stencilFunc: THREE.NotEqualStencilFunc,
+    stencilFail: THREE.KeepStencilOp,
+    stencilZFail: THREE.KeepStencilOp,
+    stencilZPass: THREE.ReplaceStencilOp,
   });
 
   // Dev-diagnostic only (see DEV_LOG_PLANE_DIAGNOSTICS / logPlaneDiagnostics) — deliberately
@@ -997,6 +1017,34 @@ export class ARSessionScene {
   scaleSelectedAxis(axis: ScaleAxis, factor: number) {
     if (!this.selected) return;
     this.setAxisScale(axis, this.selected.scale[axis] * factor);
+  }
+
+  // Pinch gestures resize all three axes together. Clamp one shared factor so the model
+  // keeps its current proportions even when one axis reaches the global size limit first.
+  scaleSelectedUniform(factor: number) {
+    if (!this.selected || !Number.isFinite(factor) || factor <= 0) return;
+
+    const preScaleBox = this.computeWorldBoundingBox(this.selected.group);
+    const floorY = Number.isFinite(preScaleBox.min.y) ? preScaleBox.min.y : null;
+    const current = this.selected.scale;
+    const minFactor = Math.max(
+      MIN_SCALE / current.x,
+      MIN_SCALE / current.y,
+      MIN_SCALE / current.z,
+    );
+    const maxFactor = Math.min(
+      MAX_SCALE / current.x,
+      MAX_SCALE / current.y,
+      MAX_SCALE / current.z,
+    );
+    const clampedFactor = Math.min(maxFactor, Math.max(minFactor, factor));
+
+    current.x *= clampedFactor;
+    current.y *= clampedFactor;
+    current.z *= clampedFactor;
+    this.selected.group.scale.set(current.x, current.y, current.z);
+
+    if (floorY !== null) this.snapToFloor(this.selected.group, floorY, this.selected.objectId);
   }
 
   // Applies the base per-axis scale/anchor logic; scaleSelectedAxis is the public entry
