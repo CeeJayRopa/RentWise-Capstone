@@ -5,6 +5,7 @@
   "dependencies": {
     "@expo-google-fonts/inter": "^0.4.2",
     "@expo-google-fonts/playfair-display": "^0.4.2",
+    "@expo-google-fonts/poppins": "^0.4.1",
     "@expo/vector-icons": "^14.1.0",
     "@google/model-viewer": "^4.3.1",
     "@react-native-async-storage/async-storage": "2.2.0",

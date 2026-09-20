@@ -1,24 +1,38 @@
 import { Stack } from "expo-router";
 import { useFonts } from "expo-font";
+import { useEffect } from "react";
+import { Platform } from "react-native";
 import {
-  PlayfairDisplay_400Regular,
-  PlayfairDisplay_400Regular_Italic,
-  PlayfairDisplay_600SemiBold,
-  PlayfairDisplay_700Bold,
-  PlayfairDisplay_700Bold_Italic,
-} from "@expo-google-fonts/playfair-display";
-import { Inter_600SemiBold, Inter_800ExtraBold } from "@expo-google-fonts/inter";
+  Poppins_400Regular,
+  Poppins_500Medium,
+  Poppins_600SemiBold,
+  Poppins_700Bold,
+  Poppins_800ExtraBold,
+} from "@expo-google-fonts/poppins";
 
 export default function Layout() {
   const [fontsLoaded] = useFonts({
-    PlayfairDisplay_400Regular,
-    PlayfairDisplay_400Regular_Italic,
-    PlayfairDisplay_600SemiBold,
-    PlayfairDisplay_700Bold,
-    PlayfairDisplay_700Bold_Italic,
-    Inter_600SemiBold,
-    Inter_800ExtraBold,
+    Poppins_400Regular,
+    Poppins_500Medium,
+    Poppins_600SemiBold,
+    Poppins_700Bold,
+    Poppins_800ExtraBold,
   });
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+
+    const styleId = "rentwise-guest-poppins";
+    const existing = document.getElementById(styleId);
+    if (existing) return;
+
+    const style = document.createElement("style");
+    style.id = styleId;
+    style.textContent = "#root, #root * { font-family: Poppins_400Regular, sans-serif !important; }";
+    document.head.appendChild(style);
+
+    return () => style.remove();
+  }, []);
 
   // Renders a beat of blank screen rather than the browser's default
   // sans-serif for the numbering/headline serif — on a scroll-driven,
