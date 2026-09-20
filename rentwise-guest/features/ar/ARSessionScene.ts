@@ -263,9 +263,6 @@ export class ARSessionScene {
   private session: any = null;
   private hitTestSource: any = null;
   private hitTestSourceRequested = false;
-  // UI-owned gate: the camera session remains active, while the new Scan button
-  // decides when the existing hit-test/placement loop may look for a surface.
-  private scanningEnabled = false;
   private raycaster = new THREE.Raycaster();
   private tempMatrix = new THREE.Matrix4();
 
@@ -568,17 +565,6 @@ export class ARSessionScene {
     this.scene.add(controller);
 
     await this.renderer.xr.setSession(session);
-  }
-
-  setScanningEnabled(enabled: boolean) {
-    this.scanningEnabled = enabled;
-    if (!enabled) {
-      this.reticleHasTarget = false;
-      this.reticleStableFrames = 0;
-      this.isPlacementConfident = false;
-      if (this.reticle.visible) this.onReticleVisible(false);
-      this.reticle.visible = false;
-    }
   }
 
   async endSession() {
@@ -1475,7 +1461,7 @@ export class ARSessionScene {
       });
     }
 
-    if (this.hitTestSource && referenceSpace && this.scanningEnabled) {
+    if (this.hitTestSource && referenceSpace) {
       // getViewerPose returns null when the device has lost track of where it is in space
       // entirely (fast motion, a blank/textureless view, etc.) — a fundamentally different
       // problem from "tracking is fine, just no surface found yet", so it's checked and

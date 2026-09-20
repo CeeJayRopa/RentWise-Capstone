@@ -87,8 +87,7 @@ export default function ARView() {
   const [armedId, setArmedId] = useState<string | null>(null);
   const [arming, setArming] = useState(false);
   const [sessionActive, setSessionActive] = useState(false);
-  const [scanActive, setScanActive] = useState(false);
-  const [scanSecondsLeft, setScanSecondsLeft] = useState(0);
+  const [scanCardHidden, setScanCardHidden] = useState(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [toolMode, setToolMode] = useState<"rotate" | "resize" | null>(null);
   const [resizeAxis, setResizeAxis] = useState<ScaleAxis>("x");
@@ -111,7 +110,6 @@ export default function ARView() {
   const [planeDiagnostics, setPlaneDiagnostics] = useState<string[]>([]);
   const wasReticleVisibleRef = useRef(false);
   const scanPulseAnim = useRef(new Animated.Value(0)).current;
-  const scanTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Loops for the entire time AR is active — the "actively scanning" pulse ring is only
   // actually rendered while !reticleVisible (see JSX below), but keeping the loop itself
@@ -269,7 +267,7 @@ export default function ARView() {
     try {
       setError(null);
       await sceneRef.current.startSession(overlay);
-      sceneRef.current.setScanningEnabled(false);
+      setScanCardHidden(false);
       setSessionActive(true);
     } catch (e: any) {
       setError(translateSessionStartError(e));
@@ -277,46 +275,13 @@ export default function ARView() {
   };
 
   const endAR = async () => {
-    if (scanTimerRef.current) clearInterval(scanTimerRef.current);
-    scanTimerRef.current = null;
-    setScanActive(false);
-    setScanSecondsLeft(0);
     if (sessionActive) {
-      sceneRef.current?.setScanningEnabled(false);
       await sceneRef.current?.endSession();
       setSessionActive(false);
     } else {
       router.back();
     }
   };
-
-  const startTimedScan = () => {
-    if (!sceneRef.current || scanActive) return;
-    if (scanTimerRef.current) clearInterval(scanTimerRef.current);
-
-    setScanActive(true);
-    setScanSecondsLeft(30);
-    sceneRef.current.setScanningEnabled(true);
-
-    scanTimerRef.current = setInterval(() => {
-      setScanSecondsLeft((seconds) => {
-        if (seconds <= 1) {
-          if (scanTimerRef.current) clearInterval(scanTimerRef.current);
-          scanTimerRef.current = null;
-          sceneRef.current?.setScanningEnabled(false);
-          setScanActive(false);
-          return 0;
-        }
-        return seconds - 1;
-      });
-    }, 1000);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (scanTimerRef.current) clearInterval(scanTimerRef.current);
-    };
-  }, []);
 
   const setRotationFromSlider = (nextValue: number) => {
     const delta = nextValue - rotateValue;
@@ -576,14 +541,13 @@ export default function ARView() {
           <View style={styles.headerRightGroup}>
             {sessionActive && (
               <TouchableOpacity
-                style={[styles.topAction, scanActive && styles.topActionActive]}
-                onPress={startTimedScan}
-                disabled={scanActive}
+                style={[styles.topAction, !scanCardHidden && styles.topActionActive]}
+                onPress={() => setScanCardHidden((hidden) => !hidden)}
                 onPressIn={suppressPressIn}
                 onPressOut={suppressPressOut}
               >
                 <Text style={styles.topActionIcon}>⌾</Text>
-                <Text style={styles.topActionText}>{scanActive ? `Scan ${scanSecondsLeft}s` : "Scan"}</Text>
+                <Text style={styles.topActionText}>Scan</Text>
               </TouchableOpacity>
             )}
             {sessionActive && placedState.canUndo && (
@@ -701,7 +665,7 @@ export default function ARView() {
           </Modal>
         )}
 
-        {sessionActive && (
+        {sessionActive && !scanCardHidden && (
           <View style={styles.statusPanel} pointerEvents="none">
             <View style={styles.statusSummaryRow}>
               <View
@@ -841,6 +805,16 @@ export default function ARView() {
                   <Text style={styles.sliderTitle}>Rotate object</Text>
                   <Text style={styles.sliderValue}>{rotateValue}°</Text>
                 </View>
+                <TouchableOpacity
+                  style={styles.toolBackButton}
+                  onPressIn={suppressPressIn}
+                  onPressOut={suppressPressOut}
+                  onPress={() => setToolMode(null)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Back to object controls"
+                >
+                  <Text style={styles.toolBackButtonText}>Back to controls</Text>
+                </TouchableOpacity>
                 <input aria-label="Rotate selected object" type="range" min={-180} max={180} value={rotateValue} onChange={(event) => setRotationFromSlider(Number(event.target.value))} style={styles.webSlider as any} />
                 <View style={styles.sliderMarks}><Text style={styles.sliderMark}>−180°</Text><Text style={styles.sliderMark}>0°</Text><Text style={styles.sliderMark}>180°</Text></View>
               </View>
@@ -857,6 +831,16 @@ export default function ARView() {
                     </TouchableOpacity>
                   ))}
                 </View>
+                <TouchableOpacity
+                  style={styles.toolBackButton}
+                  onPressIn={suppressPressIn}
+                  onPressOut={suppressPressOut}
+                  onPress={() => setToolMode(null)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Back to object controls"
+                >
+                  <Text style={styles.toolBackButtonText}>Back to controls</Text>
+                </TouchableOpacity>
                 <input aria-label="Resize selected object" type="range" min={50} max={150} value={scaleValues[resizeAxis]} onChange={(event) => setScaleFromSlider(resizeAxis, Number(event.target.value))} style={styles.webSlider as any} />
                 <View style={styles.sliderMarks}><Text style={styles.sliderMark}>50%</Text><Text style={styles.sliderMark}>100%</Text><Text style={styles.sliderMark}>150%</Text></View>
               </View>
@@ -1285,8 +1269,12 @@ const styles = StyleSheet.create({
   sliderPanel: { paddingHorizontal: 14, paddingBottom: 4, gap: 11 },
   sliderHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   sliderTitle: { color: "#fff", fontSize: 12, fontWeight: "800" },
+  toolBackButton: { alignSelf: "flex-start", paddingVertical: 4, paddingHorizontal: 8, borderRadius: 8, backgroundColor: "rgba(255,255,255,0.1)", borderWidth: 1, borderColor: "rgba(255,255,255,0.18)" },
+  toolBackButtonText: { color: "#fff", fontSize: 10, fontWeight: "800" },
   sliderValue: { color: "#5DE7C2", backgroundColor: "rgba(93,231,194,0.12)", borderRadius: 9, paddingHorizontal: 9, paddingVertical: 5, fontSize: 11, fontWeight: "800" },
-  webSlider: { width: "100%", accentColor: "#5DE7C2" },
+  // Keep this to RN-supported keys so native TypeScript validation remains valid.
+  // The browser keeps its native range accent without affecting AR controls.
+  webSlider: { width: "100%" },
   sliderMarks: { flexDirection: "row", justifyContent: "space-between", marginTop: -5 },
   sliderMark: { color: "rgba(255,255,255,0.72)", fontSize: 9, fontWeight: "700" },
   axisTabs: { flexDirection: "row", gap: 6 },
