@@ -87,7 +87,7 @@ export default function ARView() {
   const [armedId, setArmedId] = useState<string | null>(null);
   const [arming, setArming] = useState(false);
   const [sessionActive, setSessionActive] = useState(false);
-  const [scanCardHidden, setScanCardHidden] = useState(false);
+  const [scanCardExpanded, setScanCardExpanded] = useState(true);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [toolMode, setToolMode] = useState<"rotate" | "resize" | null>(null);
   const [resizeAxis, setResizeAxis] = useState<ScaleAxis>("x");
@@ -267,7 +267,7 @@ export default function ARView() {
     try {
       setError(null);
       await sceneRef.current.startSession(overlay);
-      setScanCardHidden(false);
+      setScanCardExpanded(true);
       setSessionActive(true);
     } catch (e: any) {
       setError(translateSessionStartError(e));
@@ -539,17 +539,6 @@ export default function ARView() {
             <Text style={styles.topActionPrimaryText}>{sessionActive ? "Done" : "Back"}</Text>
           </TouchableOpacity>
           <View style={styles.headerRightGroup}>
-            {sessionActive && (
-              <TouchableOpacity
-                style={[styles.topAction, !scanCardHidden && styles.topActionActive]}
-                onPress={() => setScanCardHidden((hidden) => !hidden)}
-                onPressIn={suppressPressIn}
-                onPressOut={suppressPressOut}
-              >
-                <Text style={styles.topActionIcon}>⌾</Text>
-                <Text style={styles.topActionText}>Scan</Text>
-              </TouchableOpacity>
-            )}
             {sessionActive && placedState.canUndo && (
               <TouchableOpacity
                 style={styles.topAction}
@@ -665,9 +654,16 @@ export default function ARView() {
           </Modal>
         )}
 
-        {sessionActive && !scanCardHidden && (
-          <View style={styles.statusPanel} pointerEvents="none">
-            <View style={styles.statusSummaryRow}>
+        {sessionActive && (
+          <View style={styles.statusPanel} pointerEvents="box-none">
+            <TouchableOpacity
+              style={styles.statusSummaryRow}
+              onPressIn={suppressPressIn}
+              onPressOut={suppressPressOut}
+              onPress={() => setScanCardExpanded((expanded) => !expanded)}
+              accessibilityRole="button"
+              accessibilityLabel={scanCardExpanded ? "Collapse scanning status" : "Expand scanning status"}
+            >
               <View
                 style={[
                   styles.statusSummaryDot,
@@ -677,7 +673,11 @@ export default function ARView() {
               <Text style={styles.statusSummaryText}>
                 {reticleVisible ? "Ready to place" : "Scanning surroundings"}
               </Text>
-            </View>
+              <View style={styles.statusMinimizeButton}>
+                <Text style={styles.statusMinimizeButtonText}>{scanCardExpanded ? "⌄" : "›"}</Text>
+              </View>
+            </TouchableOpacity>
+            {scanCardExpanded && <>
             <View style={styles.statusGrid}>
               {statusRows.map((row) => (
                 <View key={row.label} style={styles.statusCell}>
@@ -703,6 +703,7 @@ export default function ARView() {
                 <Text style={[styles.statusHintText, styles.hintErrorText]}>{error}</Text>
               )}
             </View>
+            </>}
           </View>
         )}
 
@@ -796,7 +797,21 @@ export default function ARView() {
                   {selectedCatalogObject?.name ?? "Selected item"}
                 </Text>
               </View>
-              <Text style={styles.controlHint}>Pinch to resize · swipe for tools</Text>
+              <View style={styles.controlHeaderActions}>
+                {toolMode && (
+                  <TouchableOpacity
+                    style={styles.toolBackButton}
+                    onPressIn={suppressPressIn}
+                    onPressOut={suppressPressOut}
+                    onPress={() => setToolMode(null)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Back to object controls"
+                  >
+                    <Text style={styles.toolBackButtonText}>Back to controls</Text>
+                  </TouchableOpacity>
+                )}
+                <Text style={styles.controlHint}>Pinch to resize</Text>
+              </View>
             </View>
 
             {toolMode === "rotate" ? (
@@ -805,16 +820,6 @@ export default function ARView() {
                   <Text style={styles.sliderTitle}>Rotate object</Text>
                   <Text style={styles.sliderValue}>{rotateValue}°</Text>
                 </View>
-                <TouchableOpacity
-                  style={styles.toolBackButton}
-                  onPressIn={suppressPressIn}
-                  onPressOut={suppressPressOut}
-                  onPress={() => setToolMode(null)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Back to object controls"
-                >
-                  <Text style={styles.toolBackButtonText}>Back to controls</Text>
-                </TouchableOpacity>
                 <input aria-label="Rotate selected object" type="range" min={-180} max={180} value={rotateValue} onChange={(event) => setRotationFromSlider(Number(event.target.value))} style={styles.webSlider as any} />
                 <View style={styles.sliderMarks}><Text style={styles.sliderMark}>−180°</Text><Text style={styles.sliderMark}>0°</Text><Text style={styles.sliderMark}>180°</Text></View>
               </View>
@@ -831,16 +836,6 @@ export default function ARView() {
                     </TouchableOpacity>
                   ))}
                 </View>
-                <TouchableOpacity
-                  style={styles.toolBackButton}
-                  onPressIn={suppressPressIn}
-                  onPressOut={suppressPressOut}
-                  onPress={() => setToolMode(null)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Back to object controls"
-                >
-                  <Text style={styles.toolBackButtonText}>Back to controls</Text>
-                </TouchableOpacity>
                 <input aria-label="Resize selected object" type="range" min={50} max={150} value={scaleValues[resizeAxis]} onChange={(event) => setScaleFromSlider(resizeAxis, Number(event.target.value))} style={styles.webSlider as any} />
                 <View style={styles.sliderMarks}><Text style={styles.sliderMark}>50%</Text><Text style={styles.sliderMark}>100%</Text><Text style={styles.sliderMark}>150%</Text></View>
               </View>
@@ -849,7 +844,7 @@ export default function ARView() {
                 <TouchableOpacity style={styles.actionButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => { setRotateValue(0); setToolMode("rotate"); }}><Text style={styles.actionIcon}>⟳</Text><Text style={styles.actionText}>Rotate</Text></TouchableOpacity>
                 <TouchableOpacity style={styles.actionButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => setToolMode("resize")}><Text style={styles.actionIcon}>⛶</Text><Text style={styles.actionText}>Resize</Text></TouchableOpacity>
                 <TouchableOpacity style={[styles.actionButton, !reticleVisible && styles.controlBtnDisabled]} disabled={!reticleVisible} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => sceneRef.current?.moveSelectedToReticle()}><Text style={styles.actionIcon}>✥</Text><Text style={styles.actionText}>Move</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.actionButton, styles.deleteBtn]} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => sceneRef.current?.deleteSelected()}><Text style={styles.actionIcon}>♜</Text><Text style={styles.actionText}>Delete</Text></TouchableOpacity>
+                <TouchableOpacity style={[styles.actionButton, styles.deleteBtn]} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => sceneRef.current?.deleteSelected()}><Text style={styles.actionIcon}>🗑</Text><Text style={styles.actionText}>Delete</Text></TouchableOpacity>
               </View>
             )}
             {false && <ScrollView
@@ -1132,14 +1127,18 @@ const styles = StyleSheet.create({
   statusSummaryRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   statusSummaryDot: { width: 9, height: 9, borderRadius: 5 },
   statusSummaryText: { color: "#fff", fontSize: 13, fontWeight: "800", flex: 1 },
-  // 2x2 grid — two status readouts per row instead of one long stacked column.
-  statusGrid: { flexDirection: "row", flexWrap: "wrap", marginTop: 8, gap: 6 },
+  statusMinimizeButton: { width: 30, height: 30, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.08)", borderWidth: 1, borderColor: "rgba(255,255,255,0.2)" },
+  statusMinimizeButtonText: { color: "#fff", fontSize: 20, lineHeight: 20, fontWeight: "700", marginTop: -3 },
+  // Four compact readouts in one row to keep the expanded dropdown short.
+  statusGrid: { flexDirection: "row", flexWrap: "nowrap", marginTop: 8, gap: 4 },
   statusCell: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    paddingVertical: 5,
-    paddingHorizontal: 8,
+    justifyContent: "center",
+    gap: 3,
+    paddingVertical: 4,
+    paddingHorizontal: 3,
     borderRadius: 12,
     backgroundColor: "rgba(255,255,255,0.08)",
   },
@@ -1147,7 +1146,7 @@ const styles = StyleSheet.create({
   statusDotOk: { backgroundColor: "#4CAF50" },
   statusDotBad: { backgroundColor: "#FFAA00" },
   statusLabel: { color: "rgba(255,255,255,0.7)", fontSize: 9, fontWeight: "600" },
-  statusValue: { color: "#fff", fontSize: 10, fontWeight: "700" },
+  statusValue: { color: "#fff", fontSize: 7, fontWeight: "700", flexShrink: 1 },
   statusValueBad: { color: "#FFD27A" },
   statusDivider: {
     height: 1,
@@ -1155,7 +1154,7 @@ const styles = StyleSheet.create({
     marginTop: 9,
     marginBottom: 9,
   },
-  // Hint text now lives at the bottom of the same card as the 2x2 status
+  // Hint text now lives at the bottom of the same card as the status
   // grid above, instead of being a separate floating banner.
   statusHintRow: { alignItems: "center" },
   statusHintText: { color: "#fff", fontSize: 12, lineHeight: 17, textAlign: "center", fontWeight: "600" },
@@ -1259,6 +1258,7 @@ const styles = StyleSheet.create({
   },
   controlHeader: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", paddingHorizontal: 14 },
   controlTitleGroup: { flex: 1, marginRight: 12 },
+  controlHeaderActions: { alignItems: "flex-end", gap: 4 },
   controlEyebrow: { color: "rgba(255,255,255,0.55)", fontSize: 8, fontWeight: "800", letterSpacing: 1.1 },
   controlLabel: { color: "#fff", fontSize: 15, fontWeight: "800", marginTop: 2 },
   controlHint: { color: "rgba(255,255,255,0.55)", fontSize: 9, fontWeight: "600" },
