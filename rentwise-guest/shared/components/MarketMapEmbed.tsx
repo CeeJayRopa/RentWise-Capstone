@@ -151,7 +151,10 @@ export default function MarketMapEmbed({
     top: number;
     width: number;
     height: number;
+    anchorX?: number;
+    anchorY?: number;
   } | null>(null);
+  const mapCardRef = useRef<any>(null);
   const hoverAnim = useRef(new Animated.Value(0)).current;
   // No pan/zoom anymore -- kept as an identity transform (rather than
   // reworking the tooltip's screen-position math below to drop the
@@ -169,9 +172,17 @@ export default function MarketMapEmbed({
     left: number,
     top: number,
     width: number,
-    height: number
+    height: number,
+    event?: any
   ) => {
-    setHoveredStall({ hotspot, stall, left, top, width, height });
+    const targetRect = event?.currentTarget?.getBoundingClientRect?.();
+    const mapRect = mapCardRef.current?.getBoundingClientRect?.();
+    const placement = hotspot.tooltipPlacement ?? "top";
+    const anchorX = targetRect && mapRect ? targetRect.left - mapRect.left + targetRect.width / 2 : undefined;
+    const anchorY = targetRect && mapRect
+      ? (placement === "bottom" ? targetRect.bottom : targetRect.top) - mapRect.top
+      : undefined;
+    setHoveredStall({ hotspot, stall, left, top, width, height, anchorX, anchorY });
     hoverAnim.stopAnimation();
     Animated.timing(hoverAnim, { toValue: 1, duration: 160, useNativeDriver: true }).start();
   };
@@ -259,7 +270,7 @@ export default function MarketMapEmbed({
               }}
               {...(Platform.OS === "web" && isDesktop
                 ? {
-                    onMouseEnter: () => handleHoverIn(hotspot, stall ?? null, left, top, width, height),
+                    onMouseEnter: (event: any) => handleHoverIn(hotspot, stall ?? null, left, top, width, height, event),
                     onMouseLeave: handleHoverOut,
                   }
                 : {})}
@@ -290,8 +301,10 @@ export default function MarketMapEmbed({
 
     const localX = ((hoveredStall.left + hoveredStall.width / 2) / 100) * blueprintWidth;
     const localY = (anchorTop / 100) * blueprintHeight;
-    const screenX = mapTransform.positionX + localX * mapTransform.scale;
-    const screenY = mapTransform.positionY + localY * mapTransform.scale;
+    // Prefer the browser's measured hotspot bounds. Percentage math is only a fallback
+    // for non-DOM renderers; it drifts when card padding or hotspot rotation is involved.
+    const screenX = hoveredStall.anchorX ?? mapTransform.positionX + localX * mapTransform.scale;
+    const screenY = hoveredStall.anchorY ?? mapTransform.positionY + localY * mapTransform.scale;
 
     return (
       <View
@@ -561,6 +574,7 @@ export default function MarketMapEmbed({
     <View style={[styles.mapCol, !isSplit && styles.mapColStacked, isMobile && { marginTop: -20 }]}>
       <View style={styles.mapCardOuter}>
         <View
+          ref={mapCardRef}
           style={[
             styles.mapCard,
             // Desktop, tablet, and mobile: wraps the (untouched) map in a
