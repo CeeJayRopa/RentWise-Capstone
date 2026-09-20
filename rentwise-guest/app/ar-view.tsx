@@ -1031,8 +1031,7 @@ export default function ARView() {
           </View>
         ) : objects.length > 0 ? (
           <TouchableOpacity style={styles.addObjectButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => setCatalogOpen(true)}>
-            <Text style={styles.addObjectPlus}>+</Text>
-            <Text style={styles.addObjectText}>Add object</Text>
+            <Text style={styles.addObjectText}>View 3D Objects</Text>
           </TouchableOpacity>
         ) : null}
       </View>
@@ -1263,7 +1262,8 @@ const styles = StyleSheet.create({
 
   controlPanel: {
     position: "absolute",
-    bottom: 146,
+    // Clears the expanded object-storage card below instead of overlapping it.
+    bottom: 174,
     left: 12,
     right: 12,
     backgroundColor: "rgba(8,28,38,0.9)",
