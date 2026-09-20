@@ -321,6 +321,7 @@ export default function ARView() {
       pinching = true;
       previousDistance = distanceBetween(event.touches);
       sceneRef.current?.beginUIInteraction();
+      sceneRef.current?.beginTransformGesture();
       event.preventDefault();
     };
 
@@ -339,6 +340,7 @@ export default function ARView() {
       if (!pinching || event.touches.length >= 2) return;
       pinching = false;
       previousDistance = 0;
+      sceneRef.current?.endTransformGesture();
       sceneRef.current?.endUIInteraction();
     };
 
@@ -352,7 +354,10 @@ export default function ARView() {
       document.removeEventListener("touchmove", onTouchMove, true);
       document.removeEventListener("touchend", finishPinch, true);
       document.removeEventListener("touchcancel", finishPinch, true);
-      if (pinching) sceneRef.current?.endUIInteraction();
+      if (pinching) {
+        sceneRef.current?.endTransformGesture();
+        sceneRef.current?.endUIInteraction();
+      }
     };
   }, [sessionActive, placedState.selectedId]);
 

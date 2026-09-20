@@ -389,13 +389,22 @@ export class ARSessionScene {
   private selected: PlacedObject | null = null;
   private nextInstanceId = 1;
 
-  // Undo history — deliberately scoped to just place/delete (the two truly destructive,
-  // easy-to-regret actions), not rotate/resize/move, which are already trivially reversible
-  // by pressing the opposite control.
+  // Undo history includes object transforms as well as place/delete operations.
   private history: Array<
     | { type: "place"; object: PlacedObject }
     | { type: "delete"; object: PlacedObject; index: number }
+    | {
+        type: "transform";
+        object: PlacedObject;
+        position: THREE.Vector3;
+        quaternion: THREE.Quaternion;
+        scale: AxisScale;
+        userYawDeg: number;
+      }
   > = [];
+  // A pinch produces many touch-move updates. Keep its original transform here and commit
+  // a single undo step when the gesture finishes.
+  private transformGestureStart: Extract<(typeof this.history)[number], { type: "transform" }> | null = null;
 
   // Resolved from inside onFrame, right after that frame's render() call — see mount()'s
   // preserveDrawingBuffer comment for why it can't just be read synchronously from outside
@@ -650,6 +659,7 @@ export class ARSessionScene {
     this.selected = null;
     this.updateSelectionOutline();
     this.history = [];
+    this.transformGestureStart = null;
     this.onPlacedChange({ placed: [], selectedId: null, canUndo: false });
     this.onReticleVisible(false);
     this.onMeasurementChange(null);
@@ -1006,8 +1016,54 @@ export class ARSessionScene {
     this.applyYawOrientation(group, this.scratchCamDir);
   }
 
+  private captureSelectedTransform() {
+    if (!this.selected) return null;
+    return {
+      type: "transform" as const,
+      object: this.selected,
+      position: this.selected.group.position.clone(),
+      quaternion: this.selected.group.quaternion.clone(),
+      scale: { ...this.selected.scale },
+      userYawDeg: this.selected.userYawDeg,
+    };
+  }
+
+  private recordTransformBeforeChange() {
+    if (this.transformGestureStart) return;
+    const snapshot = this.captureSelectedTransform();
+    if (!snapshot) return;
+    this.history.push(snapshot);
+    this.notifyPlacedChange();
+  }
+
+  // Called by the DOM pinch handler. Unlike sliders/buttons, a pinch fires a continuous
+  // stream of scale updates and must remain one reversible user action.
+  beginTransformGesture() {
+    if (this.transformGestureStart) return;
+    this.transformGestureStart = this.captureSelectedTransform();
+  }
+
+  endTransformGesture() {
+    const snapshot = this.transformGestureStart;
+    this.transformGestureStart = null;
+    if (!snapshot || !this.selected || snapshot.object !== this.selected) return;
+
+    const changed =
+      !snapshot.position.equals(this.selected.group.position) ||
+      !snapshot.quaternion.equals(this.selected.group.quaternion) ||
+      snapshot.scale.x !== this.selected.scale.x ||
+      snapshot.scale.y !== this.selected.scale.y ||
+      snapshot.scale.z !== this.selected.scale.z ||
+      snapshot.userYawDeg !== this.selected.userYawDeg;
+    if (!changed) return;
+
+    this.history.push(snapshot);
+    this.notifyPlacedChange();
+  }
+
   rotateSelected(deltaDeg: number) {
-    if (!this.selected) return;
+    if (!this.selected || !Number.isFinite(deltaDeg) || deltaDeg === 0) return;
+    this.recordTransformBeforeChange();
     this.selected.group.rotateY(THREE.MathUtils.degToRad(deltaDeg));
     this.selected.userYawDeg += deltaDeg;
   }
@@ -1021,11 +1077,11 @@ export class ARSessionScene {
 
   // Pinch gestures resize all three axes together. Clamp one shared factor so the model
   // keeps its current proportions even when one axis reaches the global size limit first.
+  // Deliberately do not re-snap to the floor here: a pinch must preserve the object's
+  // existing world position, including for models whose exported origin is offset.
   scaleSelectedUniform(factor: number) {
     if (!this.selected || !Number.isFinite(factor) || factor <= 0) return;
 
-    const preScaleBox = this.computeWorldBoundingBox(this.selected.group);
-    const floorY = Number.isFinite(preScaleBox.min.y) ? preScaleBox.min.y : null;
     const current = this.selected.scale;
     const minFactor = Math.max(
       MIN_SCALE / current.x,
@@ -1038,13 +1094,13 @@ export class ARSessionScene {
       MAX_SCALE / current.z,
     );
     const clampedFactor = Math.min(maxFactor, Math.max(minFactor, factor));
+    if (clampedFactor === 1) return;
 
+    this.recordTransformBeforeChange();
     current.x *= clampedFactor;
     current.y *= clampedFactor;
     current.z *= clampedFactor;
     this.selected.group.scale.set(current.x, current.y, current.z);
-
-    if (floorY !== null) this.snapToFloor(this.selected.group, floorY, this.selected.objectId);
   }
 
   // Applies the base per-axis scale/anchor logic; scaleSelectedAxis is the public entry
@@ -1060,6 +1116,8 @@ export class ARSessionScene {
     const floorY = Number.isFinite(preScaleBox.min.y) ? preScaleBox.min.y : null;
 
     const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, targetValue));
+    if (next === this.selected.scale[axis]) return;
+    this.recordTransformBeforeChange();
     this.selected.scale[axis] = next;
     this.selected.group.scale.set(this.selected.scale.x, this.selected.scale.y, this.selected.scale.z);
 
@@ -1072,6 +1130,7 @@ export class ARSessionScene {
 
   moveSelectedToReticle() {
     if (!this.selected || !this.reticle.visible || !this.isPlacementConfident) return;
+    this.recordTransformBeforeChange();
     const floorY = this.reticlePosition.y;
     this.selected.group.position.setFromMatrixPosition(this.reticle.matrix);
 
@@ -1100,9 +1159,7 @@ export class ARSessionScene {
     this.notifyPlacedChange();
   }
 
-  // Reverses the most recent place or delete action. Deliberately not a general redo/undo
-  // stack beyond that — see the `history` field's own comment for why rotate/resize/move
-  // aren't included.
+  // Reverses the most recent place, delete, rotate, resize, or move action.
   undo() {
     const last = this.history.pop();
     if (!last) return;
@@ -1114,9 +1171,17 @@ export class ARSessionScene {
         this.selected = null;
         this.updateSelectionOutline();
       }
-    } else {
+    } else if (last.type === "delete") {
       this.placedGroup.add(last.object.group);
       this.placed.splice(Math.min(last.index, this.placed.length), 0, last.object);
+      this.selected = last.object;
+      this.updateSelectionOutline();
+    } else {
+      last.object.group.position.copy(last.position);
+      last.object.group.quaternion.copy(last.quaternion);
+      last.object.scale = { ...last.scale };
+      last.object.group.scale.set(last.scale.x, last.scale.y, last.scale.z);
+      last.object.userYawDeg = last.userYawDeg;
       this.selected = last.object;
       this.updateSelectionOutline();
     }
