@@ -14,7 +14,8 @@ import { useEffect, useRef, useState } from "react";
 import { router } from "expo-router";
 import StallPopup from "../shared/components/StallPopup";
 import { getStalls } from "../services/stallService";
-import { MARKET_LAYOUT, normalizeStallName, StallHotspot } from "../shared/constants/marketLayout";
+import { MARKET_LAYOUT, StallHotspot } from "../shared/constants/marketLayout";
+import { matchMapStalls } from "../shared/constants/stallLookup";
 
 // Matches the blueprint's real pixel size (assets/market-2Dlayout.png) so hotspot
 // percentages line up correctly regardless of screen width.
@@ -39,6 +40,7 @@ const HOTSPOT_SHRINK = 0.94;
 interface Stall {
   id: string;
   name?: string;
+  spaceId?: string;
   status?: string;
   buildingNumber?: string;
   category?: string;
@@ -180,7 +182,7 @@ export default function MarketMap() {
       .finally(() => setLoading(false));
   }, []);
 
-  const stallsByName = new Map(stalls.map((s) => [normalizeStallName(s.name ?? ""), s]));
+  const stallsByName = matchMapStalls(stalls, MARKET_LAYOUT);
   // Same binary occupied/vacant split used for the hotspot tint colors below
   // -- matches MarketMapEmbed.tsx's mobile Availability card, computed live
   // instead of hardcoded.
@@ -262,7 +264,7 @@ export default function MarketMap() {
           </View>
         ) : (
           MARKET_LAYOUT.map((hotspot, index) => {
-            const stall = stallsByName.get(normalizeStallName(hotspot.name));
+            const stall = stallsByName.get(hotspot.name);
             const isVacant = stall ? stall.status?.toLowerCase() !== "occupied" : null;
 
             // Only rotated hotspots risk overlapping a neighbor (which would stack their

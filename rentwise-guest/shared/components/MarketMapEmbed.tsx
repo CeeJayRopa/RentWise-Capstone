@@ -16,7 +16,8 @@ import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import StallPopup from "./StallPopup";
 import { getStalls } from "../../services/stallService";
-import { MARKET_LAYOUT, normalizeStallName, StallHotspot } from "../constants/marketLayout";
+import { MARKET_LAYOUT, StallHotspot } from "../constants/marketLayout";
+import { matchMapStalls } from "../constants/stallLookup";
 
 // Same blueprint asset/geometry as app/market-map.tsx, but sized to sit inline
 // inside a page section instead of filling the whole screen — no header/back
@@ -35,6 +36,7 @@ const HOVER_TOOLTIP_GAP = 12;
 interface Stall {
   id: string;
   name?: string;
+  spaceId?: string;
   status?: string;
   buildingNumber?: string;
   category?: string;
@@ -185,7 +187,7 @@ export default function MarketMapEmbed({
       .finally(() => setLoading(false));
   }, []);
 
-  const stallsByName = new Map(stalls.map((s) => [normalizeStallName(s.name ?? ""), s]));
+  const stallsByName = matchMapStalls(stalls, MARKET_LAYOUT);
   // Same binary occupied/vacant split used everywhere else in this file
   // (isVacant = status !== "occupied") -- there's no third "reserved" status
   // in the actual stall data, so the mobile Availability card only shows
@@ -213,7 +215,7 @@ export default function MarketMapEmbed({
         </View>
       ) : (
         MARKET_LAYOUT.map((hotspot, index) => {
-          const stall = stallsByName.get(normalizeStallName(hotspot.name));
+          const stall = stallsByName.get(hotspot.name);
           const isVacant = stall ? stall.status?.toLowerCase() !== "occupied" : null;
 
           // Only rotated hotspots risk overlapping a neighbor — see

@@ -20,6 +20,7 @@ export async function getStalls(){
     return {
       id: doc.id,
       name: data.name,
+      spaceId: data.spaceId,
       status: data.status,
       buildingNumber: data.buildingNumber,
       category: data.category,

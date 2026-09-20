@@ -87,6 +87,13 @@ export default function ARView() {
   const [armedId, setArmedId] = useState<string | null>(null);
   const [arming, setArming] = useState(false);
   const [sessionActive, setSessionActive] = useState(false);
+  const [scanActive, setScanActive] = useState(false);
+  const [scanSecondsLeft, setScanSecondsLeft] = useState(0);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [toolMode, setToolMode] = useState<"rotate" | "resize" | null>(null);
+  const [resizeAxis, setResizeAxis] = useState<ScaleAxis>("x");
+  const [rotateValue, setRotateValue] = useState(0);
+  const [scaleValues, setScaleValues] = useState<Record<ScaleAxis, number>>({ x: 100, y: 100, z: 100 });
   const [reticleVisible, setReticleVisible] = useState(false);
   const [placedState, setPlacedState] = useState<PlacedState>({ placed: [], selectedId: null, canUndo: false });
   const [measurement, setMeasurement] = useState<SelectedMeasurement | null>(null);
@@ -104,6 +111,7 @@ export default function ARView() {
   const [planeDiagnostics, setPlaneDiagnostics] = useState<string[]>([]);
   const wasReticleVisibleRef = useRef(false);
   const scanPulseAnim = useRef(new Animated.Value(0)).current;
+  const scanTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Loops for the entire time AR is active — the "actively scanning" pulse ring is only
   // actually rendered while !reticleVisible (see JSX below), but keeping the loop itself
@@ -261,6 +269,7 @@ export default function ARView() {
     try {
       setError(null);
       await sceneRef.current.startSession(overlay);
+      sceneRef.current.setScanningEnabled(false);
       setSessionActive(true);
     } catch (e: any) {
       setError(translateSessionStartError(e));
@@ -268,12 +277,59 @@ export default function ARView() {
   };
 
   const endAR = async () => {
+    if (scanTimerRef.current) clearInterval(scanTimerRef.current);
+    scanTimerRef.current = null;
+    setScanActive(false);
+    setScanSecondsLeft(0);
     if (sessionActive) {
+      sceneRef.current?.setScanningEnabled(false);
       await sceneRef.current?.endSession();
       setSessionActive(false);
     } else {
       router.back();
     }
+  };
+
+  const startTimedScan = () => {
+    if (!sceneRef.current || scanActive) return;
+    if (scanTimerRef.current) clearInterval(scanTimerRef.current);
+
+    setScanActive(true);
+    setScanSecondsLeft(30);
+    sceneRef.current.setScanningEnabled(true);
+
+    scanTimerRef.current = setInterval(() => {
+      setScanSecondsLeft((seconds) => {
+        if (seconds <= 1) {
+          if (scanTimerRef.current) clearInterval(scanTimerRef.current);
+          scanTimerRef.current = null;
+          sceneRef.current?.setScanningEnabled(false);
+          setScanActive(false);
+          return 0;
+        }
+        return seconds - 1;
+      });
+    }, 1000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (scanTimerRef.current) clearInterval(scanTimerRef.current);
+    };
+  }, []);
+
+  const setRotationFromSlider = (nextValue: number) => {
+    const delta = nextValue - rotateValue;
+    if (delta !== 0) sceneRef.current?.rotateSelected(delta);
+    setRotateValue(nextValue);
+  };
+
+  const setScaleFromSlider = (axis: ScaleAxis, nextValue: number) => {
+    const previousValue = scaleValues[axis];
+    if (previousValue > 0 && nextValue !== previousValue) {
+      sceneRef.current?.scaleSelectedAxis(axis, nextValue / previousValue);
+    }
+    setScaleValues((previous) => ({ ...previous, [axis]: nextValue }));
   };
 
   // Wired to onPressIn/onPressOut on every control-panel and catalog-rail button, so
@@ -518,6 +574,18 @@ export default function ARView() {
             <Text style={styles.topActionPrimaryText}>{sessionActive ? "Done" : "Back"}</Text>
           </TouchableOpacity>
           <View style={styles.headerRightGroup}>
+            {sessionActive && (
+              <TouchableOpacity
+                style={[styles.topAction, scanActive && styles.topActionActive]}
+                onPress={startTimedScan}
+                disabled={scanActive}
+                onPressIn={suppressPressIn}
+                onPressOut={suppressPressOut}
+              >
+                <Text style={styles.topActionIcon}>⌾</Text>
+                <Text style={styles.topActionText}>{scanActive ? `Scan ${scanSecondsLeft}s` : "Scan"}</Text>
+              </TouchableOpacity>
+            )}
             {sessionActive && placedState.canUndo && (
               <TouchableOpacity
                 style={styles.topAction}
@@ -755,7 +823,7 @@ export default function ARView() {
           </View>
         )}
 
-        {placedState.selectedId && (
+        {placedState.selectedId && catalogOpen && (
           <View style={styles.controlPanel} pointerEvents="box-none">
             <View style={styles.controlHeader}>
               <View style={styles.controlTitleGroup}>
@@ -767,7 +835,40 @@ export default function ARView() {
               <Text style={styles.controlHint}>Pinch to resize · swipe for tools</Text>
             </View>
 
-            <ScrollView
+            {toolMode === "rotate" ? (
+              <View style={styles.sliderPanel}>
+                <View style={styles.sliderHeading}>
+                  <Text style={styles.sliderTitle}>Rotate object</Text>
+                  <Text style={styles.sliderValue}>{rotateValue}°</Text>
+                </View>
+                <input aria-label="Rotate selected object" type="range" min={-180} max={180} value={rotateValue} onChange={(event) => setRotationFromSlider(Number(event.target.value))} style={styles.webSlider as any} />
+                <View style={styles.sliderMarks}><Text style={styles.sliderMark}>−180°</Text><Text style={styles.sliderMark}>0°</Text><Text style={styles.sliderMark}>180°</Text></View>
+              </View>
+            ) : toolMode === "resize" ? (
+              <View style={styles.sliderPanel}>
+                <View style={styles.sliderHeading}>
+                  <Text style={styles.sliderTitle}>Size</Text>
+                  <Text style={styles.sliderValue}>{scaleValues[resizeAxis]}%</Text>
+                </View>
+                <View style={styles.axisTabs}>
+                  {AXIS_LABELS.map(({ axis, label }) => (
+                    <TouchableOpacity key={axis} style={[styles.axisTab, resizeAxis === axis && styles.axisTabActive]} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => setResizeAxis(axis)}>
+                      <Text style={[styles.axisTabText, resizeAxis === axis && styles.axisTabTextActive]}>{axis === "x" ? "Size" : label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <input aria-label="Resize selected object" type="range" min={50} max={150} value={scaleValues[resizeAxis]} onChange={(event) => setScaleFromSlider(resizeAxis, Number(event.target.value))} style={styles.webSlider as any} />
+                <View style={styles.sliderMarks}><Text style={styles.sliderMark}>50%</Text><Text style={styles.sliderMark}>100%</Text><Text style={styles.sliderMark}>150%</Text></View>
+              </View>
+            ) : (
+              <View style={styles.actionRow}>
+                <TouchableOpacity style={styles.actionButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => { setRotateValue(0); setToolMode("rotate"); }}><Text style={styles.actionIcon}>⟳</Text><Text style={styles.actionText}>Rotate</Text></TouchableOpacity>
+                <TouchableOpacity style={styles.actionButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => setToolMode("resize")}><Text style={styles.actionIcon}>⛶</Text><Text style={styles.actionText}>Resize</Text></TouchableOpacity>
+                <TouchableOpacity style={[styles.actionButton, !reticleVisible && styles.controlBtnDisabled]} disabled={!reticleVisible} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => sceneRef.current?.moveSelectedToReticle()}><Text style={styles.actionIcon}>✥</Text><Text style={styles.actionText}>Move</Text></TouchableOpacity>
+                <TouchableOpacity style={[styles.actionButton, styles.deleteBtn]} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => sceneRef.current?.deleteSelected()}><Text style={styles.actionIcon}>♜</Text><Text style={styles.actionText}>Delete</Text></TouchableOpacity>
+              </View>
+            )}
+            {false && <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.controlRow}
@@ -877,19 +978,24 @@ export default function ARView() {
                   <Text style={styles.controlBtnText}>🗑</Text>
                 </TouchableOpacity>
               </View>
-            </ScrollView>
+            </ScrollView>}
           </View>
         )}
 
         {/* Catalog rail — arms which item gets placed on the next tap */}
-        {objects.length > 0 && (
+        {objects.length > 0 && catalogOpen ? (
           <View style={styles.catalogPanel}>
             <View style={styles.catalogHeader}>
               <View>
                 <Text style={styles.catalogEyebrow}>ADD TO SCENE</Text>
                 <Text style={styles.catalogTitle}>Market fixtures</Text>
               </View>
-              <Text style={styles.catalogCount}>{objects.length} items</Text>
+              <View style={styles.catalogHeaderActions}>
+                <Text style={styles.catalogCount}>{objects.length} items</Text>
+                <TouchableOpacity style={styles.minimizeButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => { setCatalogOpen(false); setToolMode(null); }}>
+                  <Text style={styles.minimizeButtonText}>−</Text>
+                </TouchableOpacity>
+              </View>
             </View>
             <ScrollView
               horizontal
@@ -923,7 +1029,12 @@ export default function ARView() {
               ))}
             </ScrollView>
           </View>
-        )}
+        ) : objects.length > 0 ? (
+          <TouchableOpacity style={styles.addObjectButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => setCatalogOpen(true)}>
+            <Text style={styles.addObjectPlus}>+</Text>
+            <Text style={styles.addObjectText}>Add object</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     </View>
   );
@@ -935,30 +1046,31 @@ const styles = StyleSheet.create({
 
   header: {
     position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
+    top: 14,
+    left: 12,
+    right: 12,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingTop: 48,
-    paddingBottom: 8,
+    paddingHorizontal: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
   },
   headerRightGroup: { flexDirection: "row", alignItems: "center", gap: 8 },
   topAction: {
-    minHeight: 42,
+    minHeight: 40,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 5,
-    paddingHorizontal: 14,
+    paddingHorizontal: 13,
     borderRadius: 22,
     backgroundColor: "rgba(8,28,38,0.78)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.16)",
   },
   topActionPrimary: { backgroundColor: "rgba(255,255,255,0.94)", borderColor: "#fff" },
+  topActionActive: { backgroundColor: "rgba(8,145,178,0.92)", borderColor: "rgba(255,255,255,0.42)" },
   topActionPrimaryText: { color: PRIMARY_DARK, fontSize: 14, fontWeight: "800" },
   topActionIcon: { color: "#fff", fontSize: 17, fontWeight: "800" },
   topActionText: { color: "#fff", fontSize: 13, fontWeight: "700" },
@@ -1024,15 +1136,15 @@ const styles = StyleSheet.create({
 
   statusPanel: {
     position: "absolute",
-    top: 104,
-    left: 16,
-    right: 16,
+    top: 66,
+    left: 12,
+    right: 12,
     backgroundColor: "rgba(8,28,38,0.76)",
     borderRadius: 18,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.14)",
-    paddingVertical: 11,
-    paddingHorizontal: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
   },
   statusSummaryRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   statusSummaryDot: { width: 9, height: 9, borderRadius: 5 },
@@ -1151,14 +1263,14 @@ const styles = StyleSheet.create({
 
   controlPanel: {
     position: "absolute",
-    bottom: 142,
+    bottom: 146,
     left: 12,
     right: 12,
     backgroundColor: "rgba(8,28,38,0.9)",
-    borderRadius: 20,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.15)",
-    paddingVertical: 12,
+    paddingVertical: 10,
     gap: 10,
   },
   controlHeader: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", paddingHorizontal: 14 },
@@ -1166,6 +1278,22 @@ const styles = StyleSheet.create({
   controlEyebrow: { color: "rgba(255,255,255,0.55)", fontSize: 8, fontWeight: "800", letterSpacing: 1.1 },
   controlLabel: { color: "#fff", fontSize: 15, fontWeight: "800", marginTop: 2 },
   controlHint: { color: "rgba(255,255,255,0.55)", fontSize: 9, fontWeight: "600" },
+  actionRow: { flexDirection: "row", gap: 8, paddingHorizontal: 12 },
+  actionButton: { flex: 1, minHeight: 50, borderRadius: 12, backgroundColor: "rgba(255,255,255,0.09)", borderWidth: 1, borderColor: "rgba(255,255,255,0.17)", alignItems: "center", justifyContent: "center", gap: 3 },
+  actionIcon: { color: "#fff", fontSize: 17, fontWeight: "800" },
+  actionText: { color: "#fff", fontSize: 10, fontWeight: "800" },
+  sliderPanel: { paddingHorizontal: 14, paddingBottom: 4, gap: 11 },
+  sliderHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  sliderTitle: { color: "#fff", fontSize: 12, fontWeight: "800" },
+  sliderValue: { color: "#5DE7C2", backgroundColor: "rgba(93,231,194,0.12)", borderRadius: 9, paddingHorizontal: 9, paddingVertical: 5, fontSize: 11, fontWeight: "800" },
+  webSlider: { width: "100%", accentColor: "#5DE7C2" },
+  sliderMarks: { flexDirection: "row", justifyContent: "space-between", marginTop: -5 },
+  sliderMark: { color: "rgba(255,255,255,0.72)", fontSize: 9, fontWeight: "700" },
+  axisTabs: { flexDirection: "row", gap: 6 },
+  axisTab: { flex: 1, borderRadius: 9, paddingVertical: 9, alignItems: "center", backgroundColor: "rgba(255,255,255,0.08)", borderWidth: 1, borderColor: "rgba(255,255,255,0.16)" },
+  axisTabActive: { backgroundColor: "rgba(8,145,178,0.45)", borderColor: "#5DE7C2" },
+  axisTabText: { color: "rgba(255,255,255,0.72)", fontSize: 9, fontWeight: "800" },
+  axisTabTextActive: { color: "#fff" },
   controlRow: { flexDirection: "row", alignItems: "flex-end", gap: 14, paddingHorizontal: 14 },
   carouselItem: { alignItems: "flex-start", gap: 6 },
   carouselItemLabel: { color: "rgba(255,255,255,0.72)", fontSize: 10, fontWeight: "700" },
@@ -1186,15 +1314,19 @@ const styles = StyleSheet.create({
 
   catalogPanel: {
     position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
+    bottom: 12,
+    left: 12,
+    right: 12,
     backgroundColor: "rgba(8,28,38,0.9)",
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.15)",
     paddingTop: 10,
   },
   catalogHeader: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", paddingHorizontal: 16 },
+  catalogHeaderActions: { flexDirection: "row", alignItems: "center", gap: 10 },
+  minimizeButton: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "rgba(255,255,255,0.24)", backgroundColor: "rgba(255,255,255,0.07)" },
+  minimizeButtonText: { color: "#fff", fontSize: 21, fontWeight: "500", marginTop: -4 },
   catalogEyebrow: { color: "rgba(255,255,255,0.5)", fontSize: 8, fontWeight: "800", letterSpacing: 1.1 },
   catalogTitle: { color: "#fff", fontSize: 14, fontWeight: "800", marginTop: 1 },
   catalogCount: { color: "rgba(255,255,255,0.55)", fontSize: 10, fontWeight: "600" },
@@ -1214,6 +1346,9 @@ const styles = StyleSheet.create({
   catalogThumbImage: { width: "100%", height: "100%" },
   catalogItemName: { color: "rgba(255,255,255,0.65)", fontSize: 9, fontWeight: "600", maxWidth: 68 },
   catalogItemNameActive: { color: "#fff", fontWeight: "800" },
+  addObjectButton: { position: "absolute", bottom: 18, left: 20, right: 20, minHeight: 64, borderRadius: 20, backgroundColor: "rgba(8,28,38,0.93)", borderWidth: 1, borderColor: "rgba(255,255,255,0.24)", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 },
+  addObjectPlus: { width: 28, height: 28, borderRadius: 9, backgroundColor: "#5DE7C2", color: "#073238", fontSize: 21, fontWeight: "800", lineHeight: 27, textAlign: "center" },
+  addObjectText: { color: "#fff", fontSize: 15, fontWeight: "800" },
 
   webScreen: {
     flex: 1,
