@@ -460,19 +460,6 @@ export default function MarketMapEmbed({
             paddingLeft: isTabletRange ? 45 : 0,
           }}
         >
-          {isDesktop && (
-            <View style={styles.desktopArNotice}>
-              <View style={styles.desktopArNoticeIcon}>
-                <Ionicons name="phone-portrait-outline" size={20} color={PRIMARY_DARK} />
-              </View>
-              <View style={styles.desktopArNoticeCopy}>
-                <Text style={styles.desktopArNoticeTitle}>Explore the market in AR</Text>
-                <Text style={styles.desktopArNoticeText}>
-                  Open this website on your mobile device to launch the interactive AR viewing experience.
-                </Text>
-              </View>
-            </View>
-          )}
           <Text
             style={{
               color: PRIMARY,
@@ -501,6 +488,19 @@ export default function MarketMapEmbed({
               03:00 AM - 09:00 PM
             </Text>
           </View>
+          {isDesktop && (
+            <View style={styles.desktopArNotice}>
+              <View style={styles.desktopArNoticeIcon}>
+                <Ionicons name="phone-portrait-outline" size={20} color={PRIMARY_DARK} />
+              </View>
+              <View style={styles.desktopArNoticeCopy}>
+                <Text style={styles.desktopArNoticeTitle}>Explore the market in AR</Text>
+                <Text style={styles.desktopArNoticeText}>
+                  Open this website on mobile to launch AR viewing.
+                </Text>
+              </View>
+            </View>
+          )}
         </View>
       )}
     </>
@@ -681,7 +681,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#E7F3EB",
     borderRadius: 14,
     padding: 14,
-    marginBottom: 22,
+    width: 240,
+    marginTop: 22,
   },
   desktopArNoticeIcon: {
     width: 38,
