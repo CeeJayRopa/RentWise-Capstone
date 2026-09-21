@@ -122,9 +122,9 @@ const HOME_ESSENTIALS_IMG_2 = require("../assets/home-essentials/Home_Essentials
 // Temporary placeholder -- all 3 category cards point at the same image
 // until real per-category photos are ready.
 const CARD_IMAGES: Record<string, any> = {
-  "wet-market": require("../assets/dry-market/Dry_market_1.png"),
-  "dry-market": require("../assets/dry-market/Dry_market_1.png"),
-  "home-essentials": require("../assets/dry-market/Dry_market_1.png"),
+  "wet-market": require("../assets/quality-protein.jpg"),
+  "dry-market": require("../assets/farm-to-table.jpg"),
+  "home-essentials": require("../assets/home-essentials-new.jpg"),
 };
 
 const CATEGORIES = [
@@ -580,18 +580,6 @@ export default function GuestLanding() {
               },
             ]}
           >
-            {isMobile && (
-              <View style={styles.heroDotsMobile}>
-                {HERO_SLIDES.map((_, i) => (
-                  <TouchableOpacity
-                    key={i}
-                    onPress={() => goToHeroSlide(() => i)}
-                    hitSlop={8}
-                    style={[styles.heroDot, i === heroSlide && styles.heroDotActive]}
-                  />
-                ))}
-              </View>
-            )}
             <Animated.Image
               source={HERO_SLIDES[heroSlide].image}
               resizeMode="contain"
@@ -689,18 +677,16 @@ export default function GuestLanding() {
             </Animated.View>
           </View>
 
-          {!isMobile && (
-            <View style={styles.heroDots}>
-              {HERO_SLIDES.map((_, i) => (
-                <TouchableOpacity
-                  key={i}
-                  onPress={() => goToHeroSlide(() => i)}
-                  hitSlop={8}
-                  style={[styles.heroDot, i === heroSlide && styles.heroDotActive]}
-                />
-              ))}
-            </View>
-          )}
+          <View style={[styles.heroDots, isMobile && styles.heroDotsMobile]}>
+            {HERO_SLIDES.map((_, i) => (
+              <TouchableOpacity
+                key={i}
+                onPress={() => goToHeroSlide(() => i)}
+                hitSlop={8}
+                style={[styles.heroDot, i === heroSlide && styles.heroDotActive]}
+              />
+            ))}
+          </View>
         </View>
 
         {/* ── Market Pulse ─────────────────────────────────────────────────── */}
@@ -1413,10 +1399,11 @@ const styles = StyleSheet.create({
     bottom: 16,
   },
   heroDotsMobile: {
-    flexDirection: "row",
-    justifyContent: "center",
-    gap: 8,
-    paddingTop: 4,
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 44,
+    paddingBottom: 0,
   },
   heroDot: {
     width: 10,

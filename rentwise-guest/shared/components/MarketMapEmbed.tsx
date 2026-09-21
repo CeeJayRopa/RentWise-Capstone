@@ -424,10 +424,11 @@ export default function MarketMapEmbed({
       style={[
         styles.blueprintTitle,
         (isDesktop || isMobileOrTablet) && {
-          fontFamily: "PlayfairDisplay_400Regular_Italic",
-          fontWeight: "400",
+          fontFamily: "Poppins_700Bold",
+          fontWeight: "700",
           color: PRIMARY_DARK,
-          fontSize: isDesktop ? 55 : 40,
+          fontSize: isDesktop ? 46 : isTabletRange ? 36 : 30,
+          lineHeight: isDesktop ? 56 : isTabletRange ? 44 : 38,
           // Sizes to the text's own natural width instead of being
           // stretched (and force-wrapped) to the 300px text column --
           // lets "Market Blueprint &" sit on one row without widening
@@ -459,6 +460,19 @@ export default function MarketMapEmbed({
             paddingLeft: isTabletRange ? 45 : 0,
           }}
         >
+          {isDesktop && (
+            <View style={styles.desktopArNotice}>
+              <View style={styles.desktopArNoticeIcon}>
+                <Ionicons name="phone-portrait-outline" size={20} color={PRIMARY_DARK} />
+              </View>
+              <View style={styles.desktopArNoticeCopy}>
+                <Text style={styles.desktopArNoticeTitle}>Explore the market in AR</Text>
+                <Text style={styles.desktopArNoticeText}>
+                  Open this website on your mobile device to launch the interactive AR viewing experience.
+                </Text>
+              </View>
+            </View>
+          )}
           <Text
             style={{
               color: PRIMARY,
@@ -659,6 +673,38 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: TEXT_MUTED,
     marginBottom: 24,
+  },
+  desktopArNotice: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    backgroundColor: "#E7F3EB",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 22,
+  },
+  desktopArNoticeIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "#D2E9DA",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  desktopArNoticeCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  desktopArNoticeTitle: {
+    color: PRIMARY_DARK,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  desktopArNoticeText: {
+    color: TEXT_MUTED,
+    fontSize: 12,
+    lineHeight: 18,
   },
   actionCol: { gap: 12 },
   // Mobile-only full-width pill: icon-in-circle, label, trailing arrow.
