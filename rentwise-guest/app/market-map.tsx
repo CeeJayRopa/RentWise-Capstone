@@ -57,11 +57,9 @@ export default function MarketMap() {
   // useBreakpoints.ts).
   const isTabletRange = windowWidth > 480 && windowWidth <= 1024;
   const isMobile = windowWidth <= 480;
-  // Tablet now shares mobile's whole header design (horizontal bar, rotated
-  // Back button/Availability card/quote card as absolute overlays, map
-  // below) instead of its old separate vertical right-edge strip -- every
-  // isMobile-only branch below is now isMobileOrTablet instead.
-  const isMobileOrTablet = isMobile || isTabletRange;
+  // Only phones use the rotated portrait presentation. Tablets have enough
+  // width for the blueprint's native landscape orientation and standard UI.
+  const isMobileOrTablet = isMobile;
   // Every one of the header's overlay pixel values (Back button,
   // Availability card, quote card, title) was tuned by eye against a
   // 390px-wide screen -- at narrower widths those same flat values
@@ -216,20 +214,6 @@ export default function MarketMap() {
                 justifyContent: "center",
                 position: "relative",
                 top: 10 * mobileScale,
-              }
-            : isTabletRange
-            ? {
-                width: rotatedHeight,
-                height: rotatedWidth,
-                alignItems: "center",
-                justifyContent: "center",
-                position: "relative",
-                top: 0 * tabletScale,
-                left: -45 * tabletScale,
-                // TEMP DEBUG -- red tint so the box's real edges/position
-                // are visible; remove once we've confirmed edits are
-                // actually reaching the browser.
-                backgroundColor: isTabletRange ? "rgba(255,0,0,0.35)" : undefined,
               }
             : undefined
         }
@@ -401,14 +385,6 @@ export default function MarketMap() {
                 paddingVertical: 30 * mobileScale,
                 borderRadius: 10 * mobileScale,
               },
-              isTabletRange && {
-                position: "absolute",
-                right: 16 * tabletScale,
-                top: 18 * tabletScale,
-                paddingHorizontal: 3 * tabletScale,
-                paddingVertical: 30 * tabletScale,
-                borderRadius: 10 * tabletScale,
-              },
             ]}
             onPress={() => router.replace("/")}
           >
@@ -416,7 +392,6 @@ export default function MarketMap() {
               style={[
                 styles.backBtnPillText,
                 isMobile && { fontSize: 14 * mobileScale, transform: [{ rotate: "90deg" }] },
-                isTabletRange && { fontSize: 14 * tabletScale, transform: [{ rotate: "90deg" }] },
               ]}
             >
               Back
@@ -480,69 +455,6 @@ export default function MarketMap() {
               </View>
             </View>
           )}
-          {isTabletRange && (
-            <View
-              style={[
-                styles.availabilityCard,
-                {
-                  // right- (not left-) anchored -- same anchor edge as the
-                  // Back button, so this stays tucked under it at any
-                  // tablet width instead of drifting away (a left-anchored
-                  // position and the Back button's right-anchored position
-                  // scale apart from each other as width changes).
-                  right: -30 * tabletScale,
-                  top: 127 * tabletScale,
-                  width: 140 * tabletScale,
-                  padding: 12 * tabletScale,
-                  borderRadius: 16 * tabletScale,
-                  transform: [{ rotate: "90deg" }],
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.availabilityEyebrow,
-                  { fontSize: 10 * tabletScale, marginBottom: 8 * tabletScale },
-                ]}
-              >
-                Availability
-              </Text>
-              <View style={[styles.availabilityRow, { marginBottom: 7 * tabletScale }]}>
-                <View style={[styles.availabilityRowLabel, { gap: 6 * tabletScale }]}>
-                  <View
-                    style={[
-                      styles.availabilityDot,
-                      {
-                        width: 8 * tabletScale,
-                        height: 8 * tabletScale,
-                        borderRadius: 4 * tabletScale,
-                        backgroundColor: "#8B5E3C",
-                      },
-                    ]}
-                  />
-                  <Text style={[styles.availabilityRowText, { fontSize: 13 * tabletScale }]}>Occupied</Text>
-                </View>
-                <Text style={[styles.availabilityRowValue, { fontSize: 13 * tabletScale }]}>{occupiedCount}</Text>
-              </View>
-              <View style={styles.availabilityRow}>
-                <View style={[styles.availabilityRowLabel, { gap: 6 * tabletScale }]}>
-                  <View
-                    style={[
-                      styles.availabilityDot,
-                      {
-                        width: 8 * tabletScale,
-                        height: 8 * tabletScale,
-                        borderRadius: 4 * tabletScale,
-                        backgroundColor: "#0B6247",
-                      },
-                    ]}
-                  />
-                  <Text style={[styles.availabilityRowText, { fontSize: 13 * tabletScale }]}>Vacant</Text>
-                </View>
-                <Text style={[styles.availabilityRowValue, { fontSize: 13 * tabletScale }]}>{vacantCount}</Text>
-              </View>
-            </View>
-          )}
           {isMobile && (
             <View
               style={[
@@ -567,33 +479,6 @@ export default function MarketMap() {
               </Text>
             </View>
           )}
-          {isTabletRange && (
-            <View
-              style={[
-                styles.mobileQuoteCard,
-                {
-                  // right-anchored, same reasoning as the Availability card
-                  // above -- keeps it tucked near the Back button/
-                  // Availability card at any tablet width.
-                  right: -30 * tabletScale,
-                  top: 280 * tabletScale,
-                  width: 140 * tabletScale,
-                  padding: 10 * tabletScale,
-                  borderRadius: 12 * tabletScale,
-                  transform: [{ rotate: "90deg" }],
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.stripQuoteText,
-                  { fontSize: 13 * tabletScale, textAlign: "center", color: "#171A19" },
-                ]}
-              >
-                Tap a stall to view its availability{"\n"}& Stall information
-              </Text>
-            </View>
-          )}
           <Text
             style={[
               styles.headerTitle,
@@ -604,16 +489,6 @@ export default function MarketMap() {
                 left: 240 * mobileScale,
                 paddingVertical: 12 * mobileScale,
                 paddingHorizontal: 10 * mobileScale,
-                transform: [{ rotate: "90deg" }],
-                opacity: 0,
-              },
-              isTabletRange && {
-                fontSize: 13 * tabletScale,
-                position: "relative",
-                top: -15 * tabletScale,
-                left: 240 * tabletScale,
-                paddingVertical: 12 * tabletScale,
-                paddingHorizontal: 10 * tabletScale,
                 transform: [{ rotate: "90deg" }],
                 opacity: 0,
               },
@@ -628,18 +503,6 @@ export default function MarketMap() {
         style={{ flex: 1, position: "relative" }}
         onLayout={(e) => setMeasuredContentHeight(e.nativeEvent.layout.height)}
       >
-
-      {/* TEMP DEBUG -- on-screen readout of the actual computed numbers, so
-          we can tell whether code edits are reaching the browser at all vs.
-          some other bug. Remove once diagnosed. */}
-      {isTabletRange && (
-        <View style={{ position: "absolute", top: 4, left: 4, zIndex: 999, backgroundColor: "#000" }}>
-          <Text style={{ color: "#0f0", fontSize: 11 }}>
-            w={windowWidth} tabletScale={tabletScale.toFixed(3)} top={(10 * tabletScale).toFixed(1)}{"\n"}
-            rH={rotatedHeight.toFixed(1)} rW={rotatedWidth.toFixed(1)} availH={availableHeight.toFixed(1)}
-          </Text>
-        </View>
-      )}
 
       {/* Blueprint area -- mobile/tablet render blueprintArea directly (no
           ScrollView, see the comment where it's defined above); desktop
