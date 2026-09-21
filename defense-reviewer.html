@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>RentWise Defense Sprint</title>
+  <style>
+    :root{--green:#086348;--green2:#0d7c5a;--cream:#f7f4ea;--ink:#17211d;--muted:#65706a;--line:#dce5de;--gold:#b87825;--red:#a13b3b;--white:#fff}
+    *{box-sizing:border-box} body{margin:0;background:var(--cream);color:var(--ink);font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif}
+    button,input{font:inherit} button{cursor:pointer}.shell{max-width:1180px;margin:auto;padding:24px}.hero{background:linear-gradient(135deg,#064b38,#0b7655);color:white;border-radius:24px;padding:28px;box-shadow:0 16px 40px #063e2d22}
+    .hero h1{margin:0;font-size:clamp(28px,5vw,54px);line-height:1}.hero p{max-width:760px;margin:14px 0 0;color:#d9eee5}.progress{height:10px;background:#ffffff30;border-radius:20px;overflow:hidden;margin-top:22px}.progress i{display:block;height:100%;width:0;background:#b8ec68;transition:.25s}
+    .tabs{display:flex;gap:8px;overflow:auto;padding:18px 0}.tabs button{border:1px solid var(--line);background:white;border-radius:999px;padding:10px 16px;white-space:nowrap}.tabs button.active{background:var(--green);color:white;border-color:var(--green)}
+    section{display:none}section.active{display:block}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}.card{background:white;border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 6px 20px #163b2b0c}.card h3,.card h2{margin-top:0}.tag{display:inline-block;padding:4px 9px;border-radius:999px;background:#e2f2e9;color:var(--green);font-size:12px;font-weight:750}.warning{border-left:5px solid var(--gold)}.danger{border-left:5px solid var(--red)}
+    .role{border-top:6px solid var(--green)}.role input{width:100%;border:0;border-bottom:1px solid var(--line);padding:8px 2px;font-weight:750;font-size:17px}.role ul{padding-left:20px}.flow{display:flex;align-items:center;gap:8px;overflow:auto;padding-bottom:6px}.flow span{min-width:145px;text-align:center;background:white;border:1px solid var(--line);padding:14px;border-radius:12px}.flow b{color:var(--green)}
+    .timeline{border-left:3px solid var(--green);margin-left:12px}.slot{position:relative;padding:0 0 22px 24px}.slot:before{content:"";position:absolute;left:-8px;top:5px;width:13px;height:13px;border-radius:50%;background:var(--green)}.slot.done{opacity:.55}.slot button{border:0;border-radius:9px;padding:6px 10px;background:#e2f2e9;color:var(--green)}
+    .flash{min-height:245px;display:flex;flex-direction:column;justify-content:center;text-align:center}.flash .answer{display:none;color:var(--muted);font-size:17px}.flash.revealed .question{display:none}.flash.revealed .answer{display:block}.controls{display:flex;flex-wrap:wrap;gap:9px;justify-content:center;margin-top:16px}.controls button,.primary{border:0;background:var(--green);color:white;border-radius:10px;padding:10px 15px}.controls .secondary{background:white;color:var(--green);border:1px solid var(--green)}
+    .quiz-option{display:block;width:100%;text-align:left;background:white;border:1px solid var(--line);border-radius:12px;padding:12px;margin:8px 0}.quiz-option.correct{border-color:var(--green);background:#e7f5ed}.quiz-option.wrong{border-color:var(--red);background:#fbecec}.hidden{display:none}.check{display:flex;gap:10px;align-items:flex-start;margin:9px 0}.check input{margin-top:5px}.search{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:12px;margin-bottom:14px}.qa h3{margin-bottom:5px}.qa p{margin-top:0;color:var(--muted)}
+    .offline-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}.offline-actions button{border:0;background:var(--green);color:white;border-radius:10px;padding:11px 15px}.offline-actions .secondary{background:white;color:var(--green);border:1px solid var(--green)}
+    .footer-note{text-align:center;color:var(--muted);padding:30px}@media(max-width:640px){.shell{padding:10px}.hero{padding:20px;border-radius:18px}.flow{align-items:stretch}.card{padding:15px}.tabs{position:sticky;top:0;z-index:5;background:var(--cream)}.offline-actions button{width:100%}}
+  </style>
+</head>
+<body><main class="shell">
+  <header class="hero"><span class="tag">ONE-DAY DEFENSE SPRINT</span><h1>RentWise Reviewer</h1><p>Four presenters. One connected story. Learn the system by responsibility, rehearse the difficult questions, and track readiness together.</p><div class="progress"><i id="progressBar"></i></div><small id="progressText">0% review complete</small></header>
+  <nav class="tabs" id="tabs"></nav>
+
+  <section data-tab="Start" class="active">
+    <div class="grid">
+      <article class="card"><span class="tag">30-SECOND VERSION</span><h2>What is RentWise?</h2><p>RentWise is a four-module rental-management system for Ka Domeng Talipapa. It connects public stall discovery, tenant payments, administrator operations, and owner oversight through one secured Firebase backend.</p></article>
+      <article class="card"><span class="tag">CORE VALUE</span><h2>What problem does it solve?</h2><p>It replaces disconnected manual records with centralized, role-specific workflows. Tenants see what they owe, admins manage daily operations, owners review changes, and guests see live stall information.</p></article>
+      <article class="card warning"><span class="tag">SAY THIS CLEARLY</span><h2>Security boundary</h2><p>Navigation hides irrelevant screens for usability. Real authorization is enforced server-side by Firestore Security Rules and privileged Cloud Functions.</p></article>
+      <article class="card"><span class="tag">DIFFERENTIATOR</span><h2>AR purpose</h2><p>The guest AR feature is for designing a stall: users arrange supported 3D objects and preview the layout on a detected floor surface. It is not a market-navigation feature.</p></article>
+      <article class="card"><span class="tag">OFFLINE ON EVERY PHONE</span><h2>Save your own copy</h2><p>This reviewer is one self-contained HTML file. Download it once, send the file to all four members, and open it from Files or Downloads without internet. Progress is stored separately on each device.</p><div class="offline-actions"><button id="downloadReviewer">Download offline reviewer</button><button class="secondary" id="resetProgress">Reset my progress</button></div></article>
+    </div>
+    <article class="card" style="margin-top:14px"><h2>The story everyone must memorize</h2><div class="flow"><span>Guest discovers<br>available stalls</span><b>→</b><span>Tenant registers<br>and pays rent</span><b>→</b><span>Admin verifies<br>and manages</span><b>→</b><span>Owner reviews<br>and governs</span><b>→</b><span>Firebase keeps<br>one source of truth</span></div></article>
+  </section>
+
+  <section data-tab="4 Roles"><div class="grid" id="roles"></div></section>
+
+  <section data-tab="One-Day Plan">
+    <article class="card"><h2>Tomorrow-ready schedule</h2><p>Mark each block complete. Do not spend the day memorizing paragraphs—practice explaining flows in your own words.</p><div class="timeline" id="timeline"></div></article>
+  </section>
+
+  <section data-tab="System Flows">
+    <div class="grid">
+      <article class="card"><h3>Authentication and authorization</h3><p>Firebase Auth signs the user in → the app reads <code>users/{uid}</code> → role determines routing → Firestore Rules independently allow or reject every database request.</p></article>
+      <article class="card"><h3>Tenant payment</h3><p>Tenant chooses GCash/Maya → tenant app calls the Vercel PayMongo payment-intent API → PayMongo returns a redirect → payment is recorded → admin verifies → approved data updates dashboards/history.</p></article>
+      <article class="card"><h3>Admin to owner</h3><p>Admin records a significant change → an update and notification are created → owner reviews → approval state is stored → reports and notifications reflect the decision.</p></article>
+      <article class="card"><h3>Rent reminders</h3><p>Cloud Scheduler runs the reminder function → billing history is checked → duplicates are avoided → notification is created → push/Semaphore SMS delivery is attempted with retries and audit logs.</p></article>
+      <article class="card"><h3>Guest stall map</h3><p>Public page calls <code>getPublicStalls</code> → the Cloud Function validates and rate-limits the request → only safe public stall fields are returned → the page refreshes occupancy data every 15 seconds → selecting a stall opens its public rental information.</p></article>
+      <article class="card"><h3>AR placement</h3><p>Three.js loads a GLB → WebXR hit testing finds a candidate surface → plane/depth/stability and wall-clearance checks validate it → reticle turns green → object is placed and can be arranged.</p></article>
+    </div>
+  </section>
+
+  <section data-tab="Tech & Pipeline">
+    <div class="grid">
+      <article class="card"><h2>Core technologies</h2><ul><li><b>React Native + Expo:</b> shared mobile development and Android APK builds.</li><li><b>Expo Router:</b> file-based navigation in the apps and guest web module.</li><li><b>Firebase Authentication:</b> account identity and login.</li><li><b>Cloud Firestore:</b> the deployed NoSQL source of truth.</li><li><b>Cloud Functions:</b> trusted validation, scheduled tasks, recovery, and public API boundaries.</li><li><b>WebXR + Three.js:</b> browser-based AR surface detection and GLB rendering.</li><li><b>PayMongo:</b> sandbox online-payment flow.</li><li><b>Semaphore:</b> SMS delivery when configured.</li></ul></article>
+      <article class="card"><h2>Deployment pipeline</h2><p><b>Mobile:</b> source code → TypeScript checks → EAS Build → downloadable Android APK.</p><p><b>Guest website:</b> source code → Git commit/push → connected web deployment → <code>e-kadomeng.site</code>.</p><p><b>Backend:</b> TypeScript build → Firebase CLI deploy → Cloud Functions and Firestore Rules.</p></article>
+      <article class="card"><h2>Runtime request pipeline</h2><p>User action → app validates input → Firebase Auth supplies identity when required → Firestore Rules or a Cloud Function validates authorization and data → Firestore stores or reads data → the interface receives the result and updates.</p></article>
+      <article class="card"><h2>Where Postman fits</h2><p>Postman is an optional API-testing tool. It sends sample HTTP requests and displays responses. It is useful for backend testing, but it is not required to run RentWise and does not replace application, rules, or real-device testing.</p></article>
+    </div>
+  </section>
+
+  <section data-tab="Flashcards">
+    <article class="card flash" id="flash"><div class="question"><span class="tag" id="flashTag"></span><h2 id="flashQ"></h2></div><div class="answer"><span class="tag">STRONG ANSWER</span><p id="flashA"></p></div></article>
+    <div class="controls"><button class="secondary" id="prevFlash">Previous</button><button id="revealFlash">Reveal answer</button><button class="secondary" id="nextFlash">Next</button><button id="shuffleFlash">Shuffle</button></div>
+  </section>
+
+  <section data-tab="Panel Mode">
+    <article class="card"><span class="tag">RANDOM ORAL PRACTICE</span><h2 id="panelQuestion">Press “Ask us” to start.</h2><p id="panelHint" class="hidden"></p><div class="controls"><button id="askPanel">Ask us</button><button class="secondary" id="hintPanel">Show answer points</button></div></article>
+    <div class="grid" style="margin-top:14px"><article class="card warning"><h3>Answer formula</h3><p><b>1. Direct answer.</b> One sentence.<br><b>2. Mechanism.</b> Explain how it works.<br><b>3. Evidence.</b> Name the screen, rule, collection, or service.<br><b>4. Limitation.</b> Be honest when relevant.</p></article><article class="card"><h3>Handoff formula</h3><p>“That connects to the owner workflow, so I’ll hand this to our owner-module presenter.” Never interrupt; add only one missing fact after your teammate finishes.</p></article></div>
+  </section>
+
+  <section data-tab="Quick Quiz">
+    <article class="card"><h2 id="quizQ"></h2><div id="quizOptions"></div><p id="quizExplain"></p><div class="controls"><button id="nextQuiz">Next question</button></div></article>
+  </section>
+
+  <section data-tab="Demo Checklist">
+    <div class="grid">
+      <article class="card"><h2>Before presenting</h2><div id="demoChecks"></div></article>
+      <article class="card danger"><h2>Honest limitations</h2><ul><li>Immersive WebXR placement primarily targets supported Android Chrome devices.</li><li>PayMongo must be described accurately as test/sandbox unless production credentials are confirmed.</li><li>The system currently depends on Firebase; MongoDB failover is not part of the deployed client path.</li><li>Testing is structured and device-based, but there is no complete automated test suite.</li><li>AR validates surface quality but cannot perfectly identify every elevated flat surface as “not the floor.”</li></ul></article>
+      <article class="card"><h2>Current-code corrections</h2><ul><li>Semaphore is a real implementation with number normalization, up to three attempts, and <code>sms_logs</code> auditing when the secret is configured.</li><li>The tenant payment service currently calls the Vercel <code>create-payment-intent</code> endpoint.</li><li>Firestore Rules explicitly prevent self-updates to role, status, price, and payment schedule.</li><li>The guest page no longer reads complete stall documents anonymously. A rate-limited callable returns only an approved public field list.</li><li>Guest contact and AR-event writes are validated and rate-limited by Cloud Functions.</li></ul></article>
+      <article class="card"><h2>Recommended demo order</h2><ol><li>Problem and architecture</li><li>Tenant dashboard/payment</li><li>Admin tenant, stall, and payment operations</li><li>Owner approval/reporting</li><li>Guest live map and AR stall design</li><li>Security, limitations, and closing</li></ol></article>
+    </div>
+  </section>
+
+  <section data-tab="Q&A Bank"><input class="search" id="search" placeholder="Search questions: security, payment, AR, Firebase…"><div id="qaBank"></div></section>
+  <p class="footer-note">Best defense rule: understand the flow, show evidence, and never claim more than the current system does.</p>
+</main>
+<script>
+const roles=[
+ {title:'Presenter 1 — Problem & Architecture',focus:'Opening, problem, users, technology choices, system pipeline, closing.',demo:'Architecture overview and transition into Tenant.',must:['Why four modules?','Why Firebase and Expo?','Where is authorization enforced?']},
+ {title:'Presenter 2 — Tenant & Payments',focus:'Tenant login/recovery, dashboard, billing, PayMongo, receipts, history, reminders.',demo:'Tenant dashboard → payment → history/notification.',must:['How does payment become approved?','What is test vs production?','How are reminders delivered?']},
+ {title:'Presenter 3 — Admin Operations',focus:'Tenant/stall management, rental editing, relocation, cash/payment approval, updates.',demo:'Building/stall → tenant → payment approval → owner update.',must:['What changes during relocation?','Why admin verification?','How is rent stored/calculated?']},
+ {title:'Presenter 4 — Owner, Guest & AR',focus:'Owner governance, reports, admin management, guest map, responsive site, AR design.',demo:'Owner approval → guest live map → mobile AR stall design.',must:['What makes owner different?','How does AR placement work?','What devices support WebXR?']}
+];
+const cards=[
+ ['Architecture','Why four separate modules?','Each audience has different responsibilities and exposure. Separate apps reduce role confusion and accidental UI exposure, keep the public guest site login-free, and allow focused deployment. All four still share one secured backend.'],
+ ['Security','Where is access control enforced?','The UI routes by role for usability, but Firestore Security Rules enforce database authorization server-side. Cloud Functions separately validate privileged operations.'],
+ ['Payment','How does a payment become approved?','Checkout or proof creates a payment record; it is not automatically trusted as final. An admin verifies it, and financial summaries use the approved state.'],
+ ['Payment','Which PayMongo path is used now?','The tenant service calls the Vercel create-payment-intent endpoint. PayMongo performs the real API flow, but describe credentials as sandbox unless production activation is confirmed.'],
+ ['Reminder','How do reminders work?','A scheduled Cloud Function checks settings, billing history, due status, and duplicate logs; then it creates notifications and attempts push/Semaphore SMS delivery. SMS retries up to three times and writes an audit log.'],
+ ['Security','Can a tenant promote themselves to admin?','No. Firestore rules compare the new user document with the existing one and prevent self-changes to role, status, price, and payment schedule.'],
+ ['Security','Is the landing page vulnerable to SQL injection?','Traditional SQL injection does not apply because the deployed data layer uses Cloud Firestore, not SQL queries. The relevant risks are unauthorized reads, unsafe writes, abuse, and NoSQL-style input attacks; these are reduced with an allowlisted callable API, server-side validation, Firestore Rules, and rate limits.'],
+ ['Security','How is public landing-page data protected?','Guests call getPublicStalls instead of reading full Firestore documents. The Cloud Function rate-limits requests and returns only approved public fields. Contact messages and AR placement events also pass through validated, rate-limited functions.'],
+ ['Data','Why Firestore instead of SQL?','It combines real-time listeners, authentication integration, server-side rules, and managed serverless infrastructure. That fit the capstone’s live multi-role workflow and limited operations overhead.'],
+ ['Tools','Do we need Postman to run the system?','No. Postman is optional and is used to manually test HTTP APIs. The apps and website run without it.'],
+ ['Pipeline','What is your deployment pipeline?','Mobile code is type-checked and built into APKs through EAS Build. Website changes are committed and pushed to the connected web deployment. Backend TypeScript is built and deployed to Firebase Cloud Functions, with Firestore Rules deployed separately.'],
+ ['Admin','What happens during relocation?','The tenant-stall relationship changes in a controlled workflow. The new stall’s price always applies; selected tenant rental settings may be retained or replaced depending on the admin/owner choice.'],
+ ['Owner','Why is Owner not just another dashboard?','Owner is the governance layer: it manages admin accounts, reviews admin-submitted changes, and sees consolidated reports and archives.'],
+ ['AR','What is the AR feature for?','It lets a guest use supported 3D objects to design and preview a stall layout on a detected real-world floor surface. It is not for navigating the market.'],
+ ['AR','How is an AR placement validated?','WebXR hit testing finds a candidate. Plane classification, depth when available, stability, and wall-clearance checks validate it before the reticle allows placement.'],
+ ['AR','Why does the reticle take time to turn green?','One sensor frame can be noisy. Requiring corroboration or consecutive stable frames filters false positives, trading a small delay for safer placement.'],
+ ['Reliability','What happens if Firebase is unavailable?','The deployed system currently depends on Firebase and has no live failover. MongoDB work is not connected to the client apps, so it must not be presented as complete.'],
+ ['Testing','How was it tested?','Through structured manual regression and real-device testing with repeatable checklists. The honest gap is the lack of a comprehensive automated unit/integration test suite.'],
+ ['Process','Did you use AI tools?','Yes, as implementation and investigation tools. The team directed architecture, scope, priorities, verification, and must be able to explain every delivered flow.'],
+ ['Scale','What would you improve next?','Add automated tests, centralize duplicated billing logic, bound growing scheduled queries by date with indexes, and plan production-grade resilience/failover.']
+];
+const timeline=[['8:00–8:30','All: read Start + memorize the connected story'],['8:30–10:00','Individual: master assigned presenter role'],['10:00–11:00','Pair rehearsal: Tenant/Admin and Architecture/Owner-Guest'],['11:00–12:00','Full demo run with actual devices and accounts'],['1:00–2:00','Flashcards: every member answers all security/payment basics'],['2:00–3:00','Panel Mode: random questions, 60 seconds per answer'],['3:00–4:00','Fix weak answers; verify limitations and current configuration'],['4:00–5:00','Two timed full defenses with speaker handoffs'],['Evening — 30 min','Final device/Internet/APK checklist; stop changing features']];
+const quiz=[
+ ['What actually prevents a modified tenant app from changing its role?',['Hidden admin screens','Firestore Security Rules','Expo Router','The APK signature'],1,'Rules are evaluated on Firebase servers for every request.'],
+ ['What is the AR feature’s main purpose?',['Market navigation','Face recognition','Designing a stall with 3D objects','Payment scanning'],2,'The AR experience previews stall design objects on validated surfaces.'],
+ ['Who provides governance over administrator changes?',['Guest','Tenant','Owner','PayMongo'],2,'The owner reviews updates and manages administrator accounts.'],
+ ['Which current endpoint does the tenant payment service call?',['MongoDB API','Vercel PayMongo API','Cloudinary','Mapbox'],1,'The tenant service calls the Vercel create-payment-intent endpoint.'],
+ ['What is the honest testing gap?',['No device tests','No TypeScript','No complete automated suite','No database rules'],2,'The team used structured manual/device tests, but automated coverage remains a gap.']
+ ,['Does RentWise use SQL queries on the landing page?',['Yes, raw SQL','No, it uses Firestore and callable functions','Only through Expo Router','Only in WebXR'],1,'The deployed landing page uses Cloud Firestore through a protected callable API, not SQL.']
+];
+const checks=['Owner, admin, and tenant APKs install and open','Four demo accounts and passwords are verified','Guest website and live stall map load','Internet connection and backup hotspot are ready','PayMongo demo path is tested without risking real charges','AR Android Chrome device has permissions and a clear floor','Notifications/SMS claims match current configuration','Each presenter can give the 30-second project explanation','Screenshots/video backup exists for network-sensitive demos','No presenter introduces unfinished MongoDB failover as deployed'];
+const state=JSON.parse(localStorage.getItem('rw-defense')||'{}'); state.done=state.done||{}; state.names=state.names||{};
+const save=()=>{localStorage.setItem('rw-defense',JSON.stringify(state));updateProgress()};
+document.getElementById('downloadReviewer').onclick=()=>{const html='<!doctype html>\n'+document.documentElement.outerHTML;const url=URL.createObjectURL(new Blob([html],{type:'text/html;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='rentwise-defense-reviewer-offline.html';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
+document.getElementById('resetProgress').onclick=()=>{if(confirm('Reset names, checklist, quiz, and schedule progress on this device?')){localStorage.removeItem('rw-defense');location.reload()}};
+const tabs=[...document.querySelectorAll('section')].map(s=>s.dataset.tab); const nav=document.getElementById('tabs');tabs.forEach((t,i)=>{let b=document.createElement('button');b.textContent=t;b.className=i?'':'active';b.onclick=()=>{document.querySelectorAll('section').forEach(s=>s.classList.toggle('active',s.dataset.tab===t));[...nav.children].forEach(x=>x.classList.toggle('active',x===b))};nav.appendChild(b)});
+document.getElementById('roles').innerHTML=roles.map((r,i)=>`<article class="card role"><input aria-label="Presenter name" data-name="${i}" value="${state.names[i]||''}" placeholder="Enter member name"><span class="tag">${r.title}</span><h3>${r.focus}</h3><p><b>Demo:</b> ${r.demo}</p><b>Must answer:</b><ul>${r.must.map(x=>`<li>${x}</li>`).join('')}</ul></article>`).join('');document.querySelectorAll('[data-name]').forEach(x=>x.oninput=e=>{state.names[e.target.dataset.name]=e.target.value;save()});
+document.getElementById('timeline').innerHTML=timeline.map((x,i)=>`<div class="slot ${state.done['t'+i]?'done':''}" id="t${i}"><b>${x[0]}</b><div>${x[1]}</div><button onclick="toggleDone('t${i}')">${state.done['t'+i]?'Completed':'Mark complete'}</button></div>`).join('');
+document.getElementById('demoChecks').innerHTML=checks.map((x,i)=>`<label class="check"><input type="checkbox" ${state.done['c'+i]?'checked':''} onchange="setDone('c${i}',this.checked)"><span>${x}</span></label>`).join('');
+window.toggleDone=id=>{state.done[id]=!state.done[id];save();location.reload()};window.setDone=(id,v)=>{state.done[id]=v;save()};
+let fi=0,deck=[...cards];function renderFlash(){let c=deck[fi];flash.classList.remove('revealed');flashTag.textContent=`${fi+1}/${deck.length} · ${c[0]}`;flashQ.textContent=c[1];flashA.textContent=c[2]}revealFlash.onclick=()=>flash.classList.toggle('revealed');nextFlash.onclick=()=>{fi=(fi+1)%deck.length;renderFlash()};prevFlash.onclick=()=>{fi=(fi-1+deck.length)%deck.length;renderFlash()};shuffleFlash.onclick=()=>{deck.sort(()=>Math.random()-.5);fi=0;renderFlash()};renderFlash();
+let lastPanel=0;askPanel.onclick=()=>{lastPanel=Math.floor(Math.random()*cards.length);panelQuestion.textContent=cards[lastPanel][1];panelHint.textContent=cards[lastPanel][2];panelHint.classList.add('hidden')};hintPanel.onclick=()=>panelHint.classList.toggle('hidden');
+let qi=0;function renderQuiz(){let q=quiz[qi];quizQ.textContent=`${qi+1}. ${q[0]}`;quizOptions.innerHTML=q[1].map((o,i)=>`<button class="quiz-option" data-o="${i}">${o}</button>`).join('');quizExplain.textContent='';quizOptions.querySelectorAll('button').forEach(b=>b.onclick=()=>{quizOptions.querySelectorAll('button').forEach((x,i)=>x.classList.add(i===q[2]?'correct':x===b?'wrong':''));quizExplain.textContent=q[3];state.done['q'+qi]=true;save()})}nextQuiz.onclick=()=>{qi=(qi+1)%quiz.length;renderQuiz()};renderQuiz();
+function renderQa(filter=''){qaBank.innerHTML=cards.filter(c=>(c.join(' ')).toLowerCase().includes(filter.toLowerCase())).map(c=>`<article class="card qa" style="margin-bottom:10px"><span class="tag">${c[0]}</span><h3>${c[1]}</h3><p>${c[2]}</p></article>`).join('')}search.oninput=e=>renderQa(e.target.value);renderQa();
+function updateProgress(){let total=timeline.length+checks.length+quiz.length,done=Object.keys(state.done).filter(k=>state.done[k]).length,p=Math.round(done/total*100);progressBar.style.width=p+'%';progressText.textContent=p+'% review complete'}updateProgress();
+</script></body></html>
