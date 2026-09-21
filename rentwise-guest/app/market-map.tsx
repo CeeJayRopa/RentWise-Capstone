@@ -44,6 +44,7 @@ interface Stall {
   status?: string;
   buildingNumber?: string;
   category?: string;
+  marketType?: string;
   spaceDimension?: string;
   width?: number;
   length?: number;
@@ -316,10 +317,6 @@ export default function MarketMap() {
 
         {hoveredStall && !selectedStall && (() => {
           const hs = hoveredStall.stall;
-          const isVac = hs ? hs.status?.toLowerCase() !== "occupied" : null;
-          const statusColor = isVac === true ? "#0E7C5A" : isVac === false ? "#C0392B" : "#787878";
-          const statusTint = isVac === true ? "#E4F3EC" : isVac === false ? "#FBEAE8" : "#EFEFEF";
-          const statusLabel = isVac === true ? "Vacant" : isVac === false ? "Occupied" : "Unknown";
           // Most stalls open their tooltip above them (placement "top", the
           // default). The diagonal row sits right at the blueprint's top
           // edge though, so those are flagged "bottom": anchored at the
@@ -357,28 +354,15 @@ export default function MarketMap() {
                   },
                 ]}
               >
-                {placement === "bottom" && <View style={styles.hoverCaretUp} />}
-                <View style={styles.hoverCard}>
-                  <View style={[styles.hoverStatusPill, { backgroundColor: statusTint }]}>
-                    <View style={[styles.hoverStatusDot, { backgroundColor: statusColor }]} />
-                    <Text style={[styles.hoverStatusText, { color: statusColor }]}>{statusLabel}</Text>
-                  </View>
-
-                  <Text style={styles.hoverCategory}>{hs?.category || "—"}</Text>
-
-                  <View style={styles.hoverDimsRow}>
-                    <View style={styles.hoverDimsItem}>
-                      <Text style={styles.hoverDimsLabel}>LENGTH</Text>
-                      <Text style={styles.hoverDimsValue}>{hs?.length ?? "—"}</Text>
-                    </View>
-                    <View style={styles.hoverDimsDivider} />
-                    <View style={styles.hoverDimsItem}>
-                      <Text style={styles.hoverDimsLabel}>WIDTH</Text>
-                      <Text style={styles.hoverDimsValue}>{hs?.width ?? "—"}</Text>
-                    </View>
-                  </View>
-                </View>
-                {placement !== "bottom" && <View style={styles.hoverCaret} />}
+                {hs && (
+                  <StallPopup
+                    stall={hs}
+                    onClose={() => undefined}
+                    showClose={false}
+                    tooltip
+                    caretPlacement={placement === "bottom" ? "top" : "bottom"}
+                  />
+                )}
               </Animated.View>
             </View>
           );

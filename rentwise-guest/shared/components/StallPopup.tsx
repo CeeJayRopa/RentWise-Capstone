@@ -13,6 +13,7 @@ interface Stall {
   status?: string;
   buildingNumber?: string;
   category?: string;
+  marketType?: string;
   spaceDimension?: string;
   width?: number;
   length?: number;
@@ -25,6 +26,9 @@ interface Props {
   onViewOthers?: () => void;
   // Paint-only rotation used by the existing mobile/tablet map layout.
   rotate90?: boolean;
+  showClose?: boolean;
+  tooltip?: boolean;
+  caretPlacement?: "top" | "bottom";
 }
 
 function formatCategory(category?: string): string {
@@ -34,7 +38,22 @@ function formatCategory(category?: string): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-export default function StallPopup({ stall, onClose, rotate90 }: Props) {
+function marketLabel(stall: Stall): string {
+  if (stall.marketType) return formatCategory(stall.marketType);
+  const building = String(stall.buildingNumber ?? stall.name ?? "");
+  if (/(?:^|\b)B(?:uilding)?\s*[- ]?\s*1(?:\b|$)/i.test(building)) return "Wet Market";
+  if (/(?:^|\b)B(?:uilding)?\s*[- ]?\s*2(?:\b|$)/i.test(building)) return "Dry Market";
+  return formatCategory(stall.category);
+}
+
+export default function StallPopup({
+  stall,
+  onClose,
+  rotate90,
+  showClose = true,
+  tooltip = false,
+  caretPlacement = "bottom",
+}: Props) {
   const { width } = useWindowDimensions();
   const isMobile = width <= 480;
   const isVacant = stall.status?.trim().toLowerCase() !== "occupied";
@@ -43,15 +62,20 @@ export default function StallPopup({ stall, onClose, rotate90 }: Props) {
     typeof stall.price === "number" ? stall.price.toLocaleString("en-PH") : "—";
 
   return (
-    <View style={[styles.card, isMobile && styles.cardMobile, rotate90 && { transform: [{ rotate: "90deg" }] }]}>
-      <TouchableOpacity
+    <View style={[
+      styles.card,
+      isMobile && styles.cardMobile,
+      tooltip && styles.cardTooltip,
+      rotate90 && { transform: [{ rotate: "90deg" }] },
+    ]}>
+      {showClose && <TouchableOpacity
         style={[styles.closeIconBtn, isMobile && styles.closeIconBtnMobile]}
         onPress={onClose}
         hitSlop={8}
         accessibilityLabel="Close stall details"
       >
         <Ionicons name="close" size={isMobile ? 13 : 16} color={TEXT_MUTED} />
-      </TouchableOpacity>
+      </TouchableOpacity>}
 
       <View style={styles.headerRow}>
         <View style={styles.statusRow}>
@@ -63,7 +87,7 @@ export default function StallPopup({ stall, onClose, rotate90 }: Props) {
           </Text>
         </View>
         <Text style={[styles.categoryText, isMobile && styles.categoryTextMobile]} numberOfLines={1}>
-          {formatCategory(stall.category)}
+          {marketLabel(stall)}
         </Text>
       </View>
 
@@ -87,7 +111,7 @@ export default function StallPopup({ stall, onClose, rotate90 }: Props) {
         </View>
       </View>
 
-      <View style={styles.caret} />
+      <View style={caretPlacement === "top" ? styles.caretTop : styles.caret} />
     </View>
   );
 }
@@ -107,6 +131,7 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   cardMobile: { padding: 16, maxWidth: 280, borderRadius: 18 },
+  cardTooltip: { width: 320, maxWidth: 320 },
   closeIconBtn: {
     position: "absolute",
     top: -9,
@@ -184,6 +209,16 @@ const styles = StyleSheet.create({
   caret: {
     position: "absolute",
     bottom: -10,
+    left: "50%",
+    marginLeft: -10,
+    width: 20,
+    height: 20,
+    backgroundColor: "#FFFFFF",
+    transform: [{ rotate: "45deg" }],
+  },
+  caretTop: {
+    position: "absolute",
+    top: -10,
     left: "50%",
     marginLeft: -10,
     width: 20,
