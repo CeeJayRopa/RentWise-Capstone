@@ -2,20 +2,17 @@ import { View, Text, StyleSheet, TouchableOpacity, useWindowDimensions } from "r
 import { Ionicons } from "@expo/vector-icons";
 
 const PRIMARY = "#0E7C5A";
-const PRIMARY_TINT = "#E4F3EC";
-const ACCENT = "#E8994A";
-const ACCENT_TINT = "#FCF0E2";
 const OCCUPIED = "#C0392B";
-const OCCUPIED_TINT = "#FBEAE8";
-const TEXT_DARK = "#171A19";
-const TEXT_MUTED = "#5B6560";
-const BORDER = "#E7E5DE";
+const TEXT_DARK = "#252826";
+const TEXT_MUTED = "#6B716D";
+const BORDER = "#E4E7E2";
 
 interface Stall {
   id: string;
   name?: string;
   status?: string;
   buildingNumber?: string;
+  category?: string;
   spaceDimension?: string;
   width?: number;
   length?: number;
@@ -26,18 +23,24 @@ interface Props {
   stall: Stall;
   onClose: () => void;
   onViewOthers?: () => void;
-  // Rotates the whole card 90° in place (tablet 2D map page, which rotates
-  // its entire layout into portrait) -- transform is paint-only, so this
-  // doesn't affect the card's already-resolved width/height.
+  // Paint-only rotation used by the existing mobile/tablet map layout.
   rotate90?: boolean;
 }
 
-export default function StallPopup({ stall, onClose, onViewOthers, rotate90 }: Props) {
+function formatCategory(category?: string): string {
+  if (!category) return "Market Stall";
+  return category
+    .replace(/[-_]/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+export default function StallPopup({ stall, onClose, rotate90 }: Props) {
   const { width } = useWindowDimensions();
   const isMobile = width <= 480;
-  const isVacant = stall.status?.toLowerCase() !== "occupied";
+  const isVacant = stall.status?.trim().toLowerCase() !== "occupied";
   const statusColor = isVacant ? PRIMARY : OCCUPIED;
-  const statusTint = isVacant ? PRIMARY_TINT : OCCUPIED_TINT;
+  const formattedPrice =
+    typeof stall.price === "number" ? stall.price.toLocaleString("en-PH") : "—";
 
   return (
     <View style={[styles.card, isMobile && styles.cardMobile, rotate90 && { transform: [{ rotate: "90deg" }] }]}>
@@ -45,185 +48,147 @@ export default function StallPopup({ stall, onClose, onViewOthers, rotate90 }: P
         style={[styles.closeIconBtn, isMobile && styles.closeIconBtnMobile]}
         onPress={onClose}
         hitSlop={8}
+        accessibilityLabel="Close stall details"
       >
-        <Ionicons name="close" size={isMobile ? 14 : 18} color={TEXT_MUTED} />
+        <Ionicons name="close" size={isMobile ? 13 : 16} color={TEXT_MUTED} />
       </TouchableOpacity>
 
-      <Text style={[styles.stallName, isMobile && styles.stallNameMobile]}>
-        {stall.name ?? "Stall"}
-      </Text>
-      <View style={[styles.statusPill, isMobile && styles.statusPillMobile, { backgroundColor: statusTint }]}>
-        <View style={[styles.dot, { backgroundColor: statusColor }]} />
-        <Text style={[styles.statusText, { color: statusColor }]}>
-          {isVacant ? "Vacant" : "Occupied"}
+      <View style={styles.headerRow}>
+        <View style={styles.statusRow}>
+          <View style={[styles.dotHalo, { backgroundColor: `${statusColor}24` }]}>
+            <View style={[styles.dot, { backgroundColor: statusColor }]} />
+          </View>
+          <Text style={[styles.statusText, isMobile && styles.statusTextMobile, { color: statusColor }]}>
+            {isVacant ? "Vacant" : "Occupied"}
+          </Text>
+        </View>
+        <Text style={[styles.categoryText, isMobile && styles.categoryTextMobile]} numberOfLines={1}>
+          {formatCategory(stall.category)}
         </Text>
-      </View>
-
-      <View style={[styles.grid, isMobile && styles.gridMobile]}>
-        <View style={[styles.gridItem, isMobile && styles.gridItemMobile]}>
-          <Ionicons name="business-outline" size={isMobile ? 12 : 16} color={PRIMARY} />
-          <Text style={[styles.gridLabel, isMobile && styles.gridLabelMobile]}>Building</Text>
-          <Text style={[styles.gridValue, isMobile && styles.gridValueMobile]}>
-            {stall.buildingNumber ?? "—"}
-          </Text>
-        </View>
-        <View style={[styles.gridItem, isMobile && styles.gridItemMobile]}>
-          <Ionicons name="resize-outline" size={isMobile ? 12 : 16} color={PRIMARY} />
-          <Text style={[styles.gridLabel, isMobile && styles.gridLabelMobile]}>Width</Text>
-          <Text style={[styles.gridValue, isMobile && styles.gridValueMobile]}>
-            {stall.width ?? "—"}
-          </Text>
-        </View>
-        <View style={[styles.gridItem, isMobile && styles.gridItemMobile]}>
-          <Ionicons name="resize-outline" size={isMobile ? 12 : 16} color={PRIMARY} />
-          <Text style={[styles.gridLabel, isMobile && styles.gridLabelMobile]}>Length</Text>
-          <Text style={[styles.gridValue, isMobile && styles.gridValueMobile]}>
-            {stall.length ?? "—"}
-          </Text>
-        </View>
       </View>
 
       <View style={[styles.rentBox, isMobile && styles.rentBoxMobile]}>
-        <Text style={[styles.rentLabel, isMobile && styles.rentLabelMobile]}>RENT AMOUNT</Text>
-        <Text style={[styles.rentValue, isMobile && styles.rentValueMobile]}>
-          ₱{stall.price ?? "—"}/day
-        </Text>
+        <Text style={[styles.rentLabel, isMobile && styles.rentLabelMobile]}>Market rental</Text>
+        <View style={styles.rentValueRow}>
+          <Text style={[styles.rentValue, isMobile && styles.rentValueMobile]}>₱{formattedPrice}</Text>
+          <Text style={[styles.rentUnit, isMobile && styles.rentUnitMobile]}>/ day</Text>
+        </View>
       </View>
 
-      <View style={styles.actions}>
-        {onViewOthers && (
-          <TouchableOpacity
-            style={[styles.viewOthersBtn, isMobile && styles.btnMobile]}
-            onPress={onViewOthers}
-          >
-            <Text style={[styles.viewOthersBtnText, isMobile && styles.btnTextMobile]}>
-              View Other Stalls
-            </Text>
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity style={[styles.closeBtn, isMobile && styles.btnMobile]} onPress={onClose}>
-          <Text style={[styles.closeBtnText, isMobile && styles.btnTextMobile]}>Close</Text>
-        </TouchableOpacity>
+      <View style={[styles.dimensionsRow, isMobile && styles.dimensionsRowMobile]}>
+        <View style={styles.dimensionItem}>
+          <Text style={[styles.dimensionLabel, isMobile && styles.dimensionLabelMobile]}>Length</Text>
+          <Text style={[styles.dimensionValue, isMobile && styles.dimensionValueMobile]}>{stall.length ?? "—"}</Text>
+        </View>
+        <View style={styles.dimensionDivider} />
+        <View style={styles.dimensionItem}>
+          <Text style={[styles.dimensionLabel, isMobile && styles.dimensionLabelMobile]}>Width</Text>
+          <Text style={[styles.dimensionValue, isMobile && styles.dimensionValueMobile]}>{stall.width ?? "—"}</Text>
+        </View>
       </View>
+
+      <View style={styles.caret} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: "#fff",
+    backgroundColor: "#FFFFFF",
     borderRadius: 20,
-    borderWidth: 1,
-    borderColor: BORDER,
     padding: 24,
     width: "90%",
     maxWidth: 360,
     alignSelf: "center",
-    shadowColor: "#000",
+    shadowColor: "#000000",
     shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.18,
+    shadowOpacity: 0.14,
     shadowRadius: 24,
     elevation: 8,
   },
-  cardMobile: {
-    padding: 10,
-    maxWidth: 280,
-    borderRadius: 14,
-  },
+  cardMobile: { padding: 16, maxWidth: 280, borderRadius: 18 },
   closeIconBtn: {
     position: "absolute",
-    top: 14,
-    right: 14,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    top: -9,
+    right: -9,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#F2F1EC",
-    zIndex: 1,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: BORDER,
+    zIndex: 2,
   },
-  closeIconBtnMobile: { top: 8, right: 8, width: 20, height: 20, borderRadius: 10 },
-  stallName: {
-    fontSize: 18,
-    fontWeight: "800",
-    color: TEXT_DARK,
-    marginBottom: 8,
-    paddingRight: 28,
-  },
-  stallNameMobile: { fontSize: 13, marginBottom: 1, paddingRight: 22 },
-  statusPill: {
+  closeIconBtnMobile: { top: -7, right: -7, width: 22, height: 22, borderRadius: 11 },
+  headerRow: {
     flexDirection: "row",
     alignItems: "center",
-    alignSelf: "flex-start",
-    gap: 6,
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-    borderRadius: 20,
+    justifyContent: "space-between",
     marginBottom: 18,
   },
-  statusPillMobile: { marginBottom: 4, paddingVertical: 2, paddingHorizontal: 7 },
-  dot: { width: 7, height: 7, borderRadius: 4 },
-  statusText: { fontSize: 12, fontWeight: "700" },
-
-  grid: {
-    flexDirection: "row",
-    gap: 8,
-    marginBottom: 12,
-  },
-  gridMobile: { gap: 4, marginBottom: 4 },
-  gridItem: {
-    flex: 1,
-    backgroundColor: "#FAFAF8",
-    borderWidth: 1,
-    borderColor: BORDER,
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 10,
-    gap: 4,
-  },
-  gridItemMobile: { paddingVertical: 5, paddingHorizontal: 4, borderRadius: 8, gap: 1 },
-  gridLabel: { fontSize: 11, color: TEXT_MUTED, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.4 },
-  gridLabelMobile: { fontSize: 8, letterSpacing: 0.2 },
-  gridValue: { fontSize: 14, color: TEXT_DARK, fontWeight: "700" },
-  gridValueMobile: { fontSize: 12 },
-
-  rentBox: {
-    backgroundColor: ACCENT_TINT,
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
+  statusRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  dotHalo: {
+    width: 15,
+    height: 15,
+    borderRadius: 8,
     alignItems: "center",
-    marginBottom: 20,
-  },
-  rentBoxMobile: { paddingVertical: 5, marginBottom: 6, borderRadius: 8 },
-  rentLabel: { fontSize: 11, color: TEXT_MUTED, fontWeight: "700", letterSpacing: 0.6, marginBottom: 4 },
-  rentLabelMobile: { fontSize: 9, marginBottom: 2 },
-  rentValue: { fontSize: 22, fontWeight: "800", color: ACCENT },
-  rentValueMobile: { fontSize: 15 },
-
-  actions: {
-    flexDirection: "row",
     justifyContent: "center",
-    alignItems: "center",
-    gap: 10,
   },
-  viewOthersBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    alignItems: "center",
-    backgroundColor: PRIMARY,
-    borderRadius: 24,
+  dot: { width: 8, height: 8, borderRadius: 4 },
+  statusText: { fontSize: 16, fontWeight: "700" },
+  statusTextMobile: { fontSize: 13 },
+  categoryText: {
+    flexShrink: 1,
+    fontSize: 18,
+    color: TEXT_DARK,
+    fontWeight: "800",
+    marginLeft: 12,
   },
-  viewOthersBtnText: { fontSize: 14, color: "#fff", fontWeight: "700" },
-  btnMobile: { paddingVertical: 7 },
-  btnTextMobile: { fontSize: 11 },
-  closeBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    alignItems: "center",
+  categoryTextMobile: { fontSize: 14 },
+  rentBox: {
+    backgroundColor: "#F7F8F6",
     borderWidth: 1,
     borderColor: BORDER,
-    borderRadius: 24,
+    borderRadius: 13,
+    paddingVertical: 15,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 18,
   },
-  closeBtnText: { fontSize: 14, color: TEXT_DARK, fontWeight: "600" },
+  rentBoxMobile: { paddingVertical: 11, paddingHorizontal: 12, marginBottom: 13, borderRadius: 10 },
+  rentLabel: { fontSize: 13, color: TEXT_MUTED, fontWeight: "700" },
+  rentLabelMobile: { fontSize: 10 },
+  rentValueRow: { flexDirection: "row", alignItems: "baseline", gap: 5 },
+  rentValue: { fontSize: 20, fontWeight: "800", color: TEXT_DARK },
+  rentValueMobile: { fontSize: 16 },
+  rentUnit: { fontSize: 12, color: TEXT_MUTED, fontWeight: "700" },
+  rentUnitMobile: { fontSize: 9 },
+  dimensionsRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 28 },
+  dimensionsRowMobile: { paddingHorizontal: 12 },
+  dimensionItem: { flex: 1, alignItems: "center" },
+  dimensionDivider: { width: 1, height: 42, backgroundColor: BORDER },
+  dimensionLabel: {
+    fontSize: 10,
+    color: "#90938F",
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 1.5,
+  },
+  dimensionLabelMobile: { fontSize: 8, letterSpacing: 1 },
+  dimensionValue: { fontSize: 20, color: TEXT_DARK, fontWeight: "800", marginTop: 4 },
+  dimensionValueMobile: { fontSize: 16, marginTop: 2 },
+  caret: {
+    position: "absolute",
+    bottom: -10,
+    left: "50%",
+    marginLeft: -10,
+    width: 20,
+    height: 20,
+    backgroundColor: "#FFFFFF",
+    transform: [{ rotate: "45deg" }],
+  },
 });

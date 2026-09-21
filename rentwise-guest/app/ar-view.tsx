@@ -34,6 +34,8 @@ const SURFACE = "#FFFFFF";
 const TEXT_DARK = "#171A19";
 const TEXT_MUTED = "#5B6560";
 const DANGER = "#B3261E";
+// Model validation remains active, but its QA-only card is hidden from guests.
+const SHOW_MODEL_WARNING_PANEL = false;
 
 // Translates WebXR's raw DOMException names (thrown by navigator.xr.requestSession) into
 // plain-English causes, instead of surfacing something like "NotAllowedError" directly.
@@ -715,7 +717,7 @@ export default function ARView() {
         {/* Relays validateBoundingBox's model warnings on-screen (see ARSessionScene) — lets
             a bad .glb export show up right here on the device instead of needing a tethered
             desktop console to notice. */}
-        {sessionActive && modelWarnings.length > 0 && (
+        {SHOW_MODEL_WARNING_PANEL && sessionActive && modelWarnings.length > 0 && (
           <View style={styles.modelWarningPanel}>
             <View style={styles.modelWarningHeader}>
               <Text style={styles.modelWarningTitle}>⚠ Model warnings ({modelWarnings.length})</Text>

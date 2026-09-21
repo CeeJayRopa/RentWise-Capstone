@@ -12,9 +12,11 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import React, { useRef, useState } from "react";
+import { collection, onSnapshot } from "firebase/firestore";
 import NavigableMap from "../shared/components/NavigableMap";
 import MarketMapEmbed from "../shared/components/MarketMapEmbed";
 import { useBreakpoints } from "../shared/hooks/useBreakpoints";
+import { db } from "../shared/firebaseConfig";
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const PRIMARY = "#0E7C5A";
@@ -170,17 +172,10 @@ const CATEGORY_CARDS = [
   { slug: "home-essentials", name: "Essentials", caption: "Sari-Sari Basics" },
 ] as const;
 
-// Placeholder content -- there's no "today's highlight" field on stall
-// documents in Firestore yet (see services/stallService.ts / the `stalls`
-// collection), so this is static for now rather than pulled live like the
-// 2D map's occupancy data.
+// The occupancy card is created from the live Firestore `stalls` collection
+// inside GuestLanding. These remaining promotional cards stay static because
+// they do not represent stall availability.
 const MARKET_PULSE = [
-  {
-    tag: "88% Occupied",
-    vendor: "35 of 40 Stalls Rented",
-    highlight: "Spaces are filling up fast! Lock in your prime spot today before full capacity.",
-    vacant: false,
-  },
   {
     tag: "High Traffic",
     vendor: "Heavy Daily Foot Traffic",
@@ -280,6 +275,38 @@ function NavLinkButton({
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function GuestLanding() {
   const { width, height, isMobile, isTablet, isDesktop } = useBreakpoints();
+  const [stallOccupancy, setStallOccupancy] = useState<{ occupied: number; total: number } | null>(null);
+
+  React.useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "stalls"),
+      (snapshot) => {
+        const occupied = snapshot.docs.filter(
+          (stall) => String(stall.data().status ?? "").trim().toLowerCase() === "occupied",
+        ).length;
+        setStallOccupancy({ occupied, total: snapshot.size });
+      },
+      (error) => console.error("STALL OCCUPANCY LISTENER ERROR:", error),
+    );
+
+    return unsubscribe;
+  }, []);
+
+  const occupancyPercent =
+    stallOccupancy && stallOccupancy.total > 0
+      ? Math.round((stallOccupancy.occupied / stallOccupancy.total) * 100)
+      : 0;
+  const marketPulse = [
+    {
+      tag: stallOccupancy ? `${occupancyPercent}% Occupied` : "Loading occupancy",
+      vendor: stallOccupancy
+        ? `${stallOccupancy.occupied} of ${stallOccupancy.total} Stalls Rented`
+        : "Checking stall availability",
+      highlight: "Spaces are filling up fast! Lock in your prime spot today before full capacity.",
+      vacant: false,
+    },
+    ...MARKET_PULSE,
+  ];
   // Tablet hero used to force the same side-by-side row as desktop, scaled
   // down -- but the row's combined footprint doesn't fit a typical tablet
   // width even scaled, so it fell back to the flexWrap safety net, whose
@@ -702,7 +729,7 @@ export default function GuestLanding() {
               },
             ]}
           >
-            {MARKET_PULSE.map((stall, i) => (
+            {marketPulse.map((stall, i) => (
               <View key={i} style={[styles.pulseCard, !isMobile && { flex: 1 }]}>
                 <View style={styles.pulseCardTopRow}>
                   <Text style={stall.vacant ? styles.pulseVacantLabel : styles.pulseStallLabel}>
