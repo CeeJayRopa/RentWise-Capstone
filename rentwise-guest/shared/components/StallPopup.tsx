@@ -46,6 +46,10 @@ function marketLabel(stall: Stall): string {
   return formatCategory(stall.category);
 }
 
+function formatDimension(value?: number): string {
+  return value == null ? "—" : `${value}m`;
+}
+
 export default function StallPopup({
   stall,
   onClose,
@@ -102,12 +106,12 @@ export default function StallPopup({
       <View style={[styles.dimensionsRow, isMobile && styles.dimensionsRowMobile, tooltip && styles.dimensionsRowTooltip]}>
         <View style={styles.dimensionItem}>
           <Text style={[styles.dimensionLabel, isMobile && styles.dimensionLabelMobile, tooltip && styles.dimensionLabelTooltip]}>Length</Text>
-          <Text style={[styles.dimensionValue, isMobile && styles.dimensionValueMobile, tooltip && styles.dimensionValueTooltip]}>{stall.length ?? "—"}</Text>
+          <Text style={[styles.dimensionValue, isMobile && styles.dimensionValueMobile, tooltip && styles.dimensionValueTooltip]}>{formatDimension(stall.length)}</Text>
         </View>
         <View style={styles.dimensionDivider} />
         <View style={styles.dimensionItem}>
           <Text style={[styles.dimensionLabel, isMobile && styles.dimensionLabelMobile, tooltip && styles.dimensionLabelTooltip]}>Width</Text>
-          <Text style={[styles.dimensionValue, isMobile && styles.dimensionValueMobile, tooltip && styles.dimensionValueTooltip]}>{stall.width ?? "—"}</Text>
+          <Text style={[styles.dimensionValue, isMobile && styles.dimensionValueMobile, tooltip && styles.dimensionValueTooltip]}>{formatDimension(stall.width)}</Text>
         </View>
       </View>
 
