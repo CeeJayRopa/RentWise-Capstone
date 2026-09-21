@@ -829,11 +829,11 @@ export default function GuestLanding() {
             // background with the heading/subtext inset near the bottom.
             <View style={[styles.catGrid, { gap: 20, position: "relative", top: 60 }]}>
               <View style={{ flexDirection: "row", gap: 20 }}>
-                <View style={{ flex: 1, minHeight: 280, borderRadius: 20, overflow: "hidden" }}>
+                <View style={{ flex: 1, aspectRatio: 4 / 3, borderRadius: 20, overflow: "hidden" }}>
                   <Image
                     source={CARD_IMAGES["wet-market"]}
-                    resizeMode="cover"
-                    style={StyleSheet.absoluteFill}
+                    resizeMode="contain"
+                    style={styles.categoryCardImage}
                   />
                   <View style={styles.catCardPlainScrim} />
                   <View style={{ flex: 1, padding: 28, justifyContent: "flex-end" }}>
@@ -843,11 +843,11 @@ export default function GuestLanding() {
                     </Text>
                   </View>
                 </View>
-                <View style={{ flex: 1, minHeight: 280, borderRadius: 20, overflow: "hidden" }}>
+                <View style={{ flex: 1, aspectRatio: 4 / 3, borderRadius: 20, overflow: "hidden" }}>
                   <Image
                     source={CARD_IMAGES["dry-market"]}
-                    resizeMode="cover"
-                    style={StyleSheet.absoluteFill}
+                    resizeMode="contain"
+                    style={styles.categoryCardImage}
                   />
                   <View style={styles.catCardPlainScrim} />
                   <View style={{ flex: 1, padding: 28, justifyContent: "flex-end" }}>
@@ -858,11 +858,11 @@ export default function GuestLanding() {
                   </View>
                 </View>
               </View>
-              <View style={{ minHeight: 280, borderRadius: 20, overflow: "hidden" }}>
+              <View style={{ width: "100%", aspectRatio: 4 / 3, borderRadius: 20, overflow: "hidden" }}>
                 <Image
                   source={CARD_IMAGES["home-essentials"]}
-                  resizeMode="cover"
-                  style={StyleSheet.absoluteFill}
+                  resizeMode="contain"
+                  style={styles.categoryCardImage}
                 />
                 <View style={styles.catCardPlainScrim} />
                 <View style={{ padding: 28, justifyContent: "flex-end" }}>
@@ -886,8 +886,8 @@ export default function GuestLanding() {
             // render correctly), just one per row instead of tablet's
             // 2-up + 1 grid.
             <View style={{ gap: 16 }}>
-              <View style={{ minHeight: 260, borderRadius: 16, overflow: "hidden" }}>
-                <Image source={CARD_IMAGES["wet-market"]} resizeMode="cover" style={StyleSheet.absoluteFill} />
+              <View style={{ width: "100%", aspectRatio: 4 / 3, borderRadius: 16, overflow: "hidden" }}>
+                <Image source={CARD_IMAGES["wet-market"]} resizeMode="contain" style={styles.categoryCardImage} />
                 <View style={styles.catCardPlainScrim} />
                 <View style={{ padding: 20, justifyContent: "flex-end" }}>
                   <Text style={[styles.catCardPlainHeading, { color: WHITE }]}>Quality Protein</Text>
@@ -896,8 +896,8 @@ export default function GuestLanding() {
                   </Text>
                 </View>
               </View>
-              <View style={{ minHeight: 200, borderRadius: 16, overflow: "hidden" }}>
-                <Image source={CARD_IMAGES["dry-market"]} resizeMode="cover" style={StyleSheet.absoluteFill} />
+              <View style={{ width: "100%", aspectRatio: 4 / 3, borderRadius: 16, overflow: "hidden" }}>
+                <Image source={CARD_IMAGES["dry-market"]} resizeMode="contain" style={styles.categoryCardImage} />
                 <View style={styles.catCardPlainScrim} />
                 <View style={{ padding: 20, justifyContent: "flex-end" }}>
                   <Text style={[styles.catCardPlainHeading, { color: WHITE }]}>Farm to Table</Text>
@@ -906,8 +906,8 @@ export default function GuestLanding() {
                   </Text>
                 </View>
               </View>
-              <View style={{ minHeight: 200, borderRadius: 16, overflow: "hidden" }}>
-                <Image source={CARD_IMAGES["home-essentials"]} resizeMode="cover" style={StyleSheet.absoluteFill} />
+              <View style={{ width: "100%", aspectRatio: 4 / 3, borderRadius: 16, overflow: "hidden" }}>
+                <Image source={CARD_IMAGES["home-essentials"]} resizeMode="contain" style={styles.categoryCardImage} />
                 <View style={styles.catCardPlainScrim} />
                 <View style={{ padding: 20, justifyContent: "flex-end" }}>
                   <Text style={[styles.catCardPlainHeading, { color: WHITE, fontSize: 20 }]}>
@@ -1527,6 +1527,16 @@ const styles = StyleSheet.create({
     maxWidth: 1180,
     alignSelf: "center",
     marginTop: 32,
+  },
+  categoryCardImage: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    width: "100%",
+    height: "100%",
+    backgroundColor: CATEGORY_BG,
   },
   catCardEditorialName: {
     fontFamily: "PlayfairDisplay_400Regular_Italic",
