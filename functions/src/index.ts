@@ -1007,6 +1007,75 @@ export const adminForgotPassword = onCall(async (request) => {
   return { ok: true };
 });
 
+// =====================================
+// PUBLIC GUEST API
+// Keeps anonymous browsers away from raw Firestore documents and applies
+// server-side validation/rate limiting to public write operations.
+// =====================================
+function publicCallerKey(request: any, endpoint: string): string {
+  const forwarded = String(request.rawRequest?.headers?.["x-forwarded-for"] ?? "");
+  const ip = forwarded.split(",")[0].trim() || String(request.rawRequest?.ip ?? "unknown");
+  return `public:${endpoint}:${createHash("sha256").update(ip).digest("hex").slice(0, 32)}`;
+}
+
+function requiredPublicString(value: unknown, field: string, maxLength: number): string {
+  if (typeof value !== "string") throw new HttpsError("invalid-argument", `${field} must be text.`);
+  const clean = value.trim();
+  if (!clean || clean.length > maxLength) {
+    throw new HttpsError("invalid-argument", `${field} is required and must be under ${maxLength} characters.`);
+  }
+  return clean;
+}
+
+export const getPublicStalls = onCall(async (request) => {
+  await checkRateLimit(publicCallerKey(request, "stalls"), 120, 60 * 60_000);
+  const snapshot = await db.collection("stalls").get();
+  return snapshot.docs.map((doc) => {
+    const data = doc.data();
+    const numericPrice = Number(data.price);
+    return {
+      id: doc.id,
+      name: typeof data.name === "string" ? data.name : "",
+      spaceId: typeof data.spaceId === "string" ? data.spaceId : "",
+      status: typeof data.status === "string" ? data.status : "unknown",
+      buildingNumber: typeof data.buildingNumber === "string" ? data.buildingNumber : "",
+      category: typeof data.category === "string" ? data.category : "",
+      marketType: typeof data.marketType === "string" ? data.marketType : "",
+      width: Number.isFinite(Number(data.width)) ? Number(data.width) : null,
+      length: Number.isFinite(Number(data.length)) ? Number(data.length) : null,
+      price: Number.isFinite(numericPrice) ? numericPrice : null,
+      spaceDimension: typeof data.spaceDimension === "string" ? data.spaceDimension : "",
+    };
+  });
+});
+
+export const submitPublicContactMessage = onCall(async (request) => {
+  await checkRateLimit(publicCallerKey(request, "contact"), 5, 60 * 60_000);
+  const input = request.data ?? {};
+  const firstName = requiredPublicString(input.firstName, "First name", 60);
+  const lastName = requiredPublicString(input.lastName, "Last name", 60);
+  const email = requiredPublicString(input.email, "Email", 200).toLowerCase();
+  const message = requiredPublicString(input.message, "Message", 2000);
+  const phone = typeof input.phone === "string" ? input.phone.trim().slice(0, 30) : "";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new HttpsError("invalid-argument", "Enter a valid email address.");
+  }
+  await db.collection("contactMessages").add({ firstName, lastName, email, phone, message, createdAt: FieldValue.serverTimestamp() });
+  return { ok: true };
+});
+
+export const logPublicArPlacement = onCall(async (request) => {
+  await checkRateLimit(publicCallerKey(request, "ar-placement"), 60, 60 * 60_000);
+  const input = request.data ?? {};
+  const objectId = requiredPublicString(input.objectId, "Object ID", 200);
+  const objectName = requiredPublicString(input.objectName, "Object name", 200);
+  const category = typeof input.category === "string" ? input.category.trim().slice(0, 100) : "";
+  const objectDoc = await db.collection("arObjects").doc(objectId).get();
+  if (!objectDoc.exists) throw new HttpsError("invalid-argument", "Unknown AR object.");
+  await db.collection("arPlacementEvents").add({ objectId, objectName, category, createdAt: FieldValue.serverTimestamp() });
+  return { ok: true };
+});
+
 // Read-only guard used immediately before the existing client-side archive
 // flow. It deliberately does not archive, disable, or update anything.
 export const checkTenantArchiveEligibility = onCall(async (request) => {

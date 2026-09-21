@@ -62,9 +62,10 @@ service cloud.firestore {
     }
 
     // ── stalls ─────────────────────────────────────────────────────────
-    // Public read: the guest site (no auth) shows stall/vendor listings.
+    // Guests receive a safe field projection from the getPublicStalls Cloud
+    // Function; raw documents remain available only to authenticated apps.
     match /stalls/{stallId} {
-      allow read: if true;
+      allow read: if isSignedIn();
       allow write: if isStaff()
         || (isTenant()
             && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.stallId == stallId);
@@ -156,44 +157,15 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
-    // Unauthenticated by design (anonymous guest-site analytics), so this
-    // can't be locked to a real identity -- validated instead, so an open
-    // `create` can't be used to write arbitrary-shaped/arbitrary-sized
-    // garbage documents (no schema/type checking existed here before).
-    // Doesn't stop volume-based spam (no auth = no per-caller rate limit
-    // possible without App Check), just malformed/oversized ones.
+    // Anonymous writes are validated and rate-limited by a Cloud Function.
     match /arPlacementEvents/{eventId} {
-      allow create: if
-        request.resource.data.keys().hasOnly(["objectId", "objectName", "category", "createdAt"])
-        && request.resource.data.objectId is string
-        && request.resource.data.objectId.size() > 0 && request.resource.data.objectId.size() < 200
-        && request.resource.data.objectName is string
-        && request.resource.data.objectName.size() > 0 && request.resource.data.objectName.size() < 200
-        && request.resource.data.category is string
-        && request.resource.data.category.size() < 100
-        && request.resource.data.createdAt == request.time;
+      allow create: if false;
       allow read, update, delete: if false;
     }
 
-    // Unauthenticated by design (public contact form) -- same validated-shape
-    // approach as arPlacementEvents above. Staff review submissions; no
-    // client, including the submitter, can read, edit, or delete them after
-    // the fact (there's no account tied to a guest submission to scope a
-    // read to in the first place).
+    // Anonymous writes are validated and rate-limited by a Cloud Function.
     match /contactMessages/{messageId} {
-      allow create: if
-        request.resource.data.keys().hasOnly(["firstName", "lastName", "email", "phone", "message", "createdAt"])
-        && request.resource.data.firstName is string
-        && request.resource.data.firstName.size() > 0 && request.resource.data.firstName.size() < 60
-        && request.resource.data.lastName is string
-        && request.resource.data.lastName.size() > 0 && request.resource.data.lastName.size() < 60
-        && request.resource.data.email is string
-        && request.resource.data.email.size() > 0 && request.resource.data.email.size() < 200
-        && request.resource.data.phone is string
-        && request.resource.data.phone.size() < 30
-        && request.resource.data.message is string
-        && request.resource.data.message.size() > 0 && request.resource.data.message.size() < 2000
-        && request.resource.data.createdAt == request.time;
+      allow create: if false;
       allow read, delete: if isStaff();
       allow update: if false;
     }

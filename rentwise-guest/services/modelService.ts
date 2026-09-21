@@ -1,7 +1,8 @@
-import { addDoc, collection, getDocs, serverTimestamp } from "firebase/firestore";
+import { collection, getDocs } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 import { ref, getDownloadURL } from "firebase/storage";
 
-import { db } from "../shared/firebaseConfig";
+import { db, functions } from "../shared/firebaseConfig";
 import { storage } from "../shared/services/storage";
 import type { ARObject } from "../shared/types/arObject";
 
@@ -26,12 +27,8 @@ export async function getModelDownloadUrl(storagePath: string): Promise<string> 
 // failed write here must never disrupt the actual AR placement the tenant is doing.
 export async function logArPlacement(objectId: string, objectName: string, category: string): Promise<void> {
   try {
-    await addDoc(collection(db, "arPlacementEvents"), {
-      objectId,
-      objectName,
-      category,
-      createdAt: serverTimestamp(),
-    });
+    const logPlacement = httpsCallable(functions, "logPublicArPlacement");
+    await logPlacement({ objectId, objectName, category });
   } catch (err) {
     console.error("[AR] failed to log placement event:", err);
   }

@@ -1,57 +1,36 @@
-import { collection, getDocs, onSnapshot } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 
-import { db } from "../shared/firebaseConfig";
+import { functions } from "../shared/firebaseConfig";
 
 
-function toPublicStall(doc: any) {
-  const data = doc.data() as Record<string, any>;
+type PublicStall = {
+  id: string; name?: string; spaceId?: string; status?: string;
+  buildingNumber?: string; category?: string; marketType?: string;
+  width?: number; length?: number; price?: number; spaceDimension?: string;
+};
 
-  const numericPrice = Number(data.price);
-  const buildingMatch = String(data.buildingNumber ?? data.name ?? "").match(
-    /(?:^|\b)B(?:uilding)?\s*[- ]?\s*(\d+)/i,
-  );
-  const buildingNo = buildingMatch ? Number(buildingMatch[1]) : null;
-
-  return {
-    id: doc.id,
-    name: data.name,
-    spaceId: data.spaceId,
-    status: data.status,
-    buildingNumber: data.buildingNumber,
-    category: data.category,
-    marketType:
-      data.marketType ??
-      data.market ??
-      (buildingNo === 1 ? "Wet Market" : buildingNo === 2 ? "Dry Market" : undefined),
-    width: data.width,
-    length: data.length,
-    price: Number.isFinite(numericPrice) ? numericPrice : undefined,
-    spaceDimension:
-      data.spaceDimension ??
-      (data.width != null && data.length != null ? `${data.width} x ${data.length}` : undefined),
-  };
-}
+const fetchPublicStalls = httpsCallable<void, PublicStall[]>(functions, "getPublicStalls");
 
 export async function getStalls(){
-
-    const snapshot = await getDocs(
-        collection(db,"stalls")
-    );
-
-  const stalls = snapshot.docs.map(toPublicStall);
-
-
-  return stalls;
+  const response = await fetchPublicStalls();
+  return response.data;
 
 }
 
 export function subscribeToStalls(
-  onData: (stalls: ReturnType<typeof toPublicStall>[]) => void,
+  onData: (stalls: PublicStall[]) => void,
   onError?: (error: Error) => void,
 ) {
-  return onSnapshot(
-    collection(db, "stalls"),
-    (snapshot) => onData(snapshot.docs.map(toPublicStall)),
-    onError,
-  );
+  let active = true;
+  const refresh = async () => {
+    try {
+      const stalls = await getStalls();
+      if (active) onData(stalls);
+    } catch (error) {
+      if (active && onError) onError(error instanceof Error ? error : new Error("Unable to load stalls."));
+    }
+  };
+  void refresh();
+  const timer = setInterval(refresh, 15000);
+  return () => { active = false; clearInterval(timer); };
 }

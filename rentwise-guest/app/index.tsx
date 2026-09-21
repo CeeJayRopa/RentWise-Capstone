@@ -12,11 +12,10 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import React, { useRef, useState } from "react";
-import { collection, onSnapshot } from "firebase/firestore";
+import { subscribeToStalls } from "../services/stallService";
 import NavigableMap from "../shared/components/NavigableMap";
 import MarketMapEmbed from "../shared/components/MarketMapEmbed";
 import { useBreakpoints } from "../shared/hooks/useBreakpoints";
-import { db } from "../shared/firebaseConfig";
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const PRIMARY = "#0E7C5A";
@@ -278,13 +277,12 @@ export default function GuestLanding() {
   const [stallOccupancy, setStallOccupancy] = useState<{ occupied: number; total: number } | null>(null);
 
   React.useEffect(() => {
-    const unsubscribe = onSnapshot(
-      collection(db, "stalls"),
-      (snapshot) => {
-        const occupied = snapshot.docs.filter(
-          (stall) => String(stall.data().status ?? "").trim().toLowerCase() === "occupied",
+    const unsubscribe = subscribeToStalls(
+      (stalls) => {
+        const occupied = stalls.filter(
+          (stall) => String(stall.status ?? "").trim().toLowerCase() === "occupied",
         ).length;
-        setStallOccupancy({ occupied, total: snapshot.size });
+        setStallOccupancy({ occupied, total: stalls.length });
       },
       (error) => console.error("STALL OCCUPANCY LISTENER ERROR:", error),
     );

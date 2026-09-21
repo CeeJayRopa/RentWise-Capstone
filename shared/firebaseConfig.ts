@@ -3,6 +3,7 @@ import { initializeAuth, getAuth } from "firebase/auth";
 import type { Auth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import { getFunctions } from "firebase/functions";
 import { initializeAppCheck, ReCaptchaV3Provider, CustomProvider } from "firebase/app-check";
 import ReactNativeAsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
@@ -109,10 +110,12 @@ try {
 const db = getFirestore(firebaseApp);
 
 const storage = getStorage(firebaseApp);
+const functions = getFunctions(firebaseApp);
 
 export {
   firebaseApp,
   auth,
   db,
-  storage
+  storage,
+  functions
 };

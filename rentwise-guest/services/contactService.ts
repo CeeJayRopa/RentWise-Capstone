@@ -1,6 +1,6 @@
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 
-import { db } from "../shared/firebaseConfig";
+import { functions } from "../shared/firebaseConfig";
 
 export type ContactMessageInput = {
   firstName: string;
@@ -14,12 +14,6 @@ export type ContactMessageInput = {
 // caller — the person filling this out needs to know if their message
 // actually went anywhere, not have it silently swallowed.
 export async function submitContactMessage(input: ContactMessageInput): Promise<void> {
-  await addDoc(collection(db, "contactMessages"), {
-    firstName: input.firstName,
-    lastName: input.lastName,
-    email: input.email,
-    phone: input.phone,
-    message: input.message,
-    createdAt: serverTimestamp(),
-  });
+  const submit = httpsCallable<ContactMessageInput, { ok: boolean }>(functions, "submitPublicContactMessage");
+  await submit(input);
 }
