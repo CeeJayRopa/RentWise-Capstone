@@ -13,7 +13,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { router } from "expo-router";
 import StallPopup from "../shared/components/StallPopup";
-import { getStalls } from "../services/stallService";
+import { subscribeToStalls } from "../services/stallService";
 import { MARKET_LAYOUT, StallHotspot } from "../shared/constants/marketLayout";
 import { matchMapStalls } from "../shared/constants/stallLookup";
 
@@ -176,9 +176,18 @@ export default function MarketMap() {
   };
 
   useEffect(() => {
-    getStalls()
-      .then((data) => setStalls(data as Stall[]))
-      .finally(() => setLoading(false));
+    const unsubscribe = subscribeToStalls(
+      (data) => {
+        setStalls(data as Stall[]);
+        setLoading(false);
+      },
+      (error) => {
+        console.error("STALL SUBSCRIPTION ERROR:", error);
+        setLoading(false);
+      },
+    );
+
+    return unsubscribe;
   }, []);
 
   const stallsByName = matchMapStalls(stalls, MARKET_LAYOUT);
@@ -499,6 +508,18 @@ export default function MarketMap() {
           <View style={{ width: 64 }} />
         </View>
 
+      {isTabletRange && (
+        <View style={styles.tabletInfoRow}>
+          <View style={styles.tabletStatusCard}>
+            <View style={styles.tabletLiveDot} />
+            <Text style={styles.tabletStatusText}>
+              {loading ? "Loading live availability…" : `${occupiedCount} of ${stalls.length} stalls occupied`}
+            </Text>
+          </View>
+          <Text style={styles.tabletInstruction}>Tap a stall to view its stall information.</Text>
+        </View>
+      )}
+
       <View
         style={{ flex: 1, position: "relative" }}
         onLayout={(e) => setMeasuredContentHeight(e.nativeEvent.layout.height)}
@@ -643,6 +664,32 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   horizontalScrollContent: { flexGrow: 1, alignItems: "center", justifyContent: "center" },
+  tabletInfoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 18,
+    paddingHorizontal: 20,
+    paddingBottom: 18,
+    backgroundColor: "#F4F1E8",
+  },
+  tabletStatusCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    backgroundColor: "#E3F1E8",
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  tabletLiveDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: "#0B7A57",
+  },
+  tabletStatusText: { color: "#0B6247", fontSize: 14, fontWeight: "700" },
+  tabletInstruction: { color: "#5F645F", fontSize: 14 },
   blueprintContainer: {
     position: "relative",
   },
