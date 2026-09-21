@@ -332,7 +332,7 @@ export default function GuestLanding() {
     : 1;
 
   // Responsive helpers
-  const hPad = isMobile ? 20 : isTablet ? 32 : Math.round(80 * desktopScale);
+  const hPad = isMobile ? Math.max(16, Math.min(22, width * 0.052)) : isTablet ? 32 : Math.round(80 * desktopScale);
   const navPad = isMobile ? 16 : isTablet ? 32 : Math.round(64 * desktopScale);
   const secPad = isMobile ? 40 : isTablet ? 56 : Math.round(72 * desktopScale);
 
@@ -494,10 +494,9 @@ export default function GuestLanding() {
     };
   }, []);
 
-  const heroFontSize = isMobile ? 34 : isTablet ? 44 : Math.round(62 * desktopScale);
-  // Hero-only override — increases side padding on mobile without touching
-  // `hPad`, which every other section on the page still relies on.
-  const heroPadH = isMobile ? 24 : hPad;
+  const heroFontSize = isMobile ? Math.max(28, Math.min(34, width * 0.082)) : isTablet ? 44 : Math.round(62 * desktopScale);
+  const heroPadH = hPad;
+  const mobileHeroImageHeight = Math.max(220, Math.min(300, width * 0.72));
   // Buttons stay side-by-side down to 390px; below that they stack full-width.
   const isTinyMobile = isMobile && width < 390;
 
@@ -511,7 +510,7 @@ export default function GuestLanding() {
       >
         {/* ── Hero ─────────────────────────────────────────────────────────── */}
         <View
-          style={[styles.hero, { height }]}
+          style={[styles.hero, isMobile ? { minHeight: height } : { height }]}
           {...({ className: "rw-hero" } as any)}
         >
           {SHOW_NAV && !isMobile && (
@@ -560,7 +559,8 @@ export default function GuestLanding() {
               {
                 paddingLeft: isStacked ? heroPadH : 0,
                 paddingRight: heroPadH,
-                paddingVertical: isDesktop ? 64 : isMobile ? 48 : 56,
+                paddingTop: isDesktop ? 64 : isMobile ? 88 : 56,
+                paddingBottom: isDesktop ? 64 : isMobile ? 28 : 56,
                 // Stacked (mobile + tablet) both text-on-top/image-below
                 // (column-reverse, since the image is still the first JSX
                 // child) -- matches tablet's arrangement.
@@ -575,7 +575,8 @@ export default function GuestLanding() {
                 // this wraps them onto two lines instead of clipping off
                 // the edge of the screen.
                 flexWrap: isDesktop ? "wrap" : "nowrap",
-                gap: isMobile ? 32 : isTablet ? 32 : Math.round(64 * desktopScale),
+                gap: isMobile ? 22 : isTablet ? 32 : Math.round(64 * desktopScale),
+                flex: isMobile ? 0 : 1,
               },
             ]}
           >
@@ -587,7 +588,7 @@ export default function GuestLanding() {
                   ? "100%"
                   : Math.round(HERO_SLIDES[heroSlide].desktopImageWidth * desktopScale),
                 height: isMobile
-                  ? 340
+                  ? mobileHeroImageHeight
                   : isTablet
                   ? 520
                   : Math.round(HERO_SLIDES[heroSlide].desktopImageHeight * desktopScale),
@@ -665,6 +666,7 @@ export default function GuestLanding() {
                     style={[
                       styles.heroSubtext,
                       { textAlign: isStacked ? "center" : HERO_SLIDES[heroSlide].imageOnLeft ? "right" : "left", fontSize: isMobile ? 14 : 16 },
+                      isMobile && { lineHeight: 21 },
                     ]}
                   >
                     {HERO_SLIDES[heroSlide].body}
@@ -689,7 +691,7 @@ export default function GuestLanding() {
 
         {/* ── Market Pulse ─────────────────────────────────────────────────── */}
         <View
-          style={[styles.pulseSection, { paddingVertical: secPad + 30, paddingHorizontal: hPad }]}
+          style={[styles.pulseSection, { paddingVertical: isMobile ? 56 : secPad + 30, paddingHorizontal: hPad }]}
           {...({ className: "rw-reveal" } as any)}
         >
           <View
@@ -723,14 +725,14 @@ export default function GuestLanding() {
               styles.pulseCardsRow,
               {
                 flexDirection: isMobile ? "column" : "row",
-                gap: isMobile ? 16 : 20,
+                gap: isMobile ? 14 : 20,
                 maxWidth: isMobile ? undefined : "75%",
                 alignSelf: "center",
               },
             ]}
           >
             {marketPulse.map((stall, i) => (
-              <View key={i} style={[styles.pulseCard, !isMobile && { flex: 1 }]}>
+              <View key={i} style={[styles.pulseCard, isMobile && { padding: 20 }, !isMobile && { flex: 1 }]}>
                 <View style={styles.pulseCardTopRow}>
                   <Text style={stall.vacant ? styles.pulseVacantLabel : styles.pulseStallLabel}>
                     {stall.vacant ? "Vacant" : stall.tag}
@@ -750,7 +752,7 @@ export default function GuestLanding() {
         <View
           style={[
             styles.section,
-            { paddingVertical: secPad * 3, paddingHorizontal: hPad, position: "relative", top: isMobile ? 0 : -100 },
+            { paddingVertical: isMobile ? 64 : secPad * 3, paddingHorizontal: hPad, position: "relative", top: isMobile ? 0 : -100 },
           ]}
           onLayout={(e) => {
             catTrackStart.current = e.nativeEvent.layout.y;
@@ -933,11 +935,10 @@ export default function GuestLanding() {
               backgroundColor: BG,
               paddingVertical: secPad,
               paddingHorizontal: hPad,
-              // Fills the full viewport so the Contact Us section
-              // underneath doesn't peek in below the map/buttons --
-              // content alone falls short of screen height.
-              minHeight: height * 0.95,
-              justifyContent: "center",
+              // Desktop/tablet read as a full-screen section. On mobile the
+              // content determines the height, avoiding a large blank area.
+              minHeight: isMobile ? 0 : height * 0.95,
+              justifyContent: isMobile ? "flex-start" : "center",
             },
           ]}
           onLayout={(e) => {
@@ -961,11 +962,10 @@ export default function GuestLanding() {
               backgroundColor: WHITE,
               paddingVertical: secPad,
               paddingHorizontal: hPad,
-              // Fills the full viewport so this section reads as a full
-              // screen even though its content (row + footer) falls short
-              // of screen height on its own.
-              minHeight: height * 0.95,
-              justifyContent: "center",
+              // Keep the full-screen treatment off mobile, where browser
+              // chrome makes viewport-height layouts jump and leave gaps.
+              minHeight: isMobile ? 0 : height * 0.95,
+              justifyContent: isMobile ? "flex-start" : "center",
               // Anchors the footer below (position: "absolute") to this
               // section's own edges instead of the page's.
               position: "relative",
@@ -1049,18 +1049,16 @@ export default function GuestLanding() {
             style={[
               styles.footer,
               { paddingHorizontal: navPad },
-              // Pinned to the section's own bottom edge (it's
-              // position:"relative") on every breakpoint now -- mobile used
-              // to stay in normal flow with alignSelf:"stretch", but that
-              // only stretched it to the section's own (already inset)
-              // content box and left it wherever it fell after the map,
-              // not flush against the true bottom edge.
-              { position: "absolute", left: 0, right: 0, bottom: 0 },
+              // Mobile keeps the footer in normal flow so it never overlaps
+              // the contact content. Larger breakpoints pin it to the section.
+              isMobile
+                ? { position: "relative", marginTop: 48 }
+                : { position: "absolute", left: 0, right: 0, bottom: 0 },
               // Absolute left/right:0 only reaches the section's own padding
               // edge (still inset by the section's paddingHorizontal), so on
               // mobile pull it out that same amount to actually go edge to
               // edge of the screen.
-              isMobile && { marginHorizontal: -hPad },
+              isMobile && { marginHorizontal: -hPad, marginBottom: -secPad },
             ]}
           >
             <Text style={styles.footerCopy}>
