@@ -118,11 +118,6 @@ export default function Building() {
 
       setAllStalls(stalls);
 
-      const buildings = [...new Set(stalls.map((s) => s.buildingNumber))].sort((a, b) => a - b);
-      if (buildings.length > 0) {
-        setSelectedBuilding((prev) => (prev !== null ? prev : buildings[0]));
-      }
-
       const map = new Map<string, TenantInfo>();
       usersSnap.docs.forEach((doc) => {
         const data = doc.data();
@@ -142,7 +137,10 @@ export default function Building() {
 
   useFocusEffect(
     useCallback(() => {
-      if (!checking) fetchData();
+      if (!checking) {
+        setSelectedBuilding(null);
+        fetchData();
+      }
     }, [checking]),
   );
 
@@ -237,7 +235,7 @@ export default function Building() {
               <Text style={styles.dropdownCaption}>Building</Text>
               <View style={styles.dropdownValueWrap}>
                 <Text style={styles.dropdownValue} numberOfLines={1}>
-                  {selectedBuilding !== null ? selectedBuilding : "-"}
+                  {selectedBuilding !== null ? selectedBuilding : "All"}
                 </Text>
                 <ChevronDown size={14} color={colors.ink} />
               </View>
@@ -246,6 +244,26 @@ export default function Building() {
             {sheetVisible && (
               <View style={styles.dropdown}>
                 <View style={styles.dropdownInner}>
+                  <TouchableOpacity
+                    style={[
+                      styles.dropdownItem,
+                      selectedBuilding === null && styles.dropdownItemActive,
+                    ]}
+                    onPress={() => {
+                      setSelectedBuilding(null);
+                      setSheetVisible(false);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text
+                      style={[
+                        styles.dropdownItemText,
+                        selectedBuilding === null && styles.dropdownItemTextActive,
+                      ]}
+                    >
+                      All Buildings
+                    </Text>
+                  </TouchableOpacity>
                   {buildingNumbers.map((num) => (
                     <TouchableOpacity
                       key={num}

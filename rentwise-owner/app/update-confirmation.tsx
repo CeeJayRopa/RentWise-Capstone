@@ -24,7 +24,7 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { HelpCircle, ArrowRight } from "lucide-react-native";
+import { ArrowLeft, HelpCircle, ArrowRight } from "lucide-react-native";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
@@ -116,7 +116,8 @@ async function markLinkedNotifications(
 
 export default function UpdateConfirmation() {
   const insets = useSafeAreaInsets();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, source } = useLocalSearchParams<{ id: string; source?: string }>();
+  const showHeaderBack = source === "notifications";
   const [update, setUpdate] = useState<UpdateDoc | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -312,7 +313,17 @@ export default function UpdateConfirmation() {
         style={styles.headerGradient}
       >
         <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-          <View style={styles.backBtn} />
+          {showHeaderBack ? (
+            <TouchableOpacity
+              onPress={() => router.back()}
+              style={styles.headerIconBtn}
+              activeOpacity={0.7}
+            >
+              <ArrowLeft size={22} color={colors.emeraldSoft} />
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.backBtn} />
+          )}
           <Text style={styles.headerTitle}>Update Reports</Text>
           {tourSteps.length > 0 ? (
             <TouchableOpacity onPress={() => setTourVisible(true)} style={styles.headerIconBtn} activeOpacity={0.7}>

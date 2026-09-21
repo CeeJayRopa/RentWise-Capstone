@@ -10,6 +10,25 @@ import { db } from "./firestore";
 
 const cloudFunctions = getFunctions(firebaseApp);
 
+export type ArchiveEligibility = {
+  canArchive: boolean;
+  outstandingBalance: number;
+  hasPendingPayment: boolean;
+};
+
+export const checkTenantArchiveEligibility = async (
+  uid: string,
+): Promise<ArchiveEligibility> => {
+  if (!auth.currentUser?.uid) throw new Error("Owner not authenticated.");
+
+  const checkEligibility = httpsCallable<
+    { uid: string },
+    ArchiveEligibility
+  >(cloudFunctions, "checkTenantArchiveEligibility");
+  const result = await checkEligibility({ uid });
+  return result.data;
+};
+
 // Disables/re-enables the tenant's Firebase Auth login itself — separate
 // from the Firestore `status` field, which only controls what the app
 // shows. Without this, an "archived" tenant's account still works and

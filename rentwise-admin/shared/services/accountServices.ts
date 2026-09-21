@@ -204,6 +204,24 @@ const setTenantAccountDisabled = async (
   await setDisabledFn({ uid, disabled });
 };
 
+export type ArchiveEligibility = {
+  canArchive: boolean;
+  outstandingBalance: number;
+  hasPendingPayment: boolean;
+};
+
+export const checkTenantArchiveEligibility = async (
+  uid: string,
+): Promise<ArchiveEligibility> => {
+  if (!auth.currentUser?.uid) throw new Error("Admin not authenticated.");
+  const checkEligibility = httpsCallable<
+    { uid: string },
+    ArchiveEligibility
+  >(cloudFunctions, "checkTenantArchiveEligibility");
+  const result = await checkEligibility({ uid });
+  return result.data;
+};
+
 export const archiveTenant = async (uid: string): Promise<void> => {
   const userSnap = await getDoc(doc(db, "users", uid));
   if (!userSnap.exists()) throw new Error("User not found.");

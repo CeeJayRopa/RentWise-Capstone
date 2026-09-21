@@ -12,7 +12,6 @@ import {
   Platform,
   ScrollView,
   Modal,
-  ActivityIndicator,
   Alert,
   Image,
 } from "react-native";
@@ -20,7 +19,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useRef, useEffect } from "react";
 import { router } from "expo-router";
-import { Mail, Lock, Eye, EyeOff, Check, X, Info } from "lucide-react-native";
+import { Mail, Lock, Eye, EyeOff, Check, X } from "lucide-react-native";
 import { loginUser, logoutUser } from "../services/authService";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { firebaseApp } from "../shared/firebaseConfig";
@@ -55,9 +54,7 @@ export default function Login() {
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [fpEmail, setFpEmail] = useState("");
   const [fpEmailFocused, setFpEmailFocused] = useState(false);
-  const [fpLoading, setFpLoading] = useState(false);
   const [fpError, setFpError] = useState<string | null>(null);
-  const [fpSuccess, setFpSuccess] = useState(false);
 
   const pulseScale = useRef(new Animated.Value(0.92)).current;
   const pulseOpacity = useRef(new Animated.Value(0.6)).current;
@@ -196,10 +193,14 @@ export default function Login() {
     setFpEmail("");
     setFpEmailFocused(false);
     setFpError(null);
-    setFpSuccess(false);
   }
 
-  async function handleForgotSubmit() {
+  // Just validates the email and hands off to the loading screen, which does
+  // the real work: verify the account + text the SMS OTP, then the code-entry
+  // screen. The Firebase reset code is only minted after that OTP is verified
+  // server-side -- see sendResetOtp/verifyResetOtp in functions/src/index.ts
+  // and OTP_RESET_PLAN.md.
+  function handleForgotSubmit() {
     const trimmed = fpEmail.trim().toLowerCase();
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!trimmed || !emailRegex.test(trimmed)) {
@@ -207,29 +208,8 @@ export default function Login() {
       return;
     }
     setFpError(null);
-    setFpLoading(true);
-    try {
-      // Looked up + acted on entirely server-side now (Cloud Function, Admin
-      // SDK) instead of a direct client-side `users` read -- that read
-      // required `users` to stay publicly queryable, which leaked every
-      // tenant's name/email/phone to anyone. See tenantForgotPassword in
-      // functions/src/index.ts.
-      const forgotPassword = httpsCallable(cloudFunctions, "tenantForgotPassword");
-      const result: any = await forgotPassword({ email: trimmed });
-
-      if (result.data.method === "self-service") {
-        closeForgotModal();
-        router.push({ pathname: "/reset-password", params: { oobCode: result.data.oobCode } });
-        return;
-      }
-      setFpSuccess(true);
-      setTimeout(() => closeForgotModal(), 2500);
-    } catch (err: any) {
-      console.log("ForgotPassword error:", err);
-      setFpError(err?.code === "functions/not-found" ? "No account found with this email." : "Something went wrong. Please try again.");
-    } finally {
-      setFpLoading(false);
-    }
+    closeForgotModal();
+    router.push({ pathname: "/reset-sending", params: { email: trimmed } });
   }
 
   async function handleLogin() {
@@ -458,10 +438,10 @@ export default function Login() {
         animationType="fade"
         onRequestClose={closeForgotModal}
       >
-        <KeyboardAvoidingView
-          style={{ flex: 1, backgroundColor: colors.overlay }}
-          behavior="padding"
-        >
+        {/* Dim lives on its own full-screen layer so keyboard padding can't
+            shift it (see fp.backdrop). */}
+        <View style={fp.backdrop} pointerEvents="none" />
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
           <View style={fp.overlay}>
             <View style={fp.card}>
               {/* Close button */}
@@ -475,12 +455,12 @@ export default function Login() {
               </View>
               <Text style={fp.title}>Forgot password</Text>
               <Text style={fp.subtitle}>
-                Enter your registered email and we'll send your request to the admin.
+                Enter the Gmail you verified in your profile. We'll text a 6-digit code to the phone on your account.
               </Text>
 
               {/* Email field */}
               <View style={{ marginTop: spacing.xxl - 2, alignSelf: "stretch" }}>
-                <Text style={fp.label}>Email</Text>
+                <Text style={fp.label}>Verified Gmail</Text>
                 <View style={fp.inputWrapper}>
                   <Mail size={16} color={colors.emeraldBright} style={fp.inputIcon} />
                   <TextInput
@@ -498,32 +478,18 @@ export default function Login() {
                 {fpError ? <Text style={fp.errorText}>{fpError}</Text> : null}
               </View>
 
-              {/* Submit / success */}
-              {fpSuccess ? (
-                <View style={fp.successBox}>
-                  <Info size={15} color={colors.emerald} style={fp.successIcon} />
-                  <Text style={fp.successText}>
-                    Request sent. The admin will contact you shortly.
-                  </Text>
-                </View>
-              ) : (
-                <Pressable
-                  style={({ pressed }) => [
-                    fp.submitBtn,
-                    pressed && !fpLoading && fp.submitBtnPressed,
-                  ]}
-                  onPress={handleForgotSubmit}
-                  disabled={fpLoading}
-                >
-                  {({ pressed }) =>
-                    fpLoading ? (
-                      <ActivityIndicator color={colors.white} />
-                    ) : (
-                      <Text style={[fp.submitText, pressed && fp.submitTextPressed]}>Submit request</Text>
-                    )
-                  }
-                </Pressable>
-              )}
+              {/* Submit */}
+              <Pressable
+                style={({ pressed }) => [
+                  fp.submitBtn,
+                  pressed && fp.submitBtnPressed,
+                ]}
+                onPress={handleForgotSubmit}
+              >
+                {({ pressed }) => (
+                  <Text style={[fp.submitText, pressed && fp.submitTextPressed]}>Continue</Text>
+                )}
+              </Pressable>
             </View>
           </View>
         </KeyboardAvoidingView>
@@ -709,14 +675,25 @@ const styles = StyleSheet.create({
 });
 
 const fp = StyleSheet.create({
+  // The dim is its own absolutely-positioned layer, NOT painted on the
+  // KeyboardAvoidingView or the centering overlay. behavior="padding" shifts
+  // those two when the keyboard opens/closes, and a tint on a shifting layer
+  // leaves a visible seam ("cut") in the dim as the keyboard animates away.
+  // An absolute-fill backdrop always covers the whole window regardless.
+  backdrop: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: colors.overlay,
+  },
   overlay: {
     flex: 1,
-    backgroundColor: colors.overlay,
     alignItems: "center",
-    justifyContent: "flex-start",
-    paddingTop: 220,
+    justifyContent: "center",
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
+    paddingVertical: spacing.lg,
   },
   card: {
     backgroundColor: colors.white,
@@ -829,26 +806,5 @@ const fp = StyleSheet.create({
   },
   submitTextPressed: {
     color: colors.emerald,
-  },
-  successBox: {
-    marginTop: spacing.md + 2,
-    backgroundColor: colors.emeraldSoft,
-    borderRadius: radius.sm,
-    paddingVertical: 10,
-    paddingHorizontal: spacing.md,
-    flexDirection: "row",
-    alignItems: "flex-start",
-    width: "100%",
-  },
-  successIcon: {
-    marginRight: spacing.sm,
-    marginTop: 1,
-  },
-  successText: {
-    fontSize: fontSize.xs + 1,
-    fontFamily: fontFamily.medium,
-    color: colors.emerald,
-    lineHeight: 18,
-    flex: 1,
   },
 });

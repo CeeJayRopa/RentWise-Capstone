@@ -8,6 +8,7 @@ import {
   Pressable,
   ActivityIndicator,
   Alert,
+  Platform,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -204,12 +205,15 @@ export default function Notifications() {
     }
   };
 
-  const handleCheckReport = async (item: OwnerNotification) => {
-    await markRead(item);
+  const handleCheckReport = (item: OwnerNotification) => {
     router.push({
       pathname: "/update-confirmation",
-      params: { id: item.updateId },
+      params: { id: item.updateId, source: "notifications" },
     } as any);
+    // Reading the notification is secondary to opening the report. Let the
+    // navigation transition start immediately instead of blocking it on a
+    // Firestore round trip.
+    void markRead(item);
   };
 
   const doApproveAll = async (pending: OwnerNotification[]) => {
@@ -378,38 +382,47 @@ export default function Notifications() {
                     <Text style={styles.timeText}>
                       {relativeTime(item.createdAt)}
                     </Text>
-                    <View style={styles.resetActionsRow}>
-                      <Pressable
-                        style={({ pressed }) => [styles.checkReportBtn, pressed && styles.checkReportBtnPressed]}
-                        onPress={goResetAdminPassword}
-                      >
-                        {({ pressed }) => (
-                          <Text style={[styles.checkReportText, pressed && styles.checkReportTextPressed]}>
-                            Reset in Manage Admin
-                          </Text>
-                        )}
-                      </Pressable>
-                      <Pressable
-                        style={({ pressed }) => [
-                          styles.resolveResetBtn,
-                          resolvingResetId === item.id && styles.btnDisabled,
-                          pressed && resolvingResetId !== item.id && styles.resolveResetBtnPressed,
-                        ]}
-                        onPress={() => resolveAdminReset(item)}
-                        disabled={resolvingResetId === item.id}
-                      >
-                        {({ pressed }) =>
-                          resolvingResetId === item.id ? (
-                            <ActivityIndicator color={colors.emerald} size="small" />
-                          ) : (
-                            <Text style={[styles.resolveResetBtnText, pressed && styles.resolveResetBtnTextPressed]}>
-                              Mark resolved
-                            </Text>
-                          )
-                        }
-                      </Pressable>
-                    </View>
                   </View>
+                </View>
+                <View style={styles.resetActionsRow}>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.checkReportBtn,
+                      styles.resetActionBtn,
+                      styles.resetPrimaryActionBtn,
+                      pressed && styles.checkReportBtnPressed,
+                    ]}
+                    onPress={goResetAdminPassword}
+                  >
+                    {({ pressed }) => (
+                      <Text
+                        numberOfLines={1}
+                        style={[styles.checkReportText, pressed && styles.checkReportTextPressed]}
+                      >
+                        Reset in Manage Admin
+                      </Text>
+                    )}
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.resolveResetBtn,
+                      styles.resetActionBtn,
+                      resolvingResetId === item.id && styles.btnDisabled,
+                      pressed && resolvingResetId !== item.id && styles.resolveResetBtnPressed,
+                    ]}
+                    onPress={() => resolveAdminReset(item)}
+                    disabled={resolvingResetId === item.id}
+                  >
+                    {({ pressed }) =>
+                      resolvingResetId === item.id ? (
+                        <ActivityIndicator color={colors.emerald} size="small" />
+                      ) : (
+                        <Text style={[styles.resolveResetBtnText, pressed && styles.resolveResetBtnTextPressed]}>
+                          Mark resolved
+                        </Text>
+                      )
+                    }
+                  </Pressable>
                 </View>
               </View>
             ))}
@@ -638,9 +651,14 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: colors.white,
     borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
     padding: spacing.md + 2,
     marginBottom: spacing.sm + 2,
-    ...shadow.card,
+    // Android elevation can render a rectangular layer behind rounded
+    // corners. Keep the soft shadow on iOS and use the clean border on
+    // Android so the card silhouette stays properly rounded.
+    ...(Platform.OS === "ios" ? shadow.card : {}),
   },
   cardUnread: {
     borderLeftWidth: 3,
@@ -717,8 +735,21 @@ const styles = StyleSheet.create({
   },
   resetActionsRow: {
     flexDirection: "row",
+    alignItems: "stretch",
     gap: spacing.sm,
     marginTop: 6,
+  },
+  resetActionBtn: {
+    alignSelf: "stretch",
+    flex: 1,
+    minWidth: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 38,
+    paddingHorizontal: spacing.sm,
+  },
+  resetPrimaryActionBtn: {
+    flex: 1.45,
   },
   resolveResetBtn: {
     alignSelf: "flex-start",

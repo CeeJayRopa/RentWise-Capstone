@@ -416,7 +416,7 @@ export default function DailyReports() {
                     onPress={() =>
                       router.push({
                         pathname: "/update-confirmation",
-                        params: { id: r.id },
+                        params: { id: r.id, source: "reports" },
                       } as any)
                     }
                   >

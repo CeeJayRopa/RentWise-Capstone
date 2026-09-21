@@ -77,6 +77,7 @@ export default function Dashboard() {
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [isOffline, setIsOffline] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
   const [showToast, setShowToast] = useState(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
@@ -162,7 +163,12 @@ export default function Dashboard() {
 
       const unsubscribe = onSnapshot(
         q,
+        { includeMetadataChanges: true },
         (snapshot) => {
+          // Firestore serves its local cache while there is no connection.
+          // Watching metadata changes lets this modal close as soon as the
+          // server confirms the same data after internet access returns.
+          setIsOffline(snapshot.metadata.fromCache);
           const newPayments = snapshot.docs.map((d) => ({
             id: d.id,
             ...d.data(),
@@ -514,6 +520,22 @@ export default function Dashboard() {
         </View>
       </ScrollView>
 
+      {/* The dashboard can render Firestore's cached data offline. Make the
+          stale state explicit so tenants do not mistake it for live data. */}
+      <Modal visible={isOffline} transparent animationType="fade" onRequestClose={() => {}}>
+        <View style={styles.offlineOverlay}>
+          <View style={styles.offlineCard}>
+            <View style={styles.offlineIcon}>
+              <AlertCircle size={28} color={colors.error} />
+            </View>
+            <Text style={styles.offlineTitle}>No internet connection</Text>
+            <Text style={styles.offlineMessage}>
+              Your device is offline. Connect to the internet to view the latest rental information.
+            </Text>
+          </View>
+        </View>
+      </Modal>
+
       {/* FORCED PASSWORD CHANGE MODAL */}
       <Modal visible={mustChangePassword} transparent animationType="fade" onRequestClose={() => {}}>
         <View style={styles.payOverlay}>
@@ -629,6 +651,47 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: colors.parchment,
+  },
+
+  offlineOverlay: {
+    flex: 1,
+    backgroundColor: colors.overlay,
+    justifyContent: "center",
+    padding: spacing.xxl,
+  },
+
+  offlineCard: {
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    padding: spacing.xxl,
+    alignItems: "center",
+    ...shadow.raised,
+  },
+
+  offlineIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: "#FDECEC",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.md,
+  },
+
+  offlineTitle: {
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    textAlign: "center",
+  },
+
+  offlineMessage: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+    textAlign: "center",
+    lineHeight: 20,
+    marginTop: spacing.sm,
   },
 
   // ── Header ──────────────────────────────────────

@@ -56,6 +56,7 @@ export default function ManageAdmin() {
   const [username, setUsername] = useState("");
   const [contactNo, setContactNo] = useState("");
   const [original, setOriginal] = useState({ firstName: "", lastName: "", username: "", contactNo: "" });
+  const originalRef = useRef(original);
   const [firstNameError, setFirstNameError] = useState("");
   const [lastNameError, setLastNameError] = useState("");
   const [usernameError, setUsernameError] = useState("");
@@ -64,13 +65,10 @@ export default function ManageAdmin() {
   // Fully separate from `isEditing` (the profile-fields toggle) -- this
   // section unlocks independently via its own "Change Password" button.
   const [pwEditing, setPwEditing] = useState(false);
-  const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [showOldPass, setShowOldPass] = useState(false);
   const [showNewPass, setShowNewPass] = useState(false);
   const [showConfirmPass, setShowConfirmPass] = useState(false);
-  const [oldPwError, setOldPwError] = useState("");
   const [pwError, setPwError] = useState("");
   const [confirmError, setConfirmError] = useState("");
   const [changingPw, setChangingPw] = useState(false);
@@ -149,7 +147,6 @@ export default function ManageAdmin() {
     const unsub = onAuthStateChanged(auth, (user) => {
       if (!user) { router.replace("/login"); return; }
       setChecking(false);
-      fetchAdmin();
     });
     return unsub;
   }, []);
@@ -184,7 +181,9 @@ export default function ManageAdmin() {
         setLastName(ln);
         setUsername(un);
         setContactNo(cn);
-        setOriginal({ firstName: fn, lastName: ln, username: un, contactNo: cn });
+        const loadedProfile = { firstName: fn, lastName: ln, username: un, contactNo: cn };
+        originalRef.current = loadedProfile;
+        setOriginal(loadedProfile);
       }
     } catch (err) {
       console.error(err);
@@ -231,10 +230,11 @@ export default function ManageAdmin() {
   };
 
   function handleCancelEditProfile() {
-    setFirstName(original.firstName);
-    setLastName(original.lastName);
-    setUsername(original.username);
-    setContactNo(original.contactNo);
+    const savedProfile = originalRef.current;
+    setFirstName(savedProfile.firstName);
+    setLastName(savedProfile.lastName);
+    setUsername(savedProfile.username);
+    setContactNo(savedProfile.contactNo);
     setFirstNameError("");
     setLastNameError("");
     setUsernameError("");
@@ -243,10 +243,8 @@ export default function ManageAdmin() {
   }
 
   function handleCancelPasswordEdit() {
-    setOldPassword("");
     setNewPassword("");
     setConfirmPassword("");
-    setOldPwError("");
     setPwError("");
     setConfirmError("");
     setPwEditing(false);
@@ -272,11 +270,13 @@ export default function ManageAdmin() {
   // every time it's returned to, same as landing on it fresh.
   useFocusEffect(
     useCallback(() => {
+      if (!checking) fetchAdmin();
+
       return () => {
         handleCancelEditProfile();
         handleCancelPasswordEdit();
       };
-    }, [original]),
+    }, [checking]),
   );
 
   const handleSave = async () => {
@@ -291,7 +291,9 @@ export default function ManageAdmin() {
     try {
       const updateFn = httpsCallable(cloudFunctions, "ownerUpdateAdminProfile");
       await updateFn({ uid: admin.uid, firstName: fn, lastName: ln, username: un, contactNo: cn });
-      setOriginal({ firstName: fn, lastName: ln, username: un, contactNo: cn });
+      const savedProfile = { firstName: fn, lastName: ln, username: un, contactNo: cn };
+      originalRef.current = savedProfile;
+      setOriginal(savedProfile);
       setIsEditing(false);
       showToast("Profile saved!");
     } catch (err: any) {
@@ -311,13 +313,6 @@ export default function ManageAdmin() {
 
     const pwRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
     let valid = true;
-
-    if (!oldPassword) {
-      setOldPwError("Please enter the admin's current password.");
-      valid = false;
-    } else {
-      setOldPwError("");
-    }
 
     if (!pwRegex.test(newPassword)) {
       setPwError("8–12 characters with at least 1 uppercase letter, number & special character.");
@@ -343,7 +338,6 @@ export default function ManageAdmin() {
     try {
       const resetFn = httpsCallable(cloudFunctions, "ownerResetAdminPassword");
       await resetFn({ uid: admin.uid, newPassword });
-      setOldPassword("");
       setNewPassword("");
       setConfirmPassword("");
       setPwEditing(false);
@@ -569,25 +563,6 @@ export default function ManageAdmin() {
             <Text style={styles.sectionTitle}>Change Password</Text>
 
             <View ref={pwFieldsRef} collapsable={false} style={{ width: "100%" }}>
-            <Text style={styles.fieldLabel}>Current password</Text>
-            <View style={[styles.pwField, !pwEditing && styles.rowFieldReadOnly, !!oldPwError && styles.inputErrorBorder]}>
-              <TextInput
-                style={styles.rowInput}
-                value={oldPassword}
-                onChangeText={(t) => { setOldPassword(t); setOldPwError(""); }}
-                secureTextEntry={!showOldPass}
-                placeholder="Current password"
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                onFocus={() => scrollFieldIntoView(pwFieldsRef)}
-                editable={pwEditing}
-              />
-              <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowOldPass((v) => !v)} activeOpacity={0.7}>
-                {showOldPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
-              </TouchableOpacity>
-            </View>
-            {!!oldPwError && <Text style={styles.fieldError}>{oldPwError}</Text>}
-
             <Text style={styles.fieldLabel}>New password</Text>
             <View style={[styles.pwField, !pwEditing && styles.rowFieldReadOnly, !!pwError && styles.inputErrorBorder]}>
               <TextInput
@@ -650,14 +625,14 @@ export default function ManageAdmin() {
                     style={({ pressed }) => [
                       styles.updatePwBtn,
                       styles.pwUpdateBtn,
-                      (changingPw || !oldPassword || newPassword.length < 8 || confirmPassword.length < 8) &&
+                      (changingPw || newPassword.length < 8 || confirmPassword.length < 8) &&
                         styles.btnDisabled,
                       pressed &&
-                        !(changingPw || !oldPassword || newPassword.length < 8 || confirmPassword.length < 8) &&
+                        !(changingPw || newPassword.length < 8 || confirmPassword.length < 8) &&
                         styles.saveBtnPressed,
                     ]}
                     onPress={() => setShowPwConfirm(true)}
-                    disabled={changingPw || !oldPassword || newPassword.length < 8 || confirmPassword.length < 8}
+                    disabled={changingPw || newPassword.length < 8 || confirmPassword.length < 8}
                   >
                     {({ pressed }) =>
                       changingPw

@@ -1,0 +1,76 @@
+RentWise - Unfinished / Intentionally Incomplete Work
+======================================================
+
+This lists things that are deliberately incomplete or deferred right now -
+not code-quality cleanup items (those are tracked separately), but actual
+functionality that is mocked, disabled, or has a known open gap.
+
+
+1. SMS notifications are mocked, not live
+------------------------------------------
+File: functions/src/smsService.ts
+Real Semaphore SMS API integration is fully written but commented out
+(lines ~9-43). A mock sender is active instead, specifically to avoid
+Semaphore SMS charges during development/demo. To go live: uncomment the
+real integration and remove the mock.
+
+
+2. PayMongo - still using TEST credentials, needs to switch to live
+-----------------------------------------------------------------------
+File: functions/src/index.ts (lines ~424-478, createPaymongoCheckout)
+The integration itself is real and complete - it calls the actual PayMongo
+checkout API using process.env.PAYMONGO_SECRET_KEY, not a mock. Confirmed
+still running on PayMongo TEST/sandbox credentials. Switching to live
+credentials (in environment config, not code) is the one remaining step
+before real payments can be accepted.
+
+
+3. AR: no way to tell "the real floor" from "any flat elevated surface"
+---------------------------------------------------------------------------
+File: rentwise-guest/features/ar/ARSessionScene.ts
+Status: diagnosed, not implemented (0% coded).
+Every current placement check (tilt angle, plane classification/area,
+stability, wall clearance) verifies a surface is flat, real, stable, and not
+near a wall - none of them verify it's actually at floor height. A flat
+tabletop, shelf, or the top of a wrapped package can pass every check and
+register as placeable, the same as real floor. Confirmed via device testing.
+The problem is fully understood and candidate fix directions exist, but no
+code has been written toward any of them:
+  - Track the lowest confidently-detected plane per session as "the floor"
+    reference, reject flat surfaces well above it.
+  - Use the depth sensor (where available) to reason about height above
+    true ground, not just distance-agreement.
+  - Accept as an inherent limitation of markerless AR without a fixed
+    reference point.
+
+
+4. AR: reticle flicker only fixed for the wall-clearance check specifically
+--------------------------------------------------------------------------
+File: rentwise-guest/features/ar/ARSessionScene.ts
+Status: pattern proven elsewhere, not applied here; not confirmed to be a
+real problem.
+Note: field testing confirms the wall-clearance debounce fix itself (fast
+floor scanning, correct wall-proximity blocking, no more flicker there) is
+working well. That's a different, already-fixed check from the one this
+item describes (classifyPlaneValidity's own thresholds) - unclear yet
+whether that specific case was part of testing.
+The green/red flicker QA reported near walls was fixed by debouncing
+isTooCloseToWall() (WALL_CLEARANCE_DEBOUNCE_FRAMES). classifyPlaneValidity()
+has the same theoretical vulnerability at its own thresholds (plane area,
+perpendicular distance) - recomputed fresh every frame, no hysteresis.
+Applying the same debounce pattern here would be quick and low-risk if
+needed, since the mechanism already exists and works elsewhere in the file.
+However, this has never actually been reported as a real problem away from
+walls - only flagged as a theoretical possibility. May not need doing at all
+unless it shows up in testing.
+
+
+5. Admin account deletion runs on the paid (Blaze) Firebase plan
+------------------------------------------------------------------
+Files:
+  - rentwise-admin/shared/services/accountServices.ts (lines ~285-325)
+  - functions/src/index.ts (lines ~496-499, adminDeleteTenant)
+Confirmed intentional, not pending: admin is staying on the Blaze plan
+permanently, so this is not scheduled to change. A "FREE PLAN (Spark)"
+alternative exists in code (commented out) but is not going to be activated.
+Listed here only for reference, not as a to-do.

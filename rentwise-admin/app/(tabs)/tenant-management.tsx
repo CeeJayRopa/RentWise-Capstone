@@ -20,7 +20,7 @@ import { House, HelpCircle, Users, Archive, AlertCircle } from "lucide-react-nat
 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
-import { archiveTenant } from "../../shared/services/accountServices";
+import { archiveTenant, checkTenantArchiveEligibility } from "../../shared/services/accountServices";
 import UpdatesReportFAB, { FAB_CLEARANCE } from "../components/UpdatesReportFAB";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
@@ -159,6 +159,17 @@ export default function TenantManagement() {
     setArchiving(true);
     setArchiveError("");
     try {
+      const eligibility = await checkTenantArchiveEligibility(archiveTarget.uid);
+      if (!eligibility.canArchive) {
+        if (eligibility.hasPendingPayment) {
+          setArchiveError("Cannot archive this tenant. An online payment is awaiting approval. Review it in Financials first.");
+        } else {
+          setArchiveError(
+            `Cannot archive this tenant. They have an unsettled balance of ₱${eligibility.outstandingBalance.toLocaleString()}. Settle it in Financials first.`,
+          );
+        }
+        return;
+      }
       await archiveTenant(archiveTarget.uid);
       setArchiveTarget(null);
       fetchData();

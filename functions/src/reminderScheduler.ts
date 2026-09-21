@@ -1,7 +1,11 @@
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { sendSMSWithRetry } from './smsService';
-import { isPaymentDue, hasReminderBeenSent } from './paymentChecker';
+import { semaphoreApiKey, sendSMSWithRetry } from './smsService';
+import {
+  getOutstandingBalance,
+  isPaymentDue,
+  hasReminderBeenSent,
+} from './paymentChecker';
 
 // The admin-configurable send time (rentwise-admin/app/(tabs)/financials.tsx
 // writes this doc). Cloud Scheduler's cron is fixed at deploy time -- there's
@@ -11,6 +15,16 @@ import { isPaymentDue, hasReminderBeenSent } from './paymentChecker';
 // the admin has never set one.
 const DEFAULT_REMINDER_HOUR = 14;
 const DEFAULT_REMINDER_MINUTE = 30;
+
+function getReminderPeriodKey(schedule: string, now: Date): string {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = now.getDate();
+  if (schedule === 'daily') return `${year}-${month}-${String(day).padStart(2, '0')}`;
+  if (schedule === 'weekly') return `${year}-${month}-w${Math.floor((day - 1) / 7) + 1}`;
+  if (schedule === 'semi-monthly') return `${year}-${month}-h${day <= 15 ? 1 : 2}`;
+  return `${year}-${month}`;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PAYMENT REMINDER SCHEDULER
@@ -24,6 +38,7 @@ export const sendPaymentReminders = onSchedule(
     schedule: '* * * * *',
     timeZone: 'Asia/Manila',
     maxInstances: 1,
+    secrets: [semaphoreApiKey],
   },
   async () => {
     // ── Top-level guard ───────────────────────────────────────────────────────
@@ -104,35 +119,65 @@ export const sendPaymentReminders = onSchedule(
           // ── Build SMS message ─────────────────────────────────────────────
           const fullName =
             `${tenant.firstName ?? ''} ${tenant.lastName ?? ''}`.trim();
+          const outstandingBalance = await getOutstandingBalance(
+            tenantId,
+            schedule,
+            tenant.price ?? 0,
+            nowManila,
+          );
 
           const message = [
-            'RentWise Reminder:',
+            'Mahalagang Paalala Ukol sa Bayad sa Pwesto sa Palengke',
             '',
-            `Hello ${fullName},`,
+            `Magandang araw, ${fullName}! Nais lamang naming ipaalala ang iyong natitirang balanse para sa iyong upa sa palengke, na nagkakahalaga ng ₱${outstandingBalance.toLocaleString('en-PH', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}.`,
             '',
-            `Your stall rental payment for Stall ${stall.spaceId} is currently unpaid.`,
-            '',
-            'Please settle your payment with the admin at the Admin Office.',
-            '',
-            'Thank you.',
+            'Maaari po itong bayaran sa pamamagitan ng ating online payment channels sa app, o magtungo sa opisina ng admin sa oras ng trabaho. Kung nakapagbayad na po, maaari na lamang balewalain ang abisong ito. Maraming salamat po!',
           ].join('\n');
 
           // ── Send SMS (best-effort) ─────────────────────────────────────────
-          try {
-            await sendSMSWithRetry(tenant.contactNo, message, tenantId);
-
-            // Record that a reminder was sent so duplicates are blocked
-            await db.collection('reminder_logs').add({
+          const reminderRef = db.collection('reminder_logs').doc(
+            `${tenantId}_${schedule}_${getReminderPeriodKey(schedule, nowManila)}`,
+          );
+          const claimed = await db.runTransaction(async (transaction) => {
+            const existing = await transaction.get(reminderRef);
+            if (existing.exists) return false;
+            transaction.create(reminderRef, {
               tenantId,
               schedule,
+              status: 'sending',
               sentAt: FieldValue.serverTimestamp(),
+            });
+            return true;
+          });
+          if (!claimed) continue;
+
+          try {
+            const smsResult = await sendSMSWithRetry(
+              tenant.contactNo,
+              message,
+              tenantId,
+              'payment-reminder',
+            );
+
+            await reminderRef.update({
+              status: 'accepted',
+              providerMessageId: smsResult.providerMessageId,
+              providerStatus: smsResult.providerStatus,
+              attempts: smsResult.attempts,
             });
 
             console.log(
-              `[SUCCESS] Reminder sent to ${fullName} at ${tenant.contactNo}`,
+              `[SUCCESS] Reminder accepted for tenant ${tenantId}`,
             );
-          } catch {
-            // [FAILED] is already logged inside sendSMSWithRetry
+          } catch (smsError) {
+            await reminderRef.delete().catch(() => undefined);
+            console.error('[SMS FAILED] Reminder was not accepted', {
+              tenantId,
+              error: smsError instanceof Error ? smsError.message : 'Unknown error',
+            });
             // Do not rethrow — continue processing remaining tenants
           }
 

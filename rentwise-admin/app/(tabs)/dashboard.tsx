@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   RefreshControl,
+  Modal,
   Animated,
   Easing,
 } from "react-native";
@@ -17,6 +18,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
   getDocs,
+  onSnapshot,
   query,
   where,
   Timestamp,
@@ -83,6 +85,7 @@ export default function Dashboard() {
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [isOffline, setIsOffline] = useState(false);
   const [stats, setStats] = useState<Stats>(ZERO_STATS);
   const [focusTick, setFocusTick] = useState(0);
   const donutAnim = useRef(new Animated.Value(0)).current;
@@ -134,6 +137,17 @@ export default function Dashboard() {
       setFocusTick((t) => t + 1);
     }, [checking]),
   );
+
+  useEffect(() => {
+    if (checking || !auth.currentUser) return;
+
+    const tenantsQuery = query(collection(db, "users"), where("role", "==", "tenant"));
+    return onSnapshot(
+      tenantsQuery,
+      { includeMetadataChanges: true },
+      (snapshot) => setIsOffline(snapshot.metadata.fromCache),
+    );
+  }, [checking]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -436,6 +450,20 @@ export default function Dashboard() {
       </ScrollView>
 
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
+
+      <Modal visible={isOffline} transparent animationType="fade" onRequestClose={() => {}}>
+        <View style={styles.offlineOverlay}>
+          <View style={styles.offlineCard}>
+            <View style={styles.offlineIcon}>
+              <AlertCircle size={28} color={colors.error} />
+            </View>
+            <Text style={styles.offlineTitle}>No internet connection</Text>
+            <Text style={styles.offlineMessage}>
+              Your device is offline. Connect to the internet to view the latest market information.
+            </Text>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -495,6 +523,11 @@ function OccupancyDonut({
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.parchment },
   fullCenter: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: colors.parchment },
+  offlineOverlay: { flex: 1, backgroundColor: colors.overlay, justifyContent: "center", padding: spacing.xxl },
+  offlineCard: { backgroundColor: colors.white, borderRadius: radius.lg, padding: spacing.xxl, alignItems: "center", ...shadow.raised },
+  offlineIcon: { width: 56, height: 56, borderRadius: 28, backgroundColor: "#FDECEC", alignItems: "center", justifyContent: "center", marginBottom: spacing.md },
+  offlineTitle: { fontSize: fontSize.lg, fontFamily: fontFamily.bold, color: colors.ink, textAlign: "center" },
+  offlineMessage: { fontSize: fontSize.sm, fontFamily: fontFamily.regular, color: colors.textSecondary, textAlign: "center", lineHeight: 20, marginTop: spacing.sm },
 
   headerGradient: {
     borderBottomLeftRadius: radius.xl + 4,

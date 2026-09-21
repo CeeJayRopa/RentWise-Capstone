@@ -49,6 +49,40 @@ function chargedSinceMonthStart(dailyRate: number, schedule: string, today: Date
   return total;
 }
 
+export async function getOutstandingBalance(
+  tenantId: string,
+  schedule: string,
+  dailyRate: number,
+  now: Date,
+): Promise<number> {
+  const snap = await getFirestore()
+    .collection('payments')
+    .where('userId', '==', tenantId)
+    .where('status', '==', 'approved')
+    .get();
+
+  const paidThisMonth = snap.docs.reduce((total, docSnap) => {
+    const payment = docSnap.data();
+    const paymentDate: Date = payment.date?.toDate
+      ? payment.date.toDate()
+      : new Date(payment.date);
+
+    if (
+      paymentDate.getFullYear() !== now.getFullYear() ||
+      paymentDate.getMonth() !== now.getMonth()
+    ) {
+      return total;
+    }
+
+    return total + Number(payment.amount || 0);
+  }, 0);
+
+  return Math.max(
+    0,
+    chargedSinceMonthStart(dailyRate, schedule, now) - paidThisMonth,
+  );
+}
+
 // True if `a` and `b` fall within the same billing period for `schedule` —
 // used only to detect a payment made specifically for today's period, so a
 // tenant isn't nagged again the same day they already paid (even partially).

@@ -23,6 +23,7 @@ import { House, HelpCircle, Archive as ArchiveIcon, RotateCcw, Trash2, Search, B
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
 import {
+  checkTenantArchiveEligibility,
   restoreTenant,
   deleteArchivedTenant,
 } from "../../shared/services/accountServices";
@@ -198,6 +199,20 @@ export default function Archives() {
     setDeleting(true);
     setDeleteError("");
     try {
+      const eligibility = await checkTenantArchiveEligibility(deleteTarget.uid);
+      if (!eligibility.canArchive) {
+        if (eligibility.hasPendingPayment) {
+          setDeleteError(
+            "Cannot permanently delete this tenant. An online payment is awaiting approval. Review it in Financials first.",
+          );
+        } else {
+          setDeleteError(
+            `Cannot permanently delete this tenant. They have an unsettled balance of ₱${eligibility.outstandingBalance.toLocaleString()}. Settle it in Financials first.`,
+          );
+        }
+        return;
+      }
+
       await deleteArchivedTenant(deleteTarget.uid);
       setDeleteTarget(null);
       fetchData();

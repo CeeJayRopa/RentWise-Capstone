@@ -155,14 +155,6 @@ export default function Building() {
 
       setAllStalls(stalls);
 
-      const buildings = [...new Set(stalls.map((s) => s.buildingNumber))].sort(
-        (a, b) => a - b,
-      );
-
-      if (buildings.length > 0) {
-        setSelectedBuilding((prev) => (prev !== null ? prev : buildings[0]));
-      }
-
       const map = new Map<string, TenantInfo>();
 
       usersSnap.docs.forEach((doc) => {
@@ -186,6 +178,7 @@ export default function Building() {
   useFocusEffect(
     useCallback(() => {
       if (!checking) {
+        setSelectedBuilding(null);
         fetchData();
       }
     }, [checking]),
@@ -197,8 +190,11 @@ export default function Building() {
     setRefreshing(false);
   };
 
+  // Keep the two managed buildings available even when one currently has no
+  // stall documents. Any future building numbers found in Firestore are also
+  // included automatically.
   const buildingNumbers = [
-    ...new Set(allStalls.map((s) => s.buildingNumber)),
+    ...new Set([1, 2, ...allStalls.map((s) => s.buildingNumber)]),
   ].sort((a, b) => a - b);
 
   const displayedStalls = allStalls
@@ -313,7 +309,7 @@ export default function Building() {
               >
                 {selectedBuilding !== null
                   ? `Building ${selectedBuilding}`
-                  : "Building"}
+                  : "All Buildings"}
               </Text>
               <ChevronDown size={14} color={colors.emerald} />
             </TouchableOpacity>
@@ -321,6 +317,27 @@ export default function Building() {
             {sheetVisible && (
               <View style={styles.dropdown}>
                 <View style={styles.dropdownInner}>
+                  <TouchableOpacity
+                    style={[
+                      styles.dropdownItem,
+                      selectedBuilding === null && styles.dropdownItemActive,
+                    ]}
+                    onPress={() => {
+                      setSelectedBuilding(null);
+                      setSheetVisible(false);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text
+                      style={[
+                        styles.dropdownItemText,
+                        selectedBuilding === null &&
+                          styles.dropdownItemTextActive,
+                      ]}
+                    >
+                      All Buildings
+                    </Text>
+                  </TouchableOpacity>
                   {buildingNumbers.map((num) => (
                     <TouchableOpacity
                       key={num}
@@ -508,27 +525,48 @@ function StallRow({
         <View style={styles.stallBtns}>
         {/* UNOCCUPIED */}
         {stall.status === "unoccupied" && (
-          <View ref={registerRef} collapsable={false}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.btnRegister,
-              pressed && styles.btnRegisterPressed,
-            ]}
-            onPress={() =>
-              router.push({
-                pathname: "/account",
-                params: {
-                  mode: "create",
-                  stallId: stall.id,
-                },
-              } as any)
-            }
-          >
-            {({ pressed }) => (
-              <Text style={[styles.btnText, pressed && styles.btnRegisterTextPressed]}>Register</Text>
-            )}
-          </Pressable>
-          </View>
+          <>
+            <View ref={registerRef} collapsable={false}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.btnRegister,
+                  pressed && styles.btnRegisterPressed,
+                ]}
+                onPress={() =>
+                  router.push({
+                    pathname: "/account",
+                    params: {
+                      mode: "create",
+                      stallId: stall.id,
+                    },
+                  } as any)
+                }
+              >
+                {({ pressed }) => (
+                  <Text style={[styles.btnText, pressed && styles.btnRegisterTextPressed]}>Register</Text>
+                )}
+              </Pressable>
+            </View>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.btnEditRental,
+                pressed && styles.btnEditRentalPressed,
+              ]}
+              onPress={() =>
+                router.push({
+                  pathname: "/edit-rental-info",
+                  params: {
+                    stallId: stall.id,
+                  },
+                } as any)
+              }
+            >
+              {({ pressed }) => (
+                <Text style={[styles.btnTextOutline, pressed && styles.btnEditRentalTextPressed]}>Edit Rental</Text>
+              )}
+            </Pressable>
+          </>
         )}
 
         {/* OCCUPIED */}

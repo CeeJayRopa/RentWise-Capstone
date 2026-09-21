@@ -10,6 +10,9 @@ export { cleanupOldDailyReports } from "./reportCleanup";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
+import { createHash, randomInt, timingSafeEqual } from "crypto";
+
+import { semaphoreApiKey, sendSMSWithRetry } from "./smsService";
 
 // Firebase Admin initialization
 initializeApp();
@@ -776,6 +779,201 @@ export const tenantForgotPassword = onCall(async (request) => {
   return { method: "manual" };
 });
 
+// =====================================
+// TENANT PASSWORD RESET — SMS OTP GATE
+// Two-step, possession-checked version of the reset above. Closes the
+// "knowing an email is enough to reset" hole: sendResetOtp texts a 6-digit
+// code to the phone on the tenant's account, and verifyResetOtp only mints
+// the Firebase reset code (oobCode) AFTER that code is proven server-side.
+// The oobCode is never generated until the OTP matches -- that's the whole
+// security point. See OTP_RESET_PLAN.md.
+// =====================================
+
+// Show just enough of the destination number to reassure the tenant where
+// the code went, without printing the full number back to an unauthenticated
+// caller.
+function maskPhone(phone: string): string {
+  const digits = (phone || "").replace(/\D/g, "");
+  if (digits.length < 3) return "the number on your account";
+  return `••••••${digits.slice(-3)}`;
+}
+
+export const sendResetOtp = onCall({secrets: [semaphoreApiKey]}, async (request) => {
+  const { email } = request.data as { email: string };
+  if (!email) throw new HttpsError("invalid-argument", "Email is required.");
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    throw new HttpsError("invalid-argument", "Invalid email address.");
+  }
+  await checkRateLimit(`sendResetOtp:${email}`, 3, 15 * 60_000);
+
+  const snap = await db
+    .collection("users")
+    .where("personalEmail", "==", email)
+    .where("role", "==", "tenant")
+    .limit(1)
+    .get();
+
+  // Every gate failure below returns the SAME { status: "manual" } response,
+  // so this endpoint can't be used to probe which emails exist or are
+  // verified (account enumeration). Only a fully-eligible tenant gets a code.
+  if (snap.empty) {
+    return { status: "manual" };
+  }
+
+  const tenantDoc = snap.docs[0];
+  const data = tenantDoc.data();
+  const tenantId = tenantDoc.id;
+
+  // Preserves the existing admin-handled manual path (same doc shape as
+  // tenantForgotPassword) for tenants who can't self-serve yet.
+  const fileManual = async () => {
+    await db.collection("passwordResetRequests").add({
+      email,
+      tenantId,
+      tenantName: `${data.firstName ?? ""} ${data.lastName ?? ""}`.trim(),
+      spaceId: data.spaceId ?? data.stallId ?? "",
+      status: "pending",
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  };
+
+  // Gate 1: the email must be verified on the Auth account itself -- the
+  // authoritative source, not the denormalized Firestore `emailVerified`
+  // badge copy. getUserByEmail resolves because syncPersonalEmail sets the
+  // Auth login email to the personalEmail.
+  let authUser;
+  try {
+    authUser = await auth.getUserByEmail(email);
+  } catch {
+    await fileManual();
+    return { status: "manual" };
+  }
+  if (!authUser.emailVerified) {
+    await fileManual();
+    return { status: "manual" };
+  }
+
+  // Gate 2: a phone number must be on file to receive the code.
+  const contactNo = data.contactNo as string | undefined;
+  if (!contactNo) {
+    await fileManual();
+    return { status: "manual" };
+  }
+
+  // Issue a fresh 6-digit code, keyed by uid so a new request replaces any
+  // still-outstanding code for this tenant. Only the SHA-256 hash is stored,
+  // so a DB leak never exposes a live code.
+  const otp = String(randomInt(0, 1_000_000)).padStart(6, "0");
+  const otpHash = createHash("sha256").update(otp).digest("hex");
+
+  await db.collection("passwordResetOtps").doc(tenantId).set({
+    emailKey: email,
+    otpHash,
+    attempts: 0,
+    expiresAt: Date.now() + 10 * 60_000,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  await sendSMSWithRetry(
+    contactNo,
+    `Your RentWise password reset code is ${otp}. It expires in 10 minutes. Do not share it with anyone.`,
+    tenantId,
+    "password-reset",
+  );
+
+  return { status: "sent", phoneHint: maskPhone(contactNo) };
+});
+
+export const verifyResetOtp = onCall(async (request) => {
+  const { email, otp } = request.data as { email: string; otp: string };
+  if (!email || !otp) {
+    throw new HttpsError("invalid-argument", "Email and code are required.");
+  }
+  if (!/^\d{6}$/.test(otp)) {
+    throw new HttpsError("invalid-argument", "Enter the 6-digit code.");
+  }
+  await checkRateLimit(`verifyResetOtp:${email}`, 10, 15 * 60_000);
+
+  const snap = await db
+    .collection("users")
+    .where("personalEmail", "==", email)
+    .where("role", "==", "tenant")
+    .limit(1)
+    .get();
+  if (snap.empty) {
+    throw new HttpsError("not-found", "No account found with this email.");
+  }
+  const tenantId = snap.docs[0].id;
+  const otpRef = db.collection("passwordResetOtps").doc(tenantId);
+
+  const inputHash = createHash("sha256").update(otp).digest("hex");
+
+  // A transaction so a burst of guesses can't race the attempt counter or
+  // reuse a code that another call is consuming at the same moment.
+  const result = await db.runTransaction(async (tx) => {
+    const otpSnap = await tx.get(otpRef);
+    if (!otpSnap.exists) {
+      throw new HttpsError(
+        "failed-precondition",
+        "No active code. Please request a new one.",
+      );
+    }
+    const o = otpSnap.data() as {
+      otpHash: string;
+      attempts: number;
+      expiresAt: number;
+    };
+
+    if (Date.now() > o.expiresAt) {
+      tx.delete(otpRef);
+      throw new HttpsError(
+        "deadline-exceeded",
+        "This code has expired. Please request a new one.",
+      );
+    }
+    if (o.attempts >= 5) {
+      tx.delete(otpRef);
+      throw new HttpsError(
+        "resource-exhausted",
+        "Too many incorrect attempts. Please request a new code.",
+      );
+    }
+
+    // Constant-time compare of equal-length SHA-256 hex digests.
+    const match =
+      o.otpHash.length === inputHash.length &&
+      timingSafeEqual(Buffer.from(inputHash), Buffer.from(o.otpHash));
+
+    if (!match) {
+      tx.update(otpRef, { attempts: FieldValue.increment(1) });
+      return { ok: false, attemptsLeft: 5 - (o.attempts + 1) };
+    }
+
+    tx.delete(otpRef); // one-time use — consume on success
+    return { ok: true, attemptsLeft: 0 };
+  });
+
+  if (!result.ok) {
+    throw new HttpsError(
+      "invalid-argument",
+      `Incorrect code. ${result.attemptsLeft} attempt${
+        result.attemptsLeft === 1 ? "" : "s"
+      } left.`,
+    );
+  }
+
+  // OTP proven — NOW (and only now) mint the Firebase reset code, the same
+  // way tenantForgotPassword does, and hand it to the app's own reset screen.
+  const link = await auth.generatePasswordResetLink(email, {
+    url: "https://rentwise-capstone-project.web.app/reset-password",
+    handleCodeInApp: true,
+  });
+  const oobCode = new URL(link).searchParams.get("oobCode");
+
+  return { oobCode };
+});
+
 export const adminForgotPassword = onCall(async (request) => {
   const { email } = request.data as { email: string };
   if (!email) throw new HttpsError("invalid-argument", "Email is required.");
@@ -807,4 +1005,100 @@ export const adminForgotPassword = onCall(async (request) => {
     createdAt: FieldValue.serverTimestamp(),
   });
   return { ok: true };
+});
+
+// Read-only guard used immediately before the existing client-side archive
+// flow. It deliberately does not archive, disable, or update anything.
+export const checkTenantArchiveEligibility = onCall(async (request) => {
+  const callerUid = request.auth?.uid;
+  if (!callerUid) {
+    throw new HttpsError("unauthenticated", "You must be logged in.");
+  }
+  await assertIsAdminOrOwner(callerUid);
+
+  const { uid } = request.data as { uid?: string };
+  if (!uid) {
+    throw new HttpsError("invalid-argument", "Tenant ID is required.");
+  }
+
+  const tenantSnap = await db.collection("users").doc(uid).get();
+  if (!tenantSnap.exists || tenantSnap.data()?.role !== "tenant") {
+    throw new HttpsError("not-found", "Tenant account was not found.");
+  }
+
+  const tenant = tenantSnap.data()!;
+  const dailyRate = Number(tenant.price ?? 0);
+  const schedule = String(tenant.paymentSchedule ?? "monthly");
+  const nowManila = new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Manila" }),
+  );
+
+  const nextPeriodStart = (date: Date): Date => {
+    const next = new Date(date);
+    if (schedule === "daily") {
+      next.setDate(next.getDate() + 1);
+      return next;
+    }
+    if (schedule === "weekly") {
+      next.setDate(next.getDate() + 7);
+      return next;
+    }
+    if (schedule === "semi-monthly") {
+      if (next.getDate() <= 15) {
+        next.setDate(16);
+        return next;
+      }
+      return new Date(next.getFullYear(), next.getMonth() + 1, 1);
+    }
+    return new Date(next.getFullYear(), next.getMonth() + 1, 1);
+  };
+
+  const monthEnd = new Date(nowManila.getFullYear(), nowManila.getMonth() + 1, 1);
+  let chargedToDate = 0;
+  let cursor = new Date(nowManila.getFullYear(), nowManila.getMonth(), 1);
+  let guard = 0;
+  while (cursor <= nowManila && guard < 31) {
+    const periodEnd = nextPeriodStart(cursor);
+    const cappedEnd = periodEnd < monthEnd ? periodEnd : monthEnd;
+    const days = Math.round((cappedEnd.getTime() - cursor.getTime()) / 86400000);
+    chargedToDate += dailyRate * days;
+    cursor = periodEnd;
+    guard++;
+  }
+
+  const paymentsSnap = await db
+    .collection("payments")
+    .where("userId", "==", uid)
+    .get();
+
+  let paidThisMonth = 0;
+  let hasPendingPayment = false;
+  for (const paymentDoc of paymentsSnap.docs) {
+    const payment = paymentDoc.data();
+    const rawDate = payment.date?.toDate
+      ? payment.date.toDate()
+      : new Date(payment.date);
+    if (Number.isNaN(rawDate.getTime())) continue;
+
+    const paymentManila = new Date(
+      rawDate.toLocaleString("en-US", { timeZone: "Asia/Manila" }),
+    );
+    const isCurrentMonth =
+      paymentManila.getFullYear() === nowManila.getFullYear() &&
+      paymentManila.getMonth() === nowManila.getMonth();
+    if (!isCurrentMonth) continue;
+
+    if (payment.status === "approved") {
+      paidThisMonth += Number(payment.amount ?? 0);
+    } else if (payment.status === "pending") {
+      hasPendingPayment = true;
+    }
+  }
+
+  const outstandingBalance = Math.max(0, chargedToDate - paidThisMonth);
+  return {
+    canArchive: outstandingBalance <= 0 && !hasPendingPayment,
+    outstandingBalance,
+    hasPendingPayment,
+  };
 });

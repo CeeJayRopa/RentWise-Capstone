@@ -131,6 +131,16 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ── passwordResetOtps ──────────────────────────────────────────────
+    // Cloud Functions only (Admin SDK bypasses rules entirely) -- holds the
+    // hashed, short-lived SMS reset codes issued by sendResetOtp and consumed
+    // by verifyResetOtp (see functions/src/index.ts). No client, signed-in or
+    // not, ever reads or writes these; a client that could would be able to
+    // read/reset the attempt counter or the code hash.
+    match /passwordResetOtps/{docId} {
+      allow read, write: if false;
+    }
+
     // ── passwordResetRequests ──────────────────────────────────────────
     // Every app's forgot-password flow files this before the user is
     // signed in, so create must stay open. Reading/managing the queue is

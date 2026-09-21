@@ -1,78 +1,172 @@
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { defineSecret } from 'firebase-functions/params';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MOCK SMS SENDER
-// MOCK SMS ENABLED FOR DEMO
-// Prevents Semaphore SMS charges
-// Uncomment Semaphore API integration for production
-// ─────────────────────────────────────────────────────────────────────────────
+export const semaphoreApiKey = defineSecret('SEMAPHORE_API_KEY');
+
+export type SmsPurpose = 'payment-reminder' | 'password-reset';
+
+export interface SmsSendResult {
+  providerMessageId: string;
+  providerStatus: string;
+  normalizedNumber: string;
+  attempts: number;
+}
+
+interface SemaphoreMessage {
+  message_id?: number | string;
+  status?: string;
+}
+
+export function normalizePhilippinePhone(number: string): string {
+  const digits = String(number ?? '').replace(/\D/g, '');
+  if (/^9\d{9}$/.test(digits)) return `0${digits}`;
+  if (/^09\d{9}$/.test(digits)) return digits;
+  if (/^639\d{9}$/.test(digits)) return `0${digits.slice(2)}`;
+  throw new Error('Invalid Philippine mobile number. Expected 09XXXXXXXXX.');
+}
+
+function maskPhone(number: string): string {
+  return `*********${number.slice(-3)}`;
+}
+
+function safeErrorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message.slice(0, 300)
+    : 'Unknown SMS error';
+}
+
+async function writeSmsAudit(data: {
+  tenantId?: string;
+  purpose: SmsPurpose;
+  destination: string;
+  status: 'accepted' | 'failed';
+  attempts: number;
+  providerMessageId?: string;
+  providerStatus?: string;
+  error?: string;
+}): Promise<void> {
+  try {
+    await getFirestore().collection('sms_logs').add({
+      ...data,
+      sentAt: FieldValue.serverTimestamp(),
+    });
+  } catch (auditError) {
+    console.error('[SMS AUDIT] Unable to write audit record', {
+      purpose: data.purpose,
+      destination: data.destination,
+      error: safeErrorMessage(auditError),
+    });
+  }
+}
+
 async function sendSMS(
   number: string,
   message: string,
-  tenantId?: string,
-): Promise<void> {
-  const db = getFirestore();
-  console.log(`[SMS MOCK] To: ${number} | ${message}`);
+): Promise<Omit<SmsSendResult, 'attempts'>> {
+  const normalizedNumber = normalizePhilippinePhone(number);
+  const apiKey = semaphoreApiKey.value();
+  if (!apiKey) throw new Error('SEMAPHORE_API_KEY secret is not configured.');
 
-  await db.collection('sms_logs').add({
-    to: number,
+  const params = new URLSearchParams({
+    apikey: apiKey,
+    number: normalizedNumber,
     message,
-    sentAt: FieldValue.serverTimestamp(),
-    status: 'mock',
-    ...(tenantId && { tenantId }),
+    sendername: 'RentWise',
   });
-
-  // PRODUCTION ONLY - ENABLE AFTER ADDING SEMAPHORE API KEY
-  /*
-  const SEMAPHORE_API_KEY = process.env.SEMAPHORE_API_KEY ?? '';
-  const params = new URLSearchParams();
-  params.append('apikey', SEMAPHORE_API_KEY);
-  params.append('number', number);
-  params.append('message', message);
-  params.append('sendername', 'RentWise');
 
   const response = await fetch('https://api.semaphore.co/api/v4/messages', {
     method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
     body: params,
   });
 
-  if (!response.ok) {
-    const errBody = await response.text();
-    throw new Error(`Semaphore SMS failed: ${response.status} ${errBody}`);
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error(`Semaphore returned an invalid response (HTTP ${response.status}).`);
   }
-  */
+
+  if (!response.ok) {
+    throw new Error(`Semaphore rejected the SMS request (HTTP ${response.status}).`);
+  }
+
+  const record = Array.isArray(payload) ? payload[0] as SemaphoreMessage | undefined : undefined;
+  if (!record?.message_id || !record.status) {
+    throw new Error('Semaphore did not return a valid message record.');
+  }
+
+  return {
+    providerMessageId: String(record.message_id),
+    providerStatus: String(record.status),
+    normalizedNumber,
+  };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// RETRY WRAPPER
-// Max 3 attempts, 2-second delay between attempts.
-// ─────────────────────────────────────────────────────────────────────────────
 export async function sendSMSWithRetry(
   number: string,
   message: string,
-  tenantId?: string,
-): Promise<void> {
-  const MAX_ATTEMPTS = 3;
-  const DELAY_MS = 2000;
-
+  tenantId: string | undefined,
+  purpose: SmsPurpose,
+): Promise<SmsSendResult> {
+  const maxAttempts = 3;
+  const delayMs = 2000;
   let lastError: unknown;
+  let normalizedNumber: string;
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  try {
+    normalizedNumber = normalizePhilippinePhone(number);
+  } catch (error) {
+    await writeSmsAudit({
+      tenantId,
+      purpose,
+      destination: 'invalid',
+      status: 'failed',
+      attempts: 0,
+      error: safeErrorMessage(error),
+    });
+    throw error;
+  }
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      if (attempt > 1) {
-        console.log(`[RETRY] Attempt ${attempt} for ${number}`);
-        await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
-      }
-
-      await sendSMS(number, message, tenantId);
-      return; // success — exit immediately
-    } catch (err) {
-      lastError = err;
+      if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const result = await sendSMS(normalizedNumber, message);
+      await writeSmsAudit({
+        tenantId,
+        purpose,
+        destination: maskPhone(normalizedNumber),
+        status: 'accepted',
+        attempts: attempt,
+        providerMessageId: result.providerMessageId,
+        providerStatus: result.providerStatus,
+      });
+      console.info('[SMS] Provider accepted message', {
+        purpose,
+        destination: maskPhone(normalizedNumber),
+        providerMessageId: result.providerMessageId,
+        providerStatus: result.providerStatus,
+        attempts: attempt,
+      });
+      return {...result, attempts: attempt};
+    } catch (error) {
+      lastError = error;
+      console.warn('[SMS] Send attempt failed', {
+        purpose,
+        destination: maskPhone(normalizedNumber),
+        attempt,
+        error: safeErrorMessage(error),
+      });
     }
   }
 
-  console.log(
-    `[FAILED] Could not send SMS to ${number} after ${MAX_ATTEMPTS} attempts`,
-  );
-  throw lastError;
+  await writeSmsAudit({
+    tenantId,
+    purpose,
+    destination: maskPhone(normalizedNumber),
+    status: 'failed',
+    attempts: maxAttempts,
+    error: safeErrorMessage(lastError),
+  });
+  throw lastError instanceof Error ? lastError : new Error('SMS delivery request failed.');
 }
