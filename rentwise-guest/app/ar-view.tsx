@@ -681,7 +681,7 @@ export default function ARView() {
                 {reticleVisible ? "Ready to place" : "Scanning surroundings"}
               </Text>
               <View style={styles.statusMinimizeButton}>
-                <Text style={styles.statusMinimizeButtonText}>{scanCardExpanded ? "⌄" : "›"}</Text>
+                <Text style={styles.statusMinimizeButtonText}>{scanCardExpanded ? "▲" : "▼"}</Text>
               </View>
             </TouchableOpacity>
             {scanCardExpanded && <>
