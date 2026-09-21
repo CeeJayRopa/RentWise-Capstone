@@ -77,37 +77,37 @@ export default function StallPopup({
         <Ionicons name="close" size={isMobile ? 13 : 16} color={TEXT_MUTED} />
       </TouchableOpacity>}
 
-      <View style={styles.headerRow}>
-        <View style={styles.statusRow}>
-          <View style={[styles.dotHalo, { backgroundColor: `${statusColor}24` }]}>
-            <View style={[styles.dot, { backgroundColor: statusColor }]} />
+      <View style={[styles.headerRow, tooltip && styles.headerRowTooltip]}>
+        <View style={[styles.statusRow, tooltip && styles.statusRowTooltip]}>
+          <View style={[styles.dotHalo, tooltip && styles.dotHaloTooltip, { backgroundColor: `${statusColor}24` }]}>
+            <View style={[styles.dot, tooltip && styles.dotTooltip, { backgroundColor: statusColor }]} />
           </View>
-          <Text style={[styles.statusText, isMobile && styles.statusTextMobile, { color: statusColor }]}>
+          <Text style={[styles.statusText, isMobile && styles.statusTextMobile, tooltip && styles.statusTextTooltip, { color: statusColor }]}>
             {isVacant ? "Vacant" : "Occupied"}
           </Text>
         </View>
-        <Text style={[styles.categoryText, isMobile && styles.categoryTextMobile]} numberOfLines={1}>
+        <Text style={[styles.categoryText, isMobile && styles.categoryTextMobile, tooltip && styles.categoryTextTooltip]} numberOfLines={1}>
           {marketLabel(stall)}
         </Text>
       </View>
 
-      <View style={[styles.rentBox, isMobile && styles.rentBoxMobile]}>
-        <Text style={[styles.rentLabel, isMobile && styles.rentLabelMobile]}>Market rental</Text>
+      <View style={[styles.rentBox, isMobile && styles.rentBoxMobile, tooltip && styles.rentBoxTooltip]}>
+        <Text style={[styles.rentLabel, isMobile && styles.rentLabelMobile, tooltip && styles.rentLabelTooltip]}>Market rental</Text>
         <View style={styles.rentValueRow}>
-          <Text style={[styles.rentValue, isMobile && styles.rentValueMobile]}>₱{formattedPrice}</Text>
-          <Text style={[styles.rentUnit, isMobile && styles.rentUnitMobile]}>/ day</Text>
+          <Text style={[styles.rentValue, isMobile && styles.rentValueMobile, tooltip && styles.rentValueTooltip]}>₱{formattedPrice}</Text>
+          <Text style={[styles.rentUnit, isMobile && styles.rentUnitMobile, tooltip && styles.rentUnitTooltip]}>/ day</Text>
         </View>
       </View>
 
-      <View style={[styles.dimensionsRow, isMobile && styles.dimensionsRowMobile]}>
+      <View style={[styles.dimensionsRow, isMobile && styles.dimensionsRowMobile, tooltip && styles.dimensionsRowTooltip]}>
         <View style={styles.dimensionItem}>
-          <Text style={[styles.dimensionLabel, isMobile && styles.dimensionLabelMobile]}>Length</Text>
-          <Text style={[styles.dimensionValue, isMobile && styles.dimensionValueMobile]}>{stall.length ?? "—"}</Text>
+          <Text style={[styles.dimensionLabel, isMobile && styles.dimensionLabelMobile, tooltip && styles.dimensionLabelTooltip]}>Length</Text>
+          <Text style={[styles.dimensionValue, isMobile && styles.dimensionValueMobile, tooltip && styles.dimensionValueTooltip]}>{stall.length ?? "—"}</Text>
         </View>
         <View style={styles.dimensionDivider} />
         <View style={styles.dimensionItem}>
-          <Text style={[styles.dimensionLabel, isMobile && styles.dimensionLabelMobile]}>Width</Text>
-          <Text style={[styles.dimensionValue, isMobile && styles.dimensionValueMobile]}>{stall.width ?? "—"}</Text>
+          <Text style={[styles.dimensionLabel, isMobile && styles.dimensionLabelMobile, tooltip && styles.dimensionLabelTooltip]}>Width</Text>
+          <Text style={[styles.dimensionValue, isMobile && styles.dimensionValueMobile, tooltip && styles.dimensionValueTooltip]}>{stall.width ?? "—"}</Text>
         </View>
       </View>
 
@@ -131,7 +131,7 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   cardMobile: { padding: 16, maxWidth: 280, borderRadius: 18 },
-  cardTooltip: { width: 320, maxWidth: 320 },
+  cardTooltip: { width: 276, maxWidth: 276, padding: 18, borderRadius: 17 },
   closeIconBtn: {
     position: "absolute",
     top: -9,
@@ -153,7 +153,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 18,
   },
+  headerRowTooltip: { marginBottom: 13 },
   statusRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  statusRowTooltip: { gap: 5 },
   dotHalo: {
     width: 15,
     height: 15,
@@ -161,8 +163,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  dotHaloTooltip: { width: 13, height: 13, borderRadius: 7 },
   dot: { width: 8, height: 8, borderRadius: 4 },
+  dotTooltip: { width: 7, height: 7, borderRadius: 4 },
   statusText: { fontSize: 16, fontWeight: "700" },
+  statusTextTooltip: { fontSize: 14 },
   statusTextMobile: { fontSize: 13 },
   categoryText: {
     flexShrink: 1,
@@ -171,6 +176,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginLeft: 12,
   },
+  categoryTextTooltip: { fontSize: 16 },
   categoryTextMobile: { fontSize: 14 },
   rentBox: {
     backgroundColor: "#F7F8F6",
@@ -184,15 +190,20 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 18,
   },
+  rentBoxTooltip: { paddingVertical: 11, paddingHorizontal: 13, marginBottom: 13, borderRadius: 11 },
   rentBoxMobile: { paddingVertical: 11, paddingHorizontal: 12, marginBottom: 13, borderRadius: 10 },
   rentLabel: { fontSize: 13, color: TEXT_MUTED, fontWeight: "700" },
+  rentLabelTooltip: { fontSize: 11 },
   rentLabelMobile: { fontSize: 10 },
   rentValueRow: { flexDirection: "row", alignItems: "baseline", gap: 5 },
   rentValue: { fontSize: 20, fontWeight: "800", color: TEXT_DARK },
+  rentValueTooltip: { fontSize: 17 },
   rentValueMobile: { fontSize: 16 },
   rentUnit: { fontSize: 12, color: TEXT_MUTED, fontWeight: "700" },
+  rentUnitTooltip: { fontSize: 10 },
   rentUnitMobile: { fontSize: 9 },
   dimensionsRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 28 },
+  dimensionsRowTooltip: { paddingHorizontal: 20 },
   dimensionsRowMobile: { paddingHorizontal: 12 },
   dimensionItem: { flex: 1, alignItems: "center" },
   dimensionDivider: { width: 1, height: 42, backgroundColor: BORDER },
@@ -204,7 +215,9 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
   },
   dimensionLabelMobile: { fontSize: 8, letterSpacing: 1 },
+  dimensionLabelTooltip: { fontSize: 8, letterSpacing: 1.2 },
   dimensionValue: { fontSize: 20, color: TEXT_DARK, fontWeight: "800", marginTop: 4 },
+  dimensionValueTooltip: { fontSize: 17, marginTop: 3 },
   dimensionValueMobile: { fontSize: 16, marginTop: 2 },
   caret: {
     position: "absolute",
