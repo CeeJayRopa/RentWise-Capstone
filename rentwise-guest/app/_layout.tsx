@@ -2,6 +2,7 @@ import { Stack } from "expo-router";
 import { useFonts } from "expo-font";
 import { useEffect } from "react";
 import { Platform } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -12,6 +13,7 @@ import {
 
 export default function Layout() {
   const [fontsLoaded] = useFonts({
+    ...Ionicons.font,
     Poppins_400Regular,
     Poppins_500Medium,
     Poppins_600SemiBold,
@@ -28,7 +30,9 @@ export default function Layout() {
 
     const style = document.createElement("style");
     style.id = styleId;
-    style.textContent = "#root, #root * { font-family: Poppins_400Regular, sans-serif !important; }";
+    // Let text inherit Poppins from the app root. Do not force it onto every
+    // descendant: icon components rely on their own glyph font on web.
+    style.textContent = "#root { font-family: Poppins_400Regular, sans-serif; }";
     document.head.appendChild(style);
 
     return () => style.remove();

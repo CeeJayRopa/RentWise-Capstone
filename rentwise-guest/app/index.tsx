@@ -580,6 +580,18 @@ export default function GuestLanding() {
               },
             ]}
           >
+            {isMobile && (
+              <View style={styles.heroDotsMobile}>
+                {HERO_SLIDES.map((_, i) => (
+                  <TouchableOpacity
+                    key={i}
+                    onPress={() => goToHeroSlide(() => i)}
+                    hitSlop={8}
+                    style={[styles.heroDot, i === heroSlide && styles.heroDotActive]}
+                  />
+                ))}
+              </View>
+            )}
             <Animated.Image
               source={HERO_SLIDES[heroSlide].image}
               resizeMode="contain"
@@ -677,16 +689,18 @@ export default function GuestLanding() {
             </Animated.View>
           </View>
 
-          <View style={styles.heroDots}>
-            {HERO_SLIDES.map((_, i) => (
-              <TouchableOpacity
-                key={i}
-                onPress={() => goToHeroSlide(() => i)}
-                hitSlop={8}
-                style={[styles.heroDot, i === heroSlide && styles.heroDotActive]}
-              />
-            ))}
-          </View>
+          {!isMobile && (
+            <View style={styles.heroDots}>
+              {HERO_SLIDES.map((_, i) => (
+                <TouchableOpacity
+                  key={i}
+                  onPress={() => goToHeroSlide(() => i)}
+                  hitSlop={8}
+                  style={[styles.heroDot, i === heroSlide && styles.heroDotActive]}
+                />
+              ))}
+            </View>
+          )}
         </View>
 
         {/* ── Market Pulse ─────────────────────────────────────────────────── */}
@@ -1058,7 +1072,7 @@ export default function GuestLanding() {
               // edge (still inset by the section's paddingHorizontal), so on
               // mobile pull it out that same amount to actually go edge to
               // edge of the screen.
-              isMobile && { marginHorizontal: -hPad, marginBottom: -secPad },
+              isMobile && { alignSelf: "stretch", marginHorizontal: -hPad, marginBottom: -secPad },
             ]}
           >
             <Text style={styles.footerCopy}>
@@ -1397,6 +1411,12 @@ const styles = StyleSheet.create({
     paddingBottom: 28,
     position: "relative",
     bottom: 16,
+  },
+  heroDotsMobile: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 8,
+    paddingTop: 4,
   },
   heroDot: {
     width: 10,
