@@ -494,9 +494,9 @@ export default function MarketMapEmbed({
                 <Ionicons name="phone-portrait-outline" size={20} color={PRIMARY_DARK} />
               </View>
               <View style={styles.desktopArNoticeCopy}>
-                <Text style={styles.desktopArNoticeTitle}>Explore the market in AR</Text>
+                <Text style={styles.desktopArNoticeTitle}>Design your stall in AR</Text>
                 <Text style={styles.desktopArNoticeText}>
-                  Open this website on mobile to launch AR viewing.
+                  Open on mobile to arrange 3D objects and preview your stall design.
                 </Text>
               </View>
             </View>
