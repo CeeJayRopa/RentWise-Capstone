@@ -1028,7 +1028,10 @@ function requiredPublicString(value: unknown, field: string, maxLength: number):
 }
 
 export const getPublicStalls = onCall(async (request) => {
-  await checkRateLimit(publicCallerKey(request, "stalls"), 120, 60 * 60_000);
+  // The guest home page and map each refresh every 15 seconds. Allow several
+  // simultaneous tabs/devices behind the same public IP while still placing
+  // a firm ceiling on automated scraping.
+  await checkRateLimit(publicCallerKey(request, "stalls"), 1200, 60 * 60_000);
   const snapshot = await db.collection("stalls").get();
   return snapshot.docs.map((doc) => {
     const data = doc.data();

@@ -284,7 +284,7 @@ export default function GuestLanding() {
         ).length;
         setStallOccupancy({ occupied, total: stalls.length });
       },
-      (error) => console.error("STALL OCCUPANCY LISTENER ERROR:", error),
+      (error) => console.warn("STALL OCCUPANCY LISTENER WARNING:", error),
     );
 
     return unsubscribe;

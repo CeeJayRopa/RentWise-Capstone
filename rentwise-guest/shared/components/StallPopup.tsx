@@ -10,6 +10,7 @@ const BORDER = "#E4E7E2";
 interface Stall {
   id: string;
   name?: string;
+  spaceId?: string;
   status?: string;
   buildingNumber?: string;
   category?: string;
@@ -50,6 +51,17 @@ function formatDimension(value?: number): string {
   return value == null ? "—" : `${value}m`;
 }
 
+function stallIdentifier(stall: Stall): string {
+  const buildingSource = String(stall.buildingNumber ?? stall.name ?? "");
+  const building = buildingSource.match(/(?:b(?:uilding)?\s*[- ]?\s*)?(\d+)/i)?.[1];
+  const space = stall.spaceId
+    ? String(stall.spaceId).match(/^\s*(?:stall\s*)?([a-z])\s*[- ]?\s*(\d+)\s*$/i)
+    : String(stall.name ?? "").match(/stall\s*([a-z])\s*[- ]?\s*(\d+)/i);
+  const buildingLabel = building ? `B${Number(building)}` : "Building";
+  const stallLabel = space ? `${space[1].toUpperCase()}-${space[2].padStart(2, "0")}` : "Stall";
+  return `${buildingLabel} · ${stallLabel}`;
+}
+
 export default function StallPopup({
   stall,
   onClose,
@@ -63,7 +75,12 @@ export default function StallPopup({
   const isVacant = stall.status?.trim().toLowerCase() !== "occupied";
   const statusColor = isVacant ? PRIMARY : OCCUPIED;
   const formattedPrice =
-    typeof stall.price === "number" ? stall.price.toLocaleString("en-PH") : "—";
+    typeof stall.price === "number"
+      ? stall.price.toLocaleString("en-PH", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })
+      : "—";
 
   return (
     <View style={[
@@ -90,6 +107,15 @@ export default function StallPopup({
             {isVacant ? "Vacant" : "Occupied"}
           </Text>
         </View>
+        <View style={[styles.identifierChip, isMobile && styles.identifierChipMobile, tooltip && styles.identifierChipTooltip]}>
+          <Text style={[styles.identifierText, isMobile && styles.identifierTextMobile, tooltip && styles.identifierTextTooltip]} numberOfLines={1}>
+            {stallIdentifier(stall)}
+          </Text>
+        </View>
+      </View>
+
+      <View style={[styles.categoryBlock, isMobile && styles.categoryBlockMobile, tooltip && styles.categoryBlockTooltip]}>
+        <Text style={[styles.categoryLabel, isMobile && styles.categoryLabelMobile, tooltip && styles.categoryLabelTooltip]}>Stall category</Text>
         <Text style={[styles.categoryText, isMobile && styles.categoryTextMobile, tooltip && styles.categoryTextTooltip]} numberOfLines={1}>
           {marketLabel(stall)}
         </Text>
@@ -173,15 +199,40 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 16, fontWeight: "700" },
   statusTextTooltip: { fontSize: 14 },
   statusTextMobile: { fontSize: 13 },
+  identifierChip: {
+    maxWidth: "48%",
+    backgroundColor: "#EAF6EF",
+    borderWidth: 1,
+    borderColor: "#A8D9BD",
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  identifierChipTooltip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 14 },
+  identifierChipMobile: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 13 },
+  identifierText: { color: "#0B6247", fontSize: 13, fontWeight: "800" },
+  identifierTextTooltip: { fontSize: 11 },
+  identifierTextMobile: { fontSize: 10 },
+  categoryBlock: { marginBottom: 18 },
+  categoryBlockTooltip: { marginBottom: 13 },
+  categoryBlockMobile: { marginBottom: 13 },
+  categoryLabel: {
+    color: TEXT_MUTED,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginBottom: 3,
+  },
+  categoryLabelTooltip: { fontSize: 8, marginBottom: 2 },
+  categoryLabelMobile: { fontSize: 8, marginBottom: 2 },
   categoryText: {
-    flexShrink: 1,
-    fontSize: 18,
+    fontSize: 22,
     color: TEXT_DARK,
     fontWeight: "800",
-    marginLeft: 12,
   },
-  categoryTextTooltip: { fontSize: 16 },
-  categoryTextMobile: { fontSize: 14 },
+  categoryTextTooltip: { fontSize: 18 },
+  categoryTextMobile: { fontSize: 17 },
   rentBox: {
     backgroundColor: "#F7F8F6",
     borderWidth: 1,

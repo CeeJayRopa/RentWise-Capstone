@@ -182,7 +182,7 @@ export default function MarketMap() {
         setLoading(false);
       },
       (error) => {
-        console.error("STALL SUBSCRIPTION ERROR:", error);
+        console.warn("STALL SUBSCRIPTION WARNING:", error);
         setLoading(false);
       },
     );
@@ -371,7 +371,14 @@ export default function MarketMap() {
           tablet included (tablet's old vertical right-edge strip is gone,
           replaced by this same design). */}
       <View
-        style={[styles.header, isMobileOrTablet && { position: "relative", zIndex: 20 }]}
+        style={[
+          styles.header,
+          isMobileOrTablet && { position: "relative", zIndex: 20 },
+          // Rotated cards extend beyond their untransformed layout boxes.
+          // Reserve proportional space so the blueprint always begins with
+          // a visible gap below the cards on every phone width.
+          isMobile && { minHeight: 145 * mobileScale },
+        ]}
         onLayout={(e) => setMeasuredHeaderHeight(e.nativeEvent.layout.height)}
       >
           <TouchableOpacity
@@ -641,6 +648,14 @@ const styles = StyleSheet.create({
   mobileQuoteCard: {
     position: "absolute",
     zIndex: 20,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#DDD8CA",
+    shadowColor: "#17211D",
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
   },
   // Matches the hero section's dark text color (app/index.tsx TEXT_DARK) --
   // the header background is now the same cream as the hero, so white text
