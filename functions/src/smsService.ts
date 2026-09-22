@@ -17,6 +17,11 @@ interface SemaphoreMessage {
   status?: string;
 }
 
+interface SemaphoreError {
+  message?: string;
+  error?: string;
+}
+
 export function normalizePhilippinePhone(number: string): string {
   const digits = String(number ?? '').replace(/\D/g, '');
   if (/^9\d{9}$/.test(digits)) return `0${digits}`;
@@ -71,7 +76,6 @@ async function sendSMS(
     apikey: apiKey,
     number: normalizedNumber,
     message,
-    sendername: 'RentWise',
   });
 
   const response = await fetch('https://api.semaphore.co/api/v4/messages', {
@@ -93,7 +97,15 @@ async function sendSMS(
 
   const record = Array.isArray(payload) ? payload[0] as SemaphoreMessage | undefined : undefined;
   if (!record?.message_id || !record.status) {
-    throw new Error('Semaphore did not return a valid message record.');
+    const providerError = !Array.isArray(payload) && payload && typeof payload === 'object'
+      ? payload as SemaphoreError
+      : undefined;
+    const detail = providerError?.message || providerError?.error;
+    throw new Error(
+      detail
+        ? `Semaphore rejected the request: ${String(detail).slice(0, 200)}`
+        : 'Semaphore did not return a valid message record.',
+    );
   }
 
   return {

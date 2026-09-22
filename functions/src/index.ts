@@ -12,7 +12,11 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import { createHash, randomInt, timingSafeEqual } from "crypto";
 
-import { semaphoreApiKey, sendSMSWithRetry } from "./smsService";
+import {
+  normalizePhilippinePhone,
+  semaphoreApiKey,
+  sendSMSWithRetry,
+} from "./smsService";
 
 // Firebase Admin initialization
 initializeApp();
@@ -861,13 +865,25 @@ export const sendResetOtp = onCall({secrets: [semaphoreApiKey]}, async (request)
     return { status: "manual" };
   }
 
+  // Treat a malformed stored number the same as a missing number. Sending it
+  // would otherwise throw a plain Error which Firebase exposes to the app only
+  // as the unhelpful generic "INTERNAL" message.
+  try {
+    normalizePhilippinePhone(contactNo);
+  } catch {
+    console.warn("[sendResetOtp] Tenant has an invalid phone number", { tenantId });
+    await fileManual();
+    return { status: "manual" };
+  }
+
   // Issue a fresh 6-digit code, keyed by uid so a new request replaces any
   // still-outstanding code for this tenant. Only the SHA-256 hash is stored,
   // so a DB leak never exposes a live code.
   const otp = String(randomInt(0, 1_000_000)).padStart(6, "0");
   const otpHash = createHash("sha256").update(otp).digest("hex");
 
-  await db.collection("passwordResetOtps").doc(tenantId).set({
+  const otpRef = db.collection("passwordResetOtps").doc(tenantId);
+  await otpRef.set({
     emailKey: email,
     otpHash,
     attempts: 0,
@@ -875,12 +891,28 @@ export const sendResetOtp = onCall({secrets: [semaphoreApiKey]}, async (request)
     createdAt: FieldValue.serverTimestamp(),
   });
 
-  await sendSMSWithRetry(
-    contactNo,
-    `Your RentWise password reset code is ${otp}. It expires in 10 minutes. Do not share it with anyone.`,
-    tenantId,
-    "password-reset",
-  );
+  try {
+    await sendSMSWithRetry(
+      contactNo,
+      `Your RentWise password reset code is ${otp}. It expires in 10 minutes. Do not share it with anyone.`,
+      tenantId,
+      "password-reset",
+    );
+  } catch (error) {
+    // Never leave a valid OTP behind when no SMS was delivered. Log the real
+    // server-side cause, but return a safe and useful message to the app.
+    await otpRef.delete().catch((cleanupError) => {
+      console.error("[sendResetOtp] Failed to remove undelivered OTP", {
+        tenantId,
+        cleanupError,
+      });
+    });
+    console.error("[sendResetOtp] SMS delivery failed", { tenantId, error });
+    throw new HttpsError(
+      "unavailable",
+      "We couldn't send the reset code right now. Please try again in a few minutes.",
+    );
+  }
 
   return { status: "sent", phoneHint: maskPhone(contactNo) };
 });

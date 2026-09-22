@@ -49,7 +49,11 @@ export default function ResetSending() {
         setPhase("manual");
       } catch (err: any) {
         console.log("[reset-sending] sendResetOtp error:", err);
-        setErrorMsg(err?.message || "Something went wrong. Please try again.");
+        const friendlyMessage =
+          err?.code === "functions/unavailable"
+            ? "We couldn't send the reset code right now. Please try again in a few minutes."
+            : "We couldn't start the password reset. Please try again. If the problem continues, contact your administrator.";
+        setErrorMsg(friendlyMessage);
         setPhase("error");
       }
     })();

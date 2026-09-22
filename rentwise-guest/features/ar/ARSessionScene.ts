@@ -827,8 +827,11 @@ export class ARSessionScene {
   // Forces an explicit matrix-world update first: a position/rotation/scale change isn't
   // reflected in matrixWorld until the next render pass otherwise, and this is always
   // called before that pass happens (see snapToFloor, the only real consumer).
-  private computeWorldBoundingBox(group: THREE.Group): THREE.Box3 {
+  private computeWorldBoundingBox(group: THREE.Group, objectId?: string): THREE.Box3 {
     group.updateWorldMatrix(true, true);
+    const cached = objectId ? this.modelCache.get(objectId) : undefined;
+    // Exclude the selection outline and contact shadow from model measurements.
+    if (cached) return cached.boundingBox.clone().applyMatrix4(group.matrixWorld);
     return new THREE.Box3().setFromObject(group);
   }
 
@@ -844,7 +847,7 @@ export class ARSessionScene {
   // etc.) without needing to chase each cause individually. Called only at discrete events
   // (place/move/scale) — never per-frame, see onFrame, which doesn't call this at all.
   private snapToFloor(group: THREE.Group, targetFloorY: number, objectId?: string): void {
-    const box = this.computeWorldBoundingBox(group);
+    const box = this.computeWorldBoundingBox(group, objectId);
     if (!Number.isFinite(box.min.y)) return;
 
     const delta = targetFloorY + FLOOR_CONTACT_EPSILON - box.min.y;
@@ -1077,8 +1080,7 @@ export class ARSessionScene {
 
   // Pinch gestures resize all three axes together. Clamp one shared factor so the model
   // keeps its current proportions even when one axis reaches the global size limit first.
-  // Deliberately do not re-snap to the floor here: a pinch must preserve the object's
-  // existing world position, including for models whose exported origin is offset.
+  // Keep the visible floor-center fixed even when the exported origin is offset.
   scaleSelectedUniform(factor: number) {
     if (!this.selected || !Number.isFinite(factor) || factor <= 0) return;
 
@@ -1097,10 +1099,35 @@ export class ARSessionScene {
     if (clampedFactor === 1) return;
 
     this.recordTransformBeforeChange();
+    const anchor = this.getSelectedResizeAnchor();
     current.x *= clampedFactor;
     current.y *= clampedFactor;
     current.z *= clampedFactor;
     this.selected.group.scale.set(current.x, current.y, current.z);
+    this.restoreSelectedResizeAnchor(anchor);
+  }
+
+  // Scale around the visible model's floor-center rather than the arbitrary origin
+  // exported in its GLB. This prevents pinch and X/Y/Z slider resizing from looking like
+  // a move when the model has an off-center origin.
+  private getSelectedResizeAnchor(): THREE.Vector3 | null {
+    if (!this.selected) return null;
+    const box = this.computeWorldBoundingBox(this.selected.group, this.selected.objectId);
+    if (!Number.isFinite(box.min.y)) return null;
+    return new THREE.Vector3(
+      (box.min.x + box.max.x) / 2,
+      box.min.y,
+      (box.min.z + box.max.z) / 2,
+    );
+  }
+
+  private restoreSelectedResizeAnchor(anchor: THREE.Vector3 | null): void {
+    if (!this.selected || !anchor) return;
+    const box = this.computeWorldBoundingBox(this.selected.group, this.selected.objectId);
+    if (!Number.isFinite(box.min.y)) return;
+    this.selected.group.position.x += anchor.x - (box.min.x + box.max.x) / 2;
+    this.selected.group.position.y += anchor.y - box.min.y;
+    this.selected.group.position.z += anchor.z - (box.min.z + box.max.z) / 2;
   }
 
   // Applies the base per-axis scale/anchor logic; scaleSelectedAxis is the public entry
@@ -1108,24 +1135,15 @@ export class ARSessionScene {
   private setAxisScale(axis: ScaleAxis, targetValue: number) {
     if (!this.selected) return;
 
-    // Read where the object is CURRENTLY resting before touching its scale at all — this
-    // is "the floor" for the purposes of this operation, not a value re-derived from the
-    // live reticle (which might not even be visible, or pointed elsewhere, while the user
-    // is scaling an already-placed object).
-    const preScaleBox = this.computeWorldBoundingBox(this.selected.group);
-    const floorY = Number.isFinite(preScaleBox.min.y) ? preScaleBox.min.y : null;
-
     const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, targetValue));
     if (next === this.selected.scale[axis]) return;
     this.recordTransformBeforeChange();
+    const anchor = this.getSelectedResizeAnchor();
     this.selected.scale[axis] = next;
     this.selected.group.scale.set(this.selected.scale.x, this.selected.scale.y, this.selected.scale.z);
 
-    // Re-snap to that same floor Y regardless of which axis changed (cheap — one measured
-    // bounding box per button press, not per frame) instead of only correcting for Y-axis
-    // scale via the object's cached, pre-transform groundOffset — see snapToFloor's own
-    // comment for why measuring reality after the fact is the robust choice here.
-    if (floorY !== null) this.snapToFloor(this.selected.group, floorY, this.selected.objectId);
+    // Preserve the same visible floor-center for width, height, and depth changes.
+    this.restoreSelectedResizeAnchor(anchor);
   }
 
   moveSelectedToReticle() {

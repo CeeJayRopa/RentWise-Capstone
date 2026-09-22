@@ -827,7 +827,7 @@ export default function ARView() {
                   <Text style={styles.sliderTitle}>Rotate object</Text>
                   <Text style={styles.sliderValue}>{rotateValue}°</Text>
                 </View>
-                <input aria-label="Rotate selected object" type="range" min={-180} max={180} value={rotateValue} onChange={(event) => setRotationFromSlider(Number(event.target.value))} style={styles.webSlider as any} />
+                <input aria-label="Rotate selected object" type="range" min={-180} max={180} value={rotateValue} onPointerDown={suppressPressIn} onPointerUp={suppressPressOut} onPointerCancel={suppressPressOut} onChange={(event) => setRotationFromSlider(Number(event.target.value))} style={styles.webSlider as any} />
                 <View style={styles.sliderMarks}><Text style={styles.sliderMark}>−180°</Text><Text style={styles.sliderMark}>0°</Text><Text style={styles.sliderMark}>180°</Text></View>
               </View>
             ) : toolMode === "resize" ? (
@@ -843,7 +843,7 @@ export default function ARView() {
                     </TouchableOpacity>
                   ))}
                 </View>
-                <input aria-label="Resize selected object" type="range" min={50} max={150} value={scaleValues[resizeAxis]} onChange={(event) => setScaleFromSlider(resizeAxis, Number(event.target.value))} style={styles.webSlider as any} />
+                <input aria-label="Resize selected object" type="range" min={50} max={150} value={scaleValues[resizeAxis]} onPointerDown={suppressPressIn} onPointerUp={suppressPressOut} onPointerCancel={suppressPressOut} onChange={(event) => setScaleFromSlider(resizeAxis, Number(event.target.value))} style={styles.webSlider as any} />
                 <View style={styles.sliderMarks}><Text style={styles.sliderMark}>50%</Text><Text style={styles.sliderMark}>100%</Text><Text style={styles.sliderMark}>150%</Text></View>
               </View>
             ) : (
