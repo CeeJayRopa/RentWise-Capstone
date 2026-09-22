@@ -95,7 +95,11 @@ async function sendSMS(
     throw new Error(`Semaphore rejected the SMS request (HTTP ${response.status}).`);
   }
 
-  const record = Array.isArray(payload) ? payload[0] as SemaphoreMessage | undefined : undefined;
+  // Semaphore's documented examples use an array, but some account/API
+  // responses return the single message object directly. Both shapes carry
+  // the same message_id/status pair, so accept either instead of treating a
+  // successfully accepted SMS as a provider failure.
+  const record = (Array.isArray(payload) ? payload[0] : payload) as SemaphoreMessage | undefined;
   if (!record?.message_id || !record.status) {
     const providerError = !Array.isArray(payload) && payload && typeof payload === 'object'
       ? payload as SemaphoreError
