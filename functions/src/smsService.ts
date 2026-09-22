@@ -22,6 +22,38 @@ interface SemaphoreError {
   error?: string;
 }
 
+type SemaphorePayload = SemaphoreMessage | SemaphoreMessage[] | {
+  data?: SemaphoreMessage | SemaphoreMessage[];
+  message?: string;
+  error?: string;
+  code?: string | number;
+};
+
+function summarizeSemaphorePayload(payload: unknown): Record<string, unknown> {
+  const value = Array.isArray(payload) ? payload[0] : payload;
+  if (!value || typeof value !== 'object') {
+    return { shape: Array.isArray(payload) ? 'array' : typeof payload, length: Array.isArray(payload) ? payload.length : undefined };
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    shape: Array.isArray(payload) ? 'array' : 'object',
+    length: Array.isArray(payload) ? payload.length : undefined,
+    keys: Object.keys(record).filter((key) => !['apikey', 'message', 'number', 'recipient'].includes(key)).slice(0, 12),
+    status: typeof record.status === 'string' ? record.status : undefined,
+    code: typeof record.code === 'string' || typeof record.code === 'number' ? record.code : undefined,
+  };
+}
+
+function getSemaphoreMessageRecord(payload: unknown): SemaphoreMessage | undefined {
+  const outer = Array.isArray(payload) ? payload[0] : payload;
+  const candidate = outer && typeof outer === 'object' && 'data' in outer
+    ? (outer as { data?: unknown }).data
+    : outer;
+  const record = Array.isArray(candidate) ? candidate[0] : candidate;
+  return record && typeof record === 'object' ? record as SemaphoreMessage : undefined;
+}
+
 export function normalizePhilippinePhone(number: string): string {
   const digits = String(number ?? '').replace(/\D/g, '');
   if (/^9\d{9}$/.test(digits)) return `0${digits}`;
@@ -95,14 +127,13 @@ async function sendSMS(
     throw new Error(`Semaphore rejected the SMS request (HTTP ${response.status}).`);
   }
 
-  // Semaphore's documented examples use an array, but some account/API
-  // responses return the single message object directly. Both shapes carry
-  // the same message_id/status pair, so accept either instead of treating a
-  // successfully accepted SMS as a provider failure.
-  const record = (Array.isArray(payload) ? payload[0] : payload) as SemaphoreMessage | undefined;
-  if (!record?.message_id || !record.status) {
+  // Accept Semaphore's documented array response, its direct-object form,
+  // and the `data` envelope used by some gateway responses.
+  const record = getSemaphoreMessageRecord(payload);
+  if (record?.message_id === undefined || record?.message_id === null || !record.status) {
+    console.error('[SMS] Unexpected Semaphore response shape', summarizeSemaphorePayload(payload));
     const providerError = !Array.isArray(payload) && payload && typeof payload === 'object'
-      ? payload as SemaphoreError
+      ? payload as SemaphorePayload as SemaphoreError
       : undefined;
     const detail = providerError?.message || providerError?.error;
     throw new Error(
