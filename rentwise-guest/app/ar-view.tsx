@@ -53,7 +53,7 @@ function translateSessionStartError(e: any): string {
 const AXIS_LABELS: { axis: ScaleAxis; label: string }[] = [
   { axis: "x", label: "Width" },
   { axis: "y", label: "Height" },
-  { axis: "z", label: "Depth" },
+  { axis: "z", label: "Width" },
 ];
 
 // AR's UI doesn't fit the ref/spotlight-based HelpTour used in admin/owner/tenant — there's
