@@ -4,7 +4,7 @@ import type { Auth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import { getFunctions } from "firebase/functions";
-import { initializeAppCheck, ReCaptchaV3Provider, CustomProvider } from "firebase/app-check";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider, CustomProvider } from "firebase/app-check";
 import ReactNativeAsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 
@@ -26,7 +26,7 @@ const firebaseApp = initializeApp(firebaseConfig);
 // secret; App Check is the thing that's actually supposed to gate access).
 // One init here covers all 4 apps, since they all share this file.
 //
-// Web (guest) uses Google's reCAPTCHA v3, the standard browser attestation.
+// Web (guest) uses Google's reCAPTCHA Enterprise browser attestation.
 // Native (admin/owner/tenant) has no browser to run reCAPTCHA in, so it
 // bridges through @react-native-firebase/app-check instead, which talks to
 // Play Integrity (Android) / App Attest (iOS) -- real OS-level attestation,
@@ -37,19 +37,19 @@ const firebaseApp = initializeApp(firebaseConfig);
 // native modules at all), just runs without App Check instead of crashing.
 //
 // IMPORTANT -- before this actually protects anything:
-// 1. Replace RECAPTCHA_V3_SITE_KEY below with the real one from Firebase
-//    Console -> App Check -> Apps -> (web app) -> reCAPTCHA v3.
+// 1. Replace RECAPTCHA_ENTERPRISE_SITE_KEY below with the public site key
+//    registered in Firebase Console -> App Check -> Apps -> (web app).
 // 2. Register each native app in Firebase Console -> App Check and link
 //    Play Integrity (Android Play Console) / App Attest (Apple Developer).
 // 3. Only flip "Enforce" per product (Firestore/Functions/Storage) in
 //    Firebase Console once real traffic is confirmed to be sending valid
 //    tokens -- enforcing before that locks out every real user too.
-const RECAPTCHA_V3_SITE_KEY = "REPLACE_WITH_RECAPTCHA_V3_SITE_KEY";
+const RECAPTCHA_ENTERPRISE_SITE_KEY = "6LdQWNEtAAAAADCmMTukBE1lL1CDCrpD3sfyHxM-";
 
 try {
   if (Platform.OS === "web") {
     initializeAppCheck(firebaseApp, {
-      provider: new ReCaptchaV3Provider(RECAPTCHA_V3_SITE_KEY),
+      provider: new ReCaptchaEnterpriseProvider(RECAPTCHA_ENTERPRISE_SITE_KEY),
       isTokenAutoRefreshEnabled: true,
     });
   } else {
