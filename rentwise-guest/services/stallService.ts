@@ -22,15 +22,40 @@ export function subscribeToStalls(
   onError?: (error: Error) => void,
 ) {
   let active = true;
+  let refreshing = false;
+
   const refresh = async () => {
+    if (!active || refreshing) return;
+    refreshing = true;
     try {
       const stalls = await getStalls();
       if (active) onData(stalls);
     } catch (error) {
       if (active && onError) onError(error instanceof Error ? error : new Error("Unable to load stalls."));
+    } finally {
+      refreshing = false;
     }
   };
+
   void refresh();
-  const timer = setInterval(refresh, 15000);
-  return () => { active = false; clearInterval(timer); };
+  const timer = setInterval(() => {
+    if (typeof document === "undefined" || document.visibilityState === "visible") {
+      void refresh();
+    }
+  }, 5 * 60 * 1000);
+
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === "visible") void refresh();
+  };
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+  }
+
+  return () => {
+    active = false;
+    clearInterval(timer);
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    }
+  };
 }
