@@ -748,8 +748,8 @@ export const verifyOwnerSecurityAnswers = onCall(async (request) => {
     throw new HttpsError("permission-denied", "One or more answers are incorrect.");
   }
 
-  // Same approach as generateTenantResetLink below: a real, one-time-use
-  // Firebase password-reset code, handed to the owner's own in-app "choose
+  // Generate a real, one-time-use Firebase password-reset code after the
+  // security answers are verified, then hand it to the owner's in-app "choose
   // a new password" screen — nothing about the owner's actual password is
   // ever stored or read here, only a fresh reset code is generated.
   const ownerRecord = await auth.getUser(ownerId);
@@ -767,44 +767,6 @@ export const verifyOwnerSecurityAnswers = onCall(async (request) => {
 
 // Owner notifications are now created explicitly by the admin FAB
 // "Apply Changes" button — see rentwise-admin/app/components/UpdatesReportFAB.tsx.
-
-// =====================================
-// TENANT SELF-SERVICE PASSWORD RESET (in-app, no real email round-trip)
-// Generates a real Firebase password-reset link via the Admin SDK WITHOUT
-// sending it anywhere — the tenant app opens it directly in its own
-// in-app WebView instead of making an elderly tenant go check email.
-// Trade-off (capstone scope): knowing a tenant's personal email is enough
-// to reset their password here, since there's no inbox-possession check
-// anymore. See CAPSTONE_NOTES.txt.
-// =====================================
-export const generateTenantResetLink = onCall(async (request) => {
-  const { email } = request.data as { email: string };
-  if (!email) throw new HttpsError("invalid-argument", "Email is required.");
-  await checkRateLimit(`generateTenantResetLink:${email}`, 5, 15 * 60_000);
-
-  const snap = await db
-    .collection("users")
-    .where("personalEmail", "==", email)
-    .where("role", "==", "tenant")
-    .limit(1)
-    .get();
-
-  if (snap.empty) {
-    throw new HttpsError("not-found", "No tenant account found with this email.");
-  }
-
-  // The Admin SDK only returns a full link, not the raw code — but this
-  // flow never loads that URL anywhere (no email, no WebView), so we just
-  // extract the oobCode from it and hand that to the tenant app's own
-  // native reset-password screen instead.
-  const link = await auth.generatePasswordResetLink(email, {
-    url: "https://rentwise-capstone-project.web.app/reset-password",
-    handleCodeInApp: true,
-  });
-  const oobCode = new URL(link).searchParams.get("oobCode");
-
-  return { oobCode };
-});
 
 // =====================================
 // PRE-AUTH USER LOOKUPS (server-side, narrow-response versions of what
@@ -847,50 +809,6 @@ export const resolveLoginEmail = onCall(async (request) => {
   if (!q2.empty) return { email: q2.docs[0].data().email ?? null };
 
   return { email: null };
-});
-
-export const tenantForgotPassword = onCall(async (request) => {
-  const { email } = request.data as { email: string };
-  if (!email) throw new HttpsError("invalid-argument", "Email is required.");
-  await checkRateLimit(`tenantForgotPassword:${email}`, 5, 15 * 60_000);
-
-  const snap = await db
-    .collection("users")
-    .where("email", "==", email)
-    .where("role", "==", "tenant")
-    .limit(1)
-    .get();
-
-  if (snap.empty) {
-    throw new HttpsError("not-found", "No account found with this email.");
-  }
-
-  const matched = snap.docs[0];
-  const data = matched.data();
-
-  if (data.personalEmail) {
-    // Same approach as generateTenantResetLink above: a real, one-time-use
-    // reset code handed straight to the tenant app's own reset screen.
-    const link = await auth.generatePasswordResetLink(data.personalEmail, {
-      url: "https://rentwise-capstone-project.web.app/reset-password",
-      handleCodeInApp: true,
-    });
-    const oobCode = new URL(link).searchParams.get("oobCode");
-    return { method: "self-service", oobCode };
-  }
-
-  // No personal email on file -- fall back to a manual request the admin
-  // handles. Written here (Admin SDK) instead of client-side so the client
-  // never needs to read firstName/lastName/spaceId off the users doc itself.
-  await db.collection("passwordResetRequests").add({
-    email,
-    tenantId: matched.id,
-    tenantName: `${data.firstName ?? ""} ${data.lastName ?? ""}`.trim(),
-    spaceId: data.spaceId ?? data.stallId ?? "",
-    status: "pending",
-    createdAt: FieldValue.serverTimestamp(),
-  });
-  return { method: "manual" };
 });
 
 // =====================================
@@ -939,8 +857,8 @@ export const sendResetOtp = onCall({secrets: [semaphoreApiKey]}, async (request)
   const data = tenantDoc.data();
   const tenantId = tenantDoc.id;
 
-  // Preserves the existing admin-handled manual path (same doc shape as
-  // tenantForgotPassword) for tenants who can't self-serve yet.
+  // Preserves the existing admin-handled manual path for tenants who cannot
+  // complete the verified-email and SMS requirements yet.
   const fileManual = async () => {
     await db.collection("passwordResetRequests").add({
       email,
@@ -1106,7 +1024,7 @@ export const verifyResetOtp = onCall(async (request) => {
   }
 
   // OTP proven — NOW (and only now) mint the Firebase reset code, the same
-  // way tenantForgotPassword does, and hand it to the app's own reset screen.
+  // and hand it to the app's own reset screen.
   const link = await auth.generatePasswordResetLink(email, {
     url: "https://rentwise-capstone-project.web.app/reset-password",
     handleCodeInApp: true,
