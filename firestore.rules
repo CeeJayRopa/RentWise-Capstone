@@ -66,9 +66,15 @@ service cloud.firestore {
     // Function; raw documents remain available only to authenticated apps.
     match /stalls/{stallId} {
       allow read: if isSignedIn();
-      allow write: if isStaff()
+      allow create, delete: if isStaff();
+      allow update: if isStaff()
         || (isTenant()
-            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.stallId == stallId);
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.stallId == stallId
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(["category"])
+            && request.resource.data.category is string
+            && request.resource.data.category in
+                 ["Wet Market", "Dry Market", "Home Essential"]);
     }
 
     // ── payments ───────────────────────────────────────────────────────
