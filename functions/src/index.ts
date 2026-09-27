@@ -127,6 +127,84 @@ async function checkRateLimit(key: string, maxAttempts: number, windowMs: number
   });
 }
 
+// Client-side checks improve the UI, but callers can bypass the app and call
+// callable functions directly. These are the authoritative server checks.
+function inputObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpsError("invalid-argument", "Invalid request data.");
+  }
+  return value as Record<string, unknown>;
+}
+
+function requiredText(value: unknown, field: string, maxLength: number): string {
+  if (typeof value !== "string") {
+    throw new HttpsError("invalid-argument", `${field} must be text.`);
+  }
+  const clean = value.trim();
+  if (!clean || clean.length > maxLength || /[\u0000-\u001F\u007F]/.test(clean)) {
+    throw new HttpsError("invalid-argument", `${field} is required and must be at most ${maxLength} characters.`);
+  }
+  return clean;
+}
+
+function validUid(value: unknown): string {
+  const uid = requiredText(value, "Account ID", 128);
+  if (!/^[A-Za-z0-9_-]+$/.test(uid)) {
+    throw new HttpsError("invalid-argument", "Invalid account ID.");
+  }
+  return uid;
+}
+
+function validName(value: unknown, field: string): string {
+  const name = requiredText(value, field, 80);
+  if (!/^[\p{L}\p{M} .'-]+$/u.test(name)) {
+    throw new HttpsError("invalid-argument", `${field} contains invalid characters.`);
+  }
+  return name;
+}
+
+function validUsername(value: unknown): string {
+  const username = requiredText(value, "Username", 40);
+  if (!/^[A-Za-z0-9._-]{3,40}$/.test(username)) {
+    throw new HttpsError("invalid-argument", "Username must be 3-40 characters using letters, numbers, dot, underscore, or hyphen.");
+  }
+  return username;
+}
+
+function validEmail(value: unknown): string {
+  const email = requiredText(value, "Email", 254).toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new HttpsError("invalid-argument", "Invalid email address.");
+  }
+  return email;
+}
+
+function validPassword(value: unknown): string {
+  if (typeof value !== "string" || value.length < 8 || value.length > 128) {
+    throw new HttpsError("invalid-argument", "Password must be between 8 and 128 characters.");
+  }
+  if (!/[A-Z]/.test(value) || !/\d/.test(value) || !/[^A-Za-z0-9]/.test(value)) {
+    throw new HttpsError("invalid-argument", "Password must include an uppercase letter, a number, and a special character.");
+  }
+  return value;
+}
+
+function validPhilippinePhone(value: unknown): string {
+  const phone = requiredText(value, "Phone number", 20);
+  try {
+    return normalizePhilippinePhone(phone).slice(1);
+  } catch {
+    throw new HttpsError("invalid-argument", "Phone number must be a valid Philippine mobile number.");
+  }
+}
+
+async function assertTargetRole(uid: string, expectedRole: "admin" | "tenant") {
+  const targetDoc = await db.collection("users").doc(uid).get();
+  if (!targetDoc.exists || targetDoc.data()?.role !== expectedRole) {
+    throw new HttpsError("failed-precondition", `Target account must be a ${expectedRole}.`);
+  }
+}
+
 // =====================================
 // CREATE TENANT ACCOUNT
 // =====================================
@@ -140,12 +218,13 @@ export const adminCreateTenant = onCall(async (request) => {
 
   await assertIsAdmin(adminUid);
 
-  const { firstName, lastName, username, contactNo, password, stallId } =
-    request.data;
-
-  if (!firstName || !lastName || !username || !password || !stallId) {
-    throw new HttpsError("invalid-argument", "Missing required fields");
-  }
+  const input = inputObject(request.data);
+  const firstName = validName(input.firstName, "First name");
+  const lastName = validName(input.lastName, "Last name");
+  const username = validUsername(input.username);
+  const contactNo = validPhilippinePhone(input.contactNo);
+  const password = validPassword(input.password);
+  const stallId = requiredText(input.stallId, "Stall ID", 128);
 
   const email = `${username}@rentwise.app`;
 
@@ -158,7 +237,13 @@ export const adminCreateTenant = onCall(async (request) => {
     // before this changed, they just now own that data going forward
     // instead of sharing the stall's copy with whoever rents it next.
     const stallSnap = await db.collection("stalls").doc(stallId).get();
+    if (!stallSnap.exists) {
+      throw new HttpsError("not-found", "Stall does not exist.");
+    }
     const stallData = stallSnap.data() ?? {};
+    if (stallData.status === "occupied" || stallData.tenantId) {
+      throw new HttpsError("failed-precondition", "Stall is already occupied.");
+    }
 
     // Create Firebase Auth account
 
@@ -241,10 +326,9 @@ export const adminResetTenantPassword = onCall(async (request) => {
   }
   await checkRateLimit(`adminResetTenantPassword:${callerUid}`, 20, 60 * 60_000);
 
-  const { uid, newPassword } = request.data as { uid: string; newPassword: string };
-  if (!uid || !newPassword) {
-    throw new HttpsError("invalid-argument", "Missing password data");
-  }
+  const input = inputObject(request.data);
+  const uid = validUid(input.uid);
+  const newPassword = validPassword(input.newPassword);
 
   // Verify caller is an admin using the caller's OWN verified auth identity
   // (request.auth.uid, set by Firebase from the caller's ID token) -- NOT a
@@ -252,6 +336,7 @@ export const adminResetTenantPassword = onCall(async (request) => {
   // used to let anyone claim to be any admin and reset any tenant's
   // password; see CAPSTONE_NOTES.txt for the full writeup.
   await assertIsAdmin(callerUid);
+  await assertTargetRole(uid, "tenant");
 
   await auth.updateUser(uid, { password: newPassword });
 
@@ -278,16 +363,8 @@ export const syncPersonalEmail = onCall(async (request) => {
   // previously trusted a client-supplied "callerUid" field instead, which
   // let anyone change ANY account's login email (and from there, take it
   // over via a normal password reset). See CAPSTONE_NOTES.txt.
-  const { personalEmail } = request.data as { personalEmail: string };
-
-  if (!personalEmail) {
-    throw new HttpsError("invalid-argument", "Missing email data");
-  }
-
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(personalEmail)) {
-    throw new HttpsError("invalid-argument", "Invalid email address");
-  }
+  const input = inputObject(request.data);
+  const personalEmail = validEmail(input.personalEmail);
 
   const userDoc = await db.collection("users").doc(callerUid).get();
   if (!userDoc.exists) {
@@ -327,10 +404,9 @@ export const ownerResetAdminPassword = onCall(async (request) => {
   }
   await checkRateLimit(`ownerResetAdminPassword:${callerUid}`, 20, 60 * 60_000);
 
-  const { uid, newPassword } = request.data as { uid: string; newPassword: string };
-  if (!uid || !newPassword) {
-    throw new HttpsError("invalid-argument", "Missing password data");
-  }
+  const input = inputObject(request.data);
+  const uid = validUid(input.uid);
+  const newPassword = validPassword(input.newPassword);
 
   // Verify caller is an owner using the caller's OWN verified auth identity
   // (request.auth.uid) -- NOT a client-supplied uid. See CAPSTONE_NOTES.txt.
@@ -358,17 +434,12 @@ export const ownerUpdateAdminProfile = onCall(async (request) => {
   }
   await checkRateLimit(`ownerUpdateAdminProfile:${callerUid}`, 30, 60 * 60_000);
 
-  const { uid, firstName, lastName, username, contactNo } = request.data as {
-    uid: string;
-    firstName: string;
-    lastName: string;
-    username: string;
-    contactNo: string;
-  };
-
-  if (!uid || !firstName || !lastName || !username || !contactNo) {
-    throw new HttpsError("invalid-argument", "Missing profile data");
-  }
+  const input = inputObject(request.data);
+  const uid = validUid(input.uid);
+  const firstName = validName(input.firstName, "First name");
+  const lastName = validName(input.lastName, "Last name");
+  const username = validUsername(input.username);
+  const contactNo = validPhilippinePhone(input.contactNo);
 
   // Verify caller is an owner using the caller's OWN verified auth identity
   // (request.auth.uid) -- NOT a client-supplied uid. See CAPSTONE_NOTES.txt.
@@ -405,9 +476,11 @@ export const adminSetAccountDisabled = onCall(async (request) => {
   }
   await checkRateLimit(`adminSetAccountDisabled:${callerUid}`, 30, 60 * 60_000);
 
-  const { uid, disabled } = request.data as { uid: string; disabled: boolean };
+  const input = inputObject(request.data);
+  const uid = validUid(input.uid);
+  const disabled = input.disabled;
 
-  if (!uid || typeof disabled !== "boolean") {
+  if (typeof disabled !== "boolean") {
     throw new HttpsError("invalid-argument", "Missing account data");
   }
 
@@ -415,6 +488,7 @@ export const adminSetAccountDisabled = onCall(async (request) => {
   // the caller's OWN auth identity (request.auth.uid), not a client-supplied
   // uid. See CAPSTONE_NOTES.txt.
   await assertIsAdminOrOwner(callerUid);
+  await assertTargetRole(uid, "tenant");
 
   await auth.updateUser(uid, { disabled });
 
@@ -737,11 +811,8 @@ export const adminDeleteTenant = onCall(async (request) => {
   }
   await checkRateLimit(`adminDeleteTenant:${callerUid}`, 30, 60 * 60_000);
 
-  const { uid } = request.data as { uid: string };
-
-  if (!uid) {
-    throw new HttpsError("invalid-argument", "Missing required fields");
-  }
+  const input = inputObject(request.data);
+  const uid = validUid(input.uid);
 
   // Admin or owner can permanently delete an archived tenant. Verified via
   // the caller's OWN auth identity (request.auth.uid), not a client-supplied
@@ -749,6 +820,7 @@ export const adminDeleteTenant = onCall(async (request) => {
   await assertIsAdminOrOwner(callerUid);
 
   // Delete Firebase Auth account — silently ignore if already gone
+  await assertTargetRole(uid, "tenant");
   try {
     await auth.deleteUser(uid);
   } catch (err: any) {
@@ -777,14 +849,13 @@ export const ownerSaveSecurityQuestions = onCall(async (request) => {
   }
   await checkRateLimit(`ownerSaveSecurityQuestions:${callerUid}`, 10, 60 * 60_000);
 
-  const { securityQuestions } = request.data as {
-    securityQuestions: { question: string; answer: string }[];
-  };
+  const input = inputObject(request.data);
+  const securityQuestions = input.securityQuestions;
 
   if (
     !Array.isArray(securityQuestions) ||
     securityQuestions.length !== 3 ||
-    securityQuestions.some((q) => !q.question || !q.answer)
+    securityQuestions.some((q) => !q || typeof q !== "object" || Array.isArray(q))
   ) {
     throw new HttpsError("invalid-argument", "Missing security question data");
   }
@@ -796,12 +867,23 @@ export const ownerSaveSecurityQuestions = onCall(async (request) => {
   // See CAPSTONE_NOTES.txt.
   await assertIsOwner(callerUid);
 
+  const cleanQuestions = securityQuestions.map((entry) => {
+    const q = entry as Record<string, unknown>;
+    return {
+      question: requiredText(q.question, "Security question", 160),
+      answer: requiredText(q.answer, "Security answer", 120),
+    };
+  });
+  if (new Set(cleanQuestions.map((q) => q.question.toLowerCase())).size !== 3) {
+    throw new HttpsError("invalid-argument", "Security questions must be different.");
+  }
+
   // The client re-authenticates with the owner's current password via
   // Firebase Auth (see owner-profile.tsx) immediately before calling this —
   // that's the real verification, so nothing about the password itself
   // needs to travel here or ever be stored. Only the security Q&A is kept.
   await db.collection("ownerRecovery").doc(callerUid).set({
-    securityQuestions,
+    securityQuestions: cleanQuestions,
     updatedAt: FieldValue.serverTimestamp(),
   });
 
@@ -832,14 +914,14 @@ export const getOwnerSecurityQuestions = onCall(async () => {
 });
 
 export const verifyOwnerSecurityAnswers = onCall(async (request) => {
-  const { ownerId, answers } = request.data as {
-    ownerId: string;
-    answers: string[];
-  };
+  const input = inputObject(request.data);
+  const ownerId = validUid(input.ownerId);
+  const answers = input.answers;
 
-  if (!ownerId || !Array.isArray(answers) || answers.length !== 3) {
+  if (!Array.isArray(answers) || answers.length !== 3) {
     throw new HttpsError("invalid-argument", "Missing answers.");
   }
+  const cleanAnswers = answers.map((answer) => requiredText(answer, "Answer", 120));
   // Keyed per-ownerId (not per-caller, since there's no caller identity yet)
   // so guessing security answers can't be scripted.
   await checkRateLimit(`verifyOwnerSecurityAnswers:${ownerId}`, 5, 15 * 60_000);
@@ -857,7 +939,7 @@ export const verifyOwnerSecurityAnswers = onCall(async (request) => {
   const normalize = (s: string) => (s ?? "").trim().toLowerCase();
   const allMatch =
     stored.length === 3 &&
-    stored.every((q, i) => normalize(q.answer) === normalize(answers[i]));
+    stored.every((q, i) => normalize(q.answer) === normalize(cleanAnswers[i]));
 
   if (!allMatch) {
     throw new HttpsError("permission-denied", "One or more answers are incorrect.");
@@ -899,9 +981,11 @@ export const verifyOwnerSecurityAnswers = onCall(async (request) => {
 // a raw email instead", not an error -- the client already falls back to
 // that.
 export const resolveLoginEmail = onCall(async (request) => {
-  const { identifier, role } = request.data as { identifier: string; role: string };
-  if (!identifier || !role) {
-    throw new HttpsError("invalid-argument", "Identifier and role are required.");
+  const input = inputObject(request.data);
+  const identifier = requiredText(input.identifier, "Identifier", 254);
+  const role = input.role;
+  if (role !== "admin" && role !== "owner") {
+    throw new HttpsError("invalid-argument", "Invalid account role.");
   }
   await checkRateLimit(`resolveLoginEmail:${role}:${identifier}`, 15, 5 * 60_000);
 
@@ -946,12 +1030,8 @@ function maskPhone(phone: string): string {
 }
 
 export const sendResetOtp = onCall({secrets: [semaphoreApiKey]}, async (request) => {
-  const { email } = request.data as { email: string };
-  if (!email) throw new HttpsError("invalid-argument", "Email is required.");
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) {
-    throw new HttpsError("invalid-argument", "Invalid email address.");
-  }
+  const input = inputObject(request.data);
+  const email = validEmail(input.email);
   await checkRateLimit(`sendResetOtp:${email}`, 3, 15 * 60_000);
 
   const snap = await db
@@ -1061,10 +1141,9 @@ export const sendResetOtp = onCall({secrets: [semaphoreApiKey]}, async (request)
 });
 
 export const verifyResetOtp = onCall(async (request) => {
-  const { email, otp } = request.data as { email: string; otp: string };
-  if (!email || !otp) {
-    throw new HttpsError("invalid-argument", "Email and code are required.");
-  }
+  const input = inputObject(request.data);
+  const email = validEmail(input.email);
+  const otp = typeof input.otp === "string" ? input.otp.trim() : "";
   if (!/^\d{6}$/.test(otp)) {
     throw new HttpsError("invalid-argument", "Enter the 6-digit code.");
   }
@@ -1150,8 +1229,8 @@ export const verifyResetOtp = onCall(async (request) => {
 });
 
 export const adminForgotPassword = onCall(async (request) => {
-  const { email } = request.data as { email: string };
-  if (!email) throw new HttpsError("invalid-argument", "Email is required.");
+  const input = inputObject(request.data);
+  const email = validEmail(input.email);
   await checkRateLimit(`adminForgotPassword:${email}`, 5, 15 * 60_000);
 
   const snap = await db
@@ -1287,10 +1366,8 @@ export const checkTenantArchiveEligibility = onCall(async (request) => {
   }
   await assertIsAdminOrOwner(callerUid);
 
-  const { uid } = request.data as { uid?: string };
-  if (!uid) {
-    throw new HttpsError("invalid-argument", "Tenant ID is required.");
-  }
+  const input = inputObject(request.data);
+  const uid = validUid(input.uid);
 
   const tenantSnap = await db.collection("users").doc(uid).get();
   if (!tenantSnap.exists || tenantSnap.data()?.role !== "tenant") {
