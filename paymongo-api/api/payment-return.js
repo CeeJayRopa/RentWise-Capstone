@@ -23,8 +23,8 @@ module.exports = async function handler(req, res) {
     res.end();
   };
 
-  if (!pi) {
-    console.log("payment-return: no payment intent id in query, redirecting to cancel");
+  if (typeof pi !== "string" || !/^pi_[A-Za-z0-9_-]+$/.test(pi) || pi.length > 200) {
+    console.log("payment-return: invalid payment intent id, redirecting to cancel");
     return redirectTo("rentwise://payment-cancel");
   }
 
@@ -42,8 +42,8 @@ module.exports = async function handler(req, res) {
       );
 
       if (!intentRes.ok) {
-        console.log(`payment-return: status check HTTP ${intentRes.status} on attempt ${attempt}, falling back to success`);
-        return redirectTo(successUrl);
+        console.log(`payment-return: status check HTTP ${intentRes.status} on attempt ${attempt}, redirecting to cancel`);
+        return redirectTo("rentwise://payment-cancel");
       }
 
       const intent = await intentRes.json();
@@ -66,6 +66,6 @@ module.exports = async function handler(req, res) {
     return redirectTo("rentwise://payment-cancel");
   } catch (err) {
     console.error("payment-return status check error:", err);
-    return redirectTo(successUrl);
+    return redirectTo("rentwise://payment-cancel");
   }
 };
