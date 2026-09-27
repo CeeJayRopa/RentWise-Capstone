@@ -155,11 +155,10 @@ service cloud.firestore {
     }
 
     // ── passwordResetRequests ──────────────────────────────────────────
-    // Every app's forgot-password flow files this before the user is
-    // signed in, so create must stay open. Reading/managing the queue is
-    // staff-only.
+    // Reset requests are created by the validated/rate-limited callable
+    // functions. The Admin SDK bypasses rules, so clients need no write path.
     match /passwordResetRequests/{requestId} {
-      allow create: if true;
+      allow create: if false;
       allow read, update: if isStaff();
       allow delete: if isStaff();
     }

@@ -1,6 +1,7 @@
 import { setGlobalOptions } from "firebase-functions";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
+import { defineSecret } from "firebase-functions/params";
 
 export { sendPaymentReminders } from "./reminderScheduler";
 export { sendPushOnNotification } from "./pushNotifications";
@@ -24,6 +25,7 @@ initializeApp();
 
 const db = getFirestore();
 const auth = getAuth();
+const paymongoSecretKey = defineSecret("PAYMONGO_SECRET_KEY");
 
 // Limit instances
 setGlobalOptions({
@@ -515,7 +517,9 @@ export const adminSetAccountDisabled = onCall(async (request) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Creates the PayMongo intent from a server-validated amount and records a
 // short-lived, one-use session tying that intent to the authenticated tenant.
-export const createTenantPaymongoPaymentIntent = onCall(async (request) => {
+export const createTenantPaymongoPaymentIntent = onCall(
+  {secrets: [paymongoSecretKey]},
+  async (request) => {
   const callerUid = request.auth?.uid;
   if (!callerUid) throw new HttpsError("unauthenticated", "You must be logged in.");
   await checkRateLimit(`createTenantPaymongoPaymentIntent:${callerUid}`, 10, 60 * 60_000);
@@ -557,7 +561,7 @@ export const createTenantPaymongoPaymentIntent = onCall(async (request) => {
     );
   }
 
-  const secretKey = process.env.PAYMONGO_SECRET_KEY ?? "";
+  const secretKey = paymongoSecretKey.value();
   if (!secretKey) {
     console.error("PAYMONGO_SECRET_KEY is not configured");
     throw new HttpsError("failed-precondition", "Payment service is not configured.");
@@ -650,7 +654,9 @@ export const createTenantPaymongoPaymentIntent = onCall(async (request) => {
 
 // Tenant payment records are created server-side so a modified app cannot
 // manufacture an approved payment or attribute one to another account.
-export const createTenantPendingPayment = onCall(async (request) => {
+export const createTenantPendingPayment = onCall(
+  {secrets: [paymongoSecretKey]},
+  async (request) => {
   const callerUid = request.auth?.uid;
   if (!callerUid) throw new HttpsError("unauthenticated", "You must be logged in.");
   await checkRateLimit(`createTenantPendingPayment:${callerUid}`, 20, 60 * 60_000);
@@ -693,7 +699,7 @@ export const createTenantPendingPayment = onCall(async (request) => {
     throw new HttpsError("failed-precondition", "Payment method does not match the session.");
   }
 
-  const secretKey = process.env.PAYMONGO_SECRET_KEY ?? "";
+  const secretKey = paymongoSecretKey.value();
   if (!secretKey) throw new HttpsError("failed-precondition", "Payment service is not configured.");
   const statusResponse = await fetch(
     `https://api.paymongo.com/v1/payment_intents/${encodeURIComponent(checkoutSessionId)}`,
