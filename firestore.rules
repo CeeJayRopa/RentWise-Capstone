@@ -76,10 +76,10 @@ service cloud.firestore {
       allow read: if isStaff()
         || (isTenant() && resource.data.userId == request.auth.uid);
 
-      // Tenant creates their own (pending) online payment; staff record
-      // cash payments (already-approved) on a tenant's behalf.
-      allow create: if isStaff()
-        || (isTenant() && request.resource.data.userId == request.auth.uid);
+      // Tenant online payments are created by createTenantPendingPayment,
+      // where identity and protected financial fields are server-controlled.
+      // Staff may still record cash payments directly.
+      allow create: if isStaff();
 
       // Staff confirm/approve any payment. A tenant may only attach their
       // own receipt image to a payment they already own -- never touch

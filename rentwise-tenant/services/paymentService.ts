@@ -1,13 +1,12 @@
 import {
   collection,
-  addDoc,
   query,
   where,
   getDocs,
-  serverTimestamp,
 } from "firebase/firestore";
+import { getFunctions, httpsCallable } from "firebase/functions";
 
-import { db } from "../shared/firebaseConfig";
+import { db, firebaseApp } from "../shared/firebaseConfig";
 import { createPaymongoPaymentIntent, PaymentMethodType } from "./paymongo";
 
 export interface Payment {
@@ -29,12 +28,12 @@ export interface Payment {
 }
 
 export async function createPayment(data: any) {
-  const ref = collection(db, "payments");
-  const payload = { ...data, date: serverTimestamp() };
-
-  const docRef = await addDoc(ref, payload);
-
-  return docRef.id;
+  const createPendingPayment = httpsCallable<
+    Record<string, unknown>,
+    { paymentId: string; receiptNo: string }
+  >(getFunctions(firebaseApp), "createTenantPendingPayment");
+  const result = await createPendingPayment(data);
+  return result.data.paymentId;
 }
 
 export async function createOnlinePayment(

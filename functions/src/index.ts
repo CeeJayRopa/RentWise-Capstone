@@ -506,6 +506,115 @@ export const createPaymongoCheckout = httpsV1.onCall(
 // rentwise-admin/shared/services/accountServices.ts and uncomment the
 // FREE PLAN block in that same file.
 // ─────────────────────────────────────────────────────────────────────────────
+// Tenant payment records are created server-side so a modified app cannot
+// manufacture an approved payment or attribute one to another account.
+export const createTenantPendingPayment = onCall(async (request) => {
+  const callerUid = request.auth?.uid;
+  if (!callerUid) throw new HttpsError("unauthenticated", "You must be logged in.");
+  await checkRateLimit(`createTenantPendingPayment:${callerUid}`, 20, 60 * 60_000);
+
+  const input = request.data as Record<string, unknown> | null;
+  if (!input || typeof input !== "object") {
+    throw new HttpsError("invalid-argument", "Payment data is required.");
+  }
+  const amount = Number(input.amount);
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) {
+    throw new HttpsError("invalid-argument", "Invalid payment amount.");
+  }
+  const paymentMethod = input.paymentMethod;
+  if (paymentMethod !== "GCash" && paymentMethod !== "Maya") {
+    throw new HttpsError("invalid-argument", "Invalid payment method.");
+  }
+  const checkoutSessionId = typeof input.checkoutSessionId === "string"
+    ? input.checkoutSessionId.trim()
+    : "";
+  if (!checkoutSessionId || checkoutSessionId.length > 200) {
+    throw new HttpsError("invalid-argument", "Invalid payment session.");
+  }
+
+  const tenantSnap = await db.collection("users").doc(callerUid).get();
+  if (!tenantSnap.exists || tenantSnap.data()?.role !== "tenant") {
+    throw new HttpsError("permission-denied", "Tenant access required.");
+  }
+  const tenant = tenantSnap.data()!;
+  if (tenant.status && tenant.status !== "active") {
+    throw new HttpsError("permission-denied", "This tenant account is not active.");
+  }
+  const stallId = typeof tenant.stallId === "string" ? tenant.stallId : "";
+  const stallSnap = stallId ? await db.collection("stalls").doc(stallId).get() : null;
+  const stall = stallSnap?.data() ?? {};
+
+  const finiteNonNegative = (value: unknown): number => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric >= 0 ? numeric : 0;
+  };
+  const boundedInteger = (value: unknown, fallback: number): number => {
+    const numeric = Number(value);
+    return Number.isInteger(numeric) && numeric >= 0 && numeric <= 100
+      ? numeric
+      : fallback;
+  };
+  const rawReceipt = input.receiptData && typeof input.receiptData === "object"
+    ? input.receiptData as Record<string, unknown>
+    : {};
+  const rawBreakdown = Array.isArray(rawReceipt.breakdown)
+    ? rawReceipt.breakdown.slice(0, 40)
+    : [];
+  const breakdown = rawBreakdown.flatMap((line) => {
+    if (!line || typeof line !== "object") return [];
+    const item = line as Record<string, unknown>;
+    const label = typeof item.label === "string" ? item.label.trim().slice(0, 120) : "";
+    const lineAmount = Number(item.amount);
+    return label && Number.isFinite(lineAmount) && lineAmount >= 0
+      ? [{label, amount: lineAmount}]
+      : [];
+  });
+
+  const tenantName = `${tenant.firstName ?? ""} ${tenant.lastName ?? ""}`.trim();
+  const receiptNo = `RW-ONLINE-${Date.now().toString().slice(-8)}`;
+  const rentAmount = finiteNonNegative(input.rentAmount);
+  const periodsCovered = boundedInteger(input.periodsCovered, 1);
+  const periodsAdvance = boundedInteger(input.periodsAdvance, 0);
+  const receiptData = {
+    receiptNo,
+    tenantName,
+    buildingNumber: String(stall.buildingNumber ?? ""),
+    spaceId: String(stall.spaceId ?? ""),
+    paymentMethod,
+    date: new Date().toISOString(),
+    rentAmount,
+    payment: amount,
+    change: 0,
+    status: "PENDING",
+    breakdown,
+  };
+
+  const paymentRef = await db.collection("payments").add({
+    userId: callerUid,
+    amount,
+    rentAmount,
+    periodsCovered,
+    periodsAdvance,
+    method: "online",
+    status: "pending",
+    tenantName,
+    buildingNumber: String(stall.buildingNumber ?? ""),
+    spaceId: String(stall.spaceId ?? ""),
+    stallId,
+    receiptNo,
+    checkoutSessionId,
+    paymentMethod,
+    receiptData,
+    receipt: null,
+    paymentId: null,
+    cashReceived: null,
+    change: 0,
+    date: FieldValue.serverTimestamp(),
+  });
+
+  return {paymentId: paymentRef.id, receiptNo};
+});
+
 export const adminDeleteTenant = onCall(async (request) => {
   const callerUid = request.auth?.uid;
   if (!callerUid) {
