@@ -1,5 +1,6 @@
 import { setGlobalOptions } from "firebase-functions";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { https as httpsV1 } from "firebase-functions/v1";
 
 export { sendPaymentReminders } from "./reminderScheduler";
@@ -1059,29 +1060,53 @@ function requiredPublicString(value: unknown, field: string, maxLength: number):
   return clean;
 }
 
-export const getPublicStalls = onCall(async (request) => {
-  // The guest home page and map each refresh every 15 seconds. Allow several
-  // simultaneous tabs/devices behind the same public IP while still placing
-  // a firm ceiling on automated scraping.
-  await checkRateLimit(publicCallerKey(request, "stalls"), 1200, 60 * 60_000);
+const publicStallsCacheRef = db.collection("publicApiCache").doc("stalls");
+
+function publicStallData(id: string, data: FirebaseFirestore.DocumentData) {
+  const numericPrice = Number(data.price);
+  return {
+    id,
+    name: typeof data.name === "string" ? data.name : "",
+    spaceId: typeof data.spaceId === "string" ? data.spaceId : "",
+    status: typeof data.status === "string" ? data.status : "unknown",
+    buildingNumber: typeof data.buildingNumber === "string" ? data.buildingNumber : "",
+    category: typeof data.category === "string" ? data.category : "",
+    marketType: typeof data.marketType === "string" ? data.marketType : "",
+    width: Number.isFinite(Number(data.width)) ? Number(data.width) : null,
+    length: Number.isFinite(Number(data.length)) ? Number(data.length) : null,
+    price: Number.isFinite(numericPrice) ? numericPrice : null,
+    spaceDimension: typeof data.spaceDimension === "string" ? data.spaceDimension : "",
+  };
+}
+
+async function rebuildPublicStallsCache() {
   const snapshot = await db.collection("stalls").get();
-  return snapshot.docs.map((doc) => {
-    const data = doc.data();
-    const numericPrice = Number(data.price);
-    return {
-      id: doc.id,
-      name: typeof data.name === "string" ? data.name : "",
-      spaceId: typeof data.spaceId === "string" ? data.spaceId : "",
-      status: typeof data.status === "string" ? data.status : "unknown",
-      buildingNumber: typeof data.buildingNumber === "string" ? data.buildingNumber : "",
-      category: typeof data.category === "string" ? data.category : "",
-      marketType: typeof data.marketType === "string" ? data.marketType : "",
-      width: Number.isFinite(Number(data.width)) ? Number(data.width) : null,
-      length: Number.isFinite(Number(data.length)) ? Number(data.length) : null,
-      price: Number.isFinite(numericPrice) ? numericPrice : null,
-      spaceDimension: typeof data.spaceDimension === "string" ? data.spaceDimension : "",
-    };
+  const stalls = snapshot.docs.map((doc) => publicStallData(doc.id, doc.data()));
+  await publicStallsCacheRef.set({
+    stalls,
+    updatedAt: FieldValue.serverTimestamp(),
+    sourceCount: stalls.length,
   });
+  return stalls;
+}
+
+// Rebuild the one-document public projection only when source stall data
+// changes. The cache contains no tenant identity, contact, or payment fields.
+export const syncPublicStallsCache = onDocumentWritten("stalls/{stallId}", async () => {
+  await rebuildPublicStallsCache();
+});
+
+export const getPublicStalls = onCall(async (request) => {
+  // The guest app refreshes at a low frequency, and each refresh now costs one
+  // cache-document read instead of one read for every stall in the market.
+  await checkRateLimit(publicCallerKey(request, "stalls"), 120, 60 * 60_000);
+  const cacheSnap = await publicStallsCacheRef.get();
+  const cachedStalls = cacheSnap.data()?.stalls;
+  if (Array.isArray(cachedStalls)) return cachedStalls;
+
+  // Safe self-seeding path for the first request after deployment or if the
+  // cache document is ever removed.
+  return rebuildPublicStallsCache();
 });
 
 export const submitPublicContactMessage = onCall(async (request) => {
