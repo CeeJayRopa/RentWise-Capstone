@@ -1,7 +1,6 @@
 import { setGlobalOptions } from "firebase-functions";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
-import { https as httpsV1 } from "firebase-functions/v1";
 
 export { sendPaymentReminders } from "./reminderScheduler";
 export { sendPushOnNotification } from "./pushNotifications";
@@ -433,73 +432,6 @@ export const adminSetAccountDisabled = onCall(async (request) => {
 // =====================================
 // CREATE PAYMONGO CHECKOUT SESSION
 // =====================================
-
-export const createPaymongoCheckout = httpsV1.onCall(
-  async (data: { amount: number }, context: httpsV1.CallableContext) => {
-    const uid = context.auth?.uid;
-
-    if (!uid) {
-      throw new httpsV1.HttpsError("unauthenticated", "Login required");
-    }
-
-    const { amount } = data;
-
-    if (!amount || Number(amount) <= 0) {
-      throw new httpsV1.HttpsError("invalid-argument", "Invalid amount");
-    }
-
-    const amountInCentavos = Math.round(Number(amount) * 100);
-    const secretKey = process.env.PAYMONGO_SECRET_KEY ?? "";
-    const encoded = Buffer.from(`${secretKey}:`).toString("base64");
-
-    const response = await fetch(
-      "https://api.paymongo.com/v1/checkout_sessions",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Basic ${encoded}`,
-        },
-        body: JSON.stringify({
-          data: {
-            attributes: {
-              line_items: [
-                {
-                  currency: "PHP",
-                  amount: amountInCentavos,
-                  name: "RentWise Online Rent Payment",
-                  quantity: 1,
-                },
-              ],
-              payment_method_types: ["gcash", "paymaya"],
-              description: "RentWise Online Rent Payment",
-              success_url: "rentwise://payment-success",
-              cancel_url: "rentwise://payment-cancel",
-            },
-          },
-        }),
-      },
-    );
-
-    if (!response.ok) {
-      const errBody = (await response.json()) as Record<string, unknown>;
-      console.error("PayMongo error:", errBody);
-      throw new httpsV1.HttpsError(
-        "internal",
-        "Failed to create checkout session",
-      );
-    }
-
-    const parsed = (await response.json()) as {
-      data: { id: string; attributes: { checkout_url: string } };
-    };
-
-    return {
-      checkoutSessionId: parsed.data.id,
-      checkoutUrl: parsed.data.attributes.checkout_url,
-    };
-  },
-);
 
 // ── BLAZE PLAN ONLY ──────────────────────────────────────────────────────────
 // After capstone defense: delete this entire function and downgrade Firebase
