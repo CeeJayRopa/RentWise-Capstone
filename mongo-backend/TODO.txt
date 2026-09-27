@@ -1,0 +1,157 @@
+mongo-backend - What's Missing, and How to Add Each Piece
+=============================================================
+
+This lists everything NOT built yet in the MongoDB failover backend, plus
+concrete instructions for adding each piece using the patterns already
+established in the existing code. See MONGODB_BACKUP_ROADMAP.md (repo root)
+for the big-picture plan and week-by-week order this fits into.
+
+Existing files to use as templates are named explicitly below - copy their
+pattern, don't reinvent it.
+
+
+1. THE APPS CAN'T TALK TO THIS BACKEND YET (most important gap)
+-----------------------------------------------------------------
+Nothing on the client side knows this server exists. All 4 apps still only
+call Firebase directly.
+
+How to fix:
+  File to edit: shared/firebaseConfig.ts (the repo-root one - all 4 apps'
+  own shared/firebaseConfig.ts re-export from it, confirmed identical
+  across all 4 apps).
+
+  Add a check at the top of that file:
+    const BACKEND = process.env.EXPO_PUBLIC_BACKEND ?? "firebase";
+
+  If BACKEND === "mongo", export a replacement `db`/`auth`/`storage` object
+  from a NEW file (e.g. shared/mongoClient.ts) that implements the same
+  method shapes the real app code already calls (collection(), doc(),
+  getDoc(), setDoc(), onSnapshot(), etc.) but internally makes HTTP calls to
+  this mongo-backend server instead of talking to Firestore. If those
+  method shapes are matched closely enough, most of the 58 files that call
+  Firestore directly need ZERO changes - this is the single highest-value
+  piece of remaining work.
+
+  Each app's own .env needs: EXPO_PUBLIC_BACKEND=mongo (only set this when
+  actually testing/using the failover - defaults to "firebase" otherwise).
+
+  NOTE: this specific file was intentionally NOT touched during this
+  session per an explicit "don't edit existing files" instruction. It's
+  the very next thing to do once that's no longer a constraint.
+
+
+2. MISSING COLLECTIONS (13 of 16 have no MongoDB model/routes yet)
+----------------------------------------------------------------------
+Already built: users, stalls, payments (see src/models/User.ts,
+Stall.ts, Payment.ts and their matching src/routes/ files - copy this exact
+pattern for each one below).
+
+The pattern for each new collection:
+  1. Find where the real Firestore document gets written in the actual app
+     code (grep for the collection name, e.g. `collection(db, "notifications")`)
+     to get the REAL field shape - don't guess field names.
+  2. Create src/models/<Name>.ts - a Mongoose schema matching those exact
+     fields (see Payment.ts's comment style for how to document where each
+     field was verified from).
+  3. Create src/routes/<name>.ts - routes mirroring whatever Firestore
+     calls (getDocs/onSnapshot/addDoc/updateDoc) the real app code makes
+     against that collection. Use requireAuth() from middleware/auth.ts for
+     access control, matching the role each Firestore security rule
+     currently restricts to.
+  4. Wire the new route into src/server.ts (one line: app.use("/<name>", ...)).
+  5. Add the collection to src/scripts/syncFromFirestore.ts following the
+     same upsert pattern already used for users/stalls/payments.
+
+Collections still needing this treatment (from the earlier full inventory):
+  - notifications        (in-app notifications - check rentwise-tenant's
+                           notification.tsx and NotificationBell.tsx for shape)
+  - archives              (archived tenant/user/stall records - check
+                           rentwise-admin's archives.tsx)
+  - dailyReports          (owner daily report entries)
+  - updates               (admin/owner update reports - daily-reports.tsx,
+                           UpdatesReportFAB.tsx)
+  - passwordResetRequests (check functions/src/index.ts's
+                           generateTenantResetLink/tenantForgotPassword)
+  - contactMessages       (guest contact-form submissions)
+  - arObjects             (AR catalog items - probably low priority, AR
+                           content is managed out-of-band already)
+  - arPlacementEvents     (AR analytics logging - low priority)
+  - settings              (reminder schedule settings)
+  - rateLimits            (Cloud Functions internal rate limiting - only
+                           needed once the Cloud Functions themselves are
+                           reimplemented, see item 4 below)
+  - ownerRecovery         (owner security-question recovery data - check
+                           functions/src/index.ts's ownerSaveSecurityQuestions)
+  - sms_logs, reminder_logs (Admin-SDK-only logging collections - low
+                           priority, not read by any client app directly)
+
+Suggested order: notifications and archives first (most user-facing),
+settings/passwordResetRequests next (needed for auth flows), the rest as
+time allows.
+
+
+3. NO REAL-TIME UPDATES (no onSnapshot equivalent)
+-------------------------------------------------------
+Every screen that currently uses Firestore's onSnapshot() for live updates
+(confirmed in the earlier scan: profile.tsx, dashboard.tsx, payments.tsx,
+financials.tsx, and more) has no live-update equivalent against this
+backend yet - right now, every route here is request/response only, no
+push.
+
+How to add:
+  1. Add Socket.IO to mongo-backend (npm install socket.io).
+  2. In src/server.ts, wrap the Express app in an HTTP server and attach a
+     Socket.IO server to it.
+  3. Use Mongoose's built-in change-stream watching (Model.watch()) on
+     each collection that needs live updates - when a change fires, emit
+     it over the matching Socket.IO room.
+  4. On the client side, the mongoClient.ts shim from item 1 needs its
+     onSnapshot()-equivalent method to subscribe to that Socket.IO room
+     and call the callback the same way Firestore's onSnapshot would.
+  Requires MongoDB Atlas (or any replica-set-backed MongoDB) - change
+  streams don't work on a standalone unreplicated MongoDB instance.
+
+
+4. CLOUD FUNCTIONS NOT REIMPLEMENTED (17 functions, 0 done)
+------------------------------------------------------------------
+None of the real Cloud Functions logic exists here yet. Full list, from
+functions/src/index.ts unless noted:
+  adminCreateTenant, adminResetTenantPassword, syncPersonalEmail,
+  ownerResetAdminPassword, ownerUpdateAdminProfile, adminSetAccountDisabled,
+  createPaymongoCheckout, adminDeleteTenant, ownerSaveSecurityQuestions,
+  getOwnerSecurityQuestions, verifyOwnerSecurityAnswers,
+  generateTenantResetLink, resolveLoginEmail, tenantForgotPassword,
+  adminForgotPassword, sendPushOnNotification (pushNotifications.ts),
+  notifyAdminsOnPayment (paymentNotifier.ts),
+  cleanupOldDailyReports (reportCleanup.ts),
+  sendPaymentReminders (reminderScheduler.ts)
+
+How to add each one:
+  1. Read the real function's body in its source file to see exactly what
+     it does (auth checks, Firestore reads/writes, external API calls).
+  2. Create a matching Express route (e.g. POST /admin/create-tenant),
+     protected with requireAuth("admin") (or whichever role the real
+     assertIsAdmin/assertIsOwner call in that function required - see
+     functions/src/index.ts:33-83 for those checks).
+  3. Reimplement the body using the Mongoose models instead of Firestore
+     admin-SDK calls - the User.ts/Stall.ts models already match the real
+     document shapes, so this is mostly a mechanical translation.
+  4. createPaymongoCheckout specifically: the real PayMongo API-call logic
+     (functions/src/index.ts:424-478) can likely be copied close to
+     verbatim - PayMongo itself doesn't care which backend calls it, only
+     the Firestore-specific parts of that function need translating.
+
+Suggested order (matches the roadmap's Week 3): password reset/recovery
+flows first (blocks account-recovery testing), then admin/owner account
+actions, then createPaymongoCheckout, then the scheduled functions
+(cleanupOldDailyReports, sendPaymentReminders - these need a job scheduler
+like node-cron since there's no Cloud Scheduler equivalent built in).
+
+
+5. FILE STORAGE - NOT CONFIRMED EITHER WAY
+------------------------------------------------
+Not yet confirmed whether this needs any work at all. AR models/thumbnails
+and payment receipts may already be host-agnostic (Cloudinary/direct URLs)
+rather than tied to Firebase Storage specifically - check
+rentwise-guest/services/modelService.ts and wherever receipt uploads happen
+before assuming this needs building.
