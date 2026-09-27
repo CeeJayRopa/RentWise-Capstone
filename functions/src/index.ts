@@ -18,6 +18,7 @@ import {
   semaphoreApiKey,
   sendSMSWithRetry,
 } from "./smsService";
+import { getOutstandingBalance } from "./paymentChecker";
 
 // Firebase Admin initialization
 initializeApp();
@@ -506,6 +507,141 @@ export const createPaymongoCheckout = httpsV1.onCall(
 // rentwise-admin/shared/services/accountServices.ts and uncomment the
 // FREE PLAN block in that same file.
 // ─────────────────────────────────────────────────────────────────────────────
+// Creates the PayMongo intent from a server-validated amount and records a
+// short-lived, one-use session tying that intent to the authenticated tenant.
+export const createTenantPaymongoPaymentIntent = onCall(async (request) => {
+  const callerUid = request.auth?.uid;
+  if (!callerUid) throw new HttpsError("unauthenticated", "You must be logged in.");
+  await checkRateLimit(`createTenantPaymongoPaymentIntent:${callerUid}`, 10, 60 * 60_000);
+
+  const input = request.data as Record<string, unknown> | null;
+  const requestedAmount = Number(input?.amount);
+  const paymentMethod = input?.paymentMethod;
+  if (!Number.isFinite(requestedAmount) || requestedAmount <= 0 || requestedAmount > 10_000_000) {
+    throw new HttpsError("invalid-argument", "Invalid payment amount.");
+  }
+  if (paymentMethod !== "gcash" && paymentMethod !== "paymaya") {
+    throw new HttpsError("invalid-argument", "Invalid payment method.");
+  }
+
+  const tenantSnap = await db.collection("users").doc(callerUid).get();
+  if (!tenantSnap.exists || tenantSnap.data()?.role !== "tenant") {
+    throw new HttpsError("permission-denied", "Tenant access required.");
+  }
+  const tenant = tenantSnap.data()!;
+  if (tenant.status && tenant.status !== "active") {
+    throw new HttpsError("permission-denied", "This tenant account is not active.");
+  }
+
+  const dailyRate = Number(tenant.price ?? 0);
+  if (!Number.isFinite(dailyRate) || dailyRate <= 0) {
+    throw new HttpsError("failed-precondition", "This account has no valid rental rate.");
+  }
+  const schedule = String(tenant.paymentSchedule ?? "monthly");
+  const minimumDue = await getOutstandingBalance(callerUid, schedule, dailyRate, new Date());
+  const normalizedAmount = Math.round(requestedAmount * 100) / 100;
+  const normalizedMinimum = Math.round(minimumDue * 100) / 100;
+  if (normalizedMinimum <= 0) {
+    throw new HttpsError("failed-precondition", "There is no outstanding balance to pay.");
+  }
+  if (normalizedAmount < normalizedMinimum) {
+    throw new HttpsError(
+      "invalid-argument",
+      `Payment must be at least PHP ${normalizedMinimum.toFixed(2)}.`,
+    );
+  }
+
+  const secretKey = process.env.PAYMONGO_SECRET_KEY ?? "";
+  if (!secretKey) {
+    console.error("PAYMONGO_SECRET_KEY is not configured");
+    throw new HttpsError("failed-precondition", "Payment service is not configured.");
+  }
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Basic ${Buffer.from(`${secretKey}:`).toString("base64")}`,
+  };
+  const amountInCentavos = Math.round(normalizedAmount * 100);
+
+  const intentResponse = await fetch("https://api.paymongo.com/v1/payment_intents", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      data: {
+        attributes: {
+          amount: amountInCentavos,
+          currency: "PHP",
+          payment_method_allowed: ["gcash", "paymaya"],
+          description: "RentWise Online Rent Payment",
+        },
+      },
+    }),
+  });
+  if (!intentResponse.ok) {
+    console.error("PayMongo create-intent failed", {status: intentResponse.status});
+    throw new HttpsError("unavailable", "Unable to start payment.");
+  }
+  const intent = await intentResponse.json() as {data?: {id?: string}};
+  const paymentIntentId = intent.data?.id;
+  if (!paymentIntentId) throw new HttpsError("internal", "Payment intent was not returned.");
+
+  const methodResponse = await fetch("https://api.paymongo.com/v1/payment_methods", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      data: {
+        attributes: {
+          type: paymentMethod,
+          billing: {
+            name: `${tenant.firstName ?? ""} ${tenant.lastName ?? ""}`.trim(),
+            email: String(tenant.personalEmail ?? tenant.email ?? ""),
+          },
+        },
+      },
+    }),
+  });
+  if (!methodResponse.ok) {
+    console.error("PayMongo create-method failed", {status: methodResponse.status});
+    throw new HttpsError("unavailable", "Unable to start payment.");
+  }
+  const method = await methodResponse.json() as {data?: {id?: string}};
+  if (!method.data?.id) throw new HttpsError("internal", "Payment method was not returned.");
+
+  const returnUrl =
+    `https://rentwise-paymongo-api.vercel.app/api/payment-return?amount=${amountInCentavos}` +
+    `&pi=${encodeURIComponent(paymentIntentId)}`;
+  const attachResponse = await fetch(
+    `https://api.paymongo.com/v1/payment_intents/${encodeURIComponent(paymentIntentId)}/attach`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        data: {attributes: {payment_method: method.data.id, return_url: returnUrl}},
+      }),
+    },
+  );
+  if (!attachResponse.ok) {
+    console.error("PayMongo attach failed", {status: attachResponse.status});
+    throw new HttpsError("unavailable", "Unable to start payment authorization.");
+  }
+  const attached = await attachResponse.json() as {
+    data?: {attributes?: {next_action?: {redirect?: {url?: string}}}};
+  };
+  const redirectUrl = attached.data?.attributes?.next_action?.redirect?.url;
+  if (!redirectUrl) throw new HttpsError("internal", "Payment authorization URL was not returned.");
+
+  await db.collection("paymentSessions").doc(paymentIntentId).set({
+    userId: callerUid,
+    amount: normalizedAmount,
+    amountInCentavos,
+    paymentMethod,
+    status: "created",
+    createdAt: FieldValue.serverTimestamp(),
+    expiresAt: Date.now() + 60 * 60_000,
+  });
+
+  return {paymentIntentId, redirectUrl, amount: normalizedAmount};
+});
+
 // Tenant payment records are created server-side so a modified app cannot
 // manufacture an approved payment or attribute one to another account.
 export const createTenantPendingPayment = onCall(async (request) => {
@@ -530,6 +666,40 @@ export const createTenantPendingPayment = onCall(async (request) => {
     : "";
   if (!checkoutSessionId || checkoutSessionId.length > 200) {
     throw new HttpsError("invalid-argument", "Invalid payment session.");
+  }
+
+  const sessionRef = db.collection("paymentSessions").doc(checkoutSessionId);
+  const sessionSnap = await sessionRef.get();
+  if (!sessionSnap.exists) {
+    throw new HttpsError("failed-precondition", "Payment session was not found.");
+  }
+  const session = sessionSnap.data()!;
+  if (
+    session.userId !== callerUid ||
+    session.status !== "created" ||
+    Number(session.expiresAt) < Date.now() ||
+    Math.round(Number(session.amount) * 100) !== Math.round(amount * 100)
+  ) {
+    throw new HttpsError("failed-precondition", "Payment session is invalid or expired.");
+  }
+  const expectedMethod = session.paymentMethod === "gcash" ? "GCash" : "Maya";
+  if (paymentMethod !== expectedMethod) {
+    throw new HttpsError("failed-precondition", "Payment method does not match the session.");
+  }
+
+  const secretKey = process.env.PAYMONGO_SECRET_KEY ?? "";
+  if (!secretKey) throw new HttpsError("failed-precondition", "Payment service is not configured.");
+  const statusResponse = await fetch(
+    `https://api.paymongo.com/v1/payment_intents/${encodeURIComponent(checkoutSessionId)}`,
+    {headers: {Authorization: `Basic ${Buffer.from(`${secretKey}:`).toString("base64")}`}},
+  );
+  if (!statusResponse.ok) {
+    throw new HttpsError("unavailable", "Unable to verify payment.");
+  }
+  const statusBody = await statusResponse.json() as {data?: {attributes?: {status?: string}}};
+  const providerStatus = statusBody.data?.attributes?.status;
+  if (providerStatus !== "succeeded" && providerStatus !== "processing") {
+    throw new HttpsError("failed-precondition", "Payment has not been completed.");
   }
 
   const tenantSnap = await db.collection("users").doc(callerUid).get();
@@ -589,27 +759,40 @@ export const createTenantPendingPayment = onCall(async (request) => {
     breakdown,
   };
 
-  const paymentRef = await db.collection("payments").add({
-    userId: callerUid,
-    amount,
-    rentAmount,
-    periodsCovered,
-    periodsAdvance,
-    method: "online",
-    status: "pending",
-    tenantName,
-    buildingNumber: String(stall.buildingNumber ?? ""),
-    spaceId: String(stall.spaceId ?? ""),
-    stallId,
-    receiptNo,
-    checkoutSessionId,
-    paymentMethod,
-    receiptData,
-    receipt: null,
-    paymentId: null,
-    cashReceived: null,
-    change: 0,
-    date: FieldValue.serverTimestamp(),
+  const paymentRef = db.collection("payments").doc();
+  await db.runTransaction(async (tx) => {
+    const freshSessionSnap = await tx.get(sessionRef);
+    if (!freshSessionSnap.exists || freshSessionSnap.data()?.status !== "created") {
+      throw new HttpsError("already-exists", "This payment has already been recorded.");
+    }
+    tx.set(paymentRef, {
+      userId: callerUid,
+      amount,
+      rentAmount,
+      periodsCovered,
+      periodsAdvance,
+      method: "online",
+      status: "pending",
+      providerStatus,
+      tenantName,
+      buildingNumber: String(stall.buildingNumber ?? ""),
+      spaceId: String(stall.spaceId ?? ""),
+      stallId,
+      receiptNo,
+      checkoutSessionId,
+      paymentMethod,
+      receiptData,
+      receipt: null,
+      paymentId: null,
+      cashReceived: null,
+      change: 0,
+      date: FieldValue.serverTimestamp(),
+    });
+    tx.update(sessionRef, {
+      status: "used",
+      paymentId: paymentRef.id,
+      usedAt: FieldValue.serverTimestamp(),
+    });
   });
 
   return {paymentId: paymentRef.id, receiptNo};

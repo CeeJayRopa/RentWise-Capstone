@@ -7,7 +7,8 @@ import {
 import { getFunctions, httpsCallable } from "firebase/functions";
 
 import { db, firebaseApp } from "../shared/firebaseConfig";
-import { createPaymongoPaymentIntent, PaymentMethodType } from "./paymongo";
+
+export type PaymentMethodType = "gcash" | "paymaya";
 
 export interface Payment {
   id: string;
@@ -39,9 +40,17 @@ export async function createPayment(data: any) {
 export async function createOnlinePayment(
   amount: number,
   paymentMethod: PaymentMethodType,
-  customer?: { name: string; email: string },
+  _customer?: { name: string; email: string },
 ): Promise<{ redirectUrl: string; paymentIntentId: string }> {
-  return createPaymongoPaymentIntent(amount, paymentMethod, customer);
+  const createIntent = httpsCallable<
+    { amount: number; paymentMethod: PaymentMethodType },
+    { redirectUrl: string; paymentIntentId: string; amount: number }
+  >(getFunctions(firebaseApp), "createTenantPaymongoPaymentIntent");
+  const result = await createIntent({ amount, paymentMethod });
+  return {
+    redirectUrl: result.data.redirectUrl,
+    paymentIntentId: result.data.paymentIntentId,
+  };
 }
 
 export async function getTenantPayments(userId: string) {

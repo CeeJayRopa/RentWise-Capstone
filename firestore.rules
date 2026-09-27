@@ -148,6 +148,12 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Server-created PayMongo sessions bind a validated amount and payment
+    // intent to one tenant and are consumed atomically by Cloud Functions.
+    match /paymentSessions/{sessionId} {
+      allow read, write: if false;
+    }
+
     // ── passwordResetRequests ──────────────────────────────────────────
     // Every app's forgot-password flow files this before the user is
     // signed in, so create must stay open. Reading/managing the queue is
