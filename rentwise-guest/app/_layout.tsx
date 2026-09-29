@@ -1,8 +1,19 @@
 import { Stack } from "expo-router";
 import { useFonts } from "expo-font";
 import { useEffect, useState } from "react";
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Modal,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useBreakpoints } from "../shared/hooks/useBreakpoints";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -14,6 +25,8 @@ import {
 export default function Layout() {
   const [guestAccessAccepted, setGuestAccessAccepted] = useState(false);
   const [policyTab, setPolicyTab] = useState<"terms" | "privacy">("terms");
+  const [policiesRead, setPoliciesRead] = useState({ terms: false, privacy: false });
+  const { isDesktop, isMobile } = useBreakpoints();
   const [fontsLoaded] = useFonts({
     ...Ionicons.font,
     Poppins_400Regular,
@@ -46,6 +59,22 @@ export default function Layout() {
   // than a brief blank frame.
   if (!fontsLoaded) return null;
 
+  const mustReadBothPolicies = !isDesktop;
+  const canAccept = !mustReadBothPolicies || (policiesRead.terms && policiesRead.privacy);
+
+  const handlePolicyScroll = ({ nativeEvent }: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const bottomThreshold = 16;
+    const reachedBottom =
+      nativeEvent.layoutMeasurement.height + nativeEvent.contentOffset.y >=
+      nativeEvent.contentSize.height - bottomThreshold;
+
+    if (reachedBottom) {
+      setPoliciesRead((current) =>
+        current[policyTab] ? current : { ...current, [policyTab]: true },
+      );
+    }
+  };
+
   return (
     <View style={styles.appRoot}>
       <Stack screenOptions={{ headerShown: false }} />
@@ -69,7 +98,7 @@ export default function Layout() {
                 onPress={() => setPolicyTab("terms")}
               >
                 <Text style={[styles.policyTabText, policyTab === "terms" && styles.policyTabTextActive]}>
-                  Terms of Use
+                  Terms of Use{policiesRead.terms ? "  ✓" : ""}
                 </Text>
               </Pressable>
               <Pressable
@@ -77,49 +106,85 @@ export default function Layout() {
                 onPress={() => setPolicyTab("privacy")}
               >
                 <Text style={[styles.policyTabText, policyTab === "privacy" && styles.policyTabTextActive]}>
-                  Privacy Policy
+                  Privacy Policy{policiesRead.privacy ? "  ✓" : ""}
                 </Text>
               </Pressable>
             </View>
 
-            <ScrollView style={styles.policyScroll} contentContainerStyle={styles.policyContent}>
+            <ScrollView
+              key={policyTab}
+              style={[styles.policyScroll, isMobile && styles.policyScrollMobile]}
+              contentContainerStyle={styles.policyContent}
+              onScroll={handlePolicyScroll}
+              scrollEventThrottle={16}
+              showsVerticalScrollIndicator
+            >
               {policyTab === "terms" ? (
                 <>
                   <Text style={styles.policyHeading}>Terms of Use</Text>
+                  <Text style={styles.policySection}>1. Guest access</Text>
                   <Text style={styles.policyBody}>
                     RentWise provides public market information, stall availability, maps, and an AR preview for
-                    general viewing. Information may change as market records are updated. Visitors must use the
-                    website lawfully and must not attempt to disrupt, copy, manipulate, or gain unauthorized access
-                    to the website, its services, or its data.
+                    general viewing. No account is required to browse the guest website. Information may change as
+                    market records are updated and does not guarantee that a stall remains available.
                   </Text>
+                  <Text style={styles.policySection}>2. Proper use</Text>
                   <Text style={styles.policyBody}>
-                    Map directions and AR measurements are guides only. Visitors should confirm availability,
-                    dimensions, pricing, and rental details with KaDomeng market management before making decisions.
-                    Continued use means that you accept these terms.
+                    Visitors must use the website lawfully and must not attempt to disrupt, copy, manipulate, scrape,
+                    bypass security, or gain unauthorized access to the website, its services, accounts, or data.
+                  </Text>
+                  <Text style={styles.policySection}>3. Maps and AR preview</Text>
+                  <Text style={styles.policyBody}>
+                    Map directions, stall locations, and augmented-reality measurements are visual guides only.
+                    Device sensors, camera conditions, map providers, and network availability may affect accuracy.
+                  </Text>
+                  <Text style={styles.policySection}>4. Confirming rental details</Text>
+                  <Text style={styles.policyBody}>
+                    Visitors should confirm availability, dimensions, pricing, requirements, and rental details with
+                    KaDomeng market management before making a decision. By continuing, you confirm that you understand
+                    and accept these terms.
                   </Text>
                 </>
               ) : (
                 <>
                   <Text style={styles.policyHeading}>Privacy Policy</Text>
+                  <Text style={styles.policySection}>1. Information processed</Text>
                   <Text style={styles.policyBody}>
                     The guest website displays public market information and does not require a visitor account.
                     Technical services may process limited device, browser, security, and usage information needed
                     to load maps, protect the website, and operate its features.
                   </Text>
+                  <Text style={styles.policySection}>2. Camera and AR</Text>
+                  <Text style={styles.policyBody}>
+                    The AR feature requests camera access only when you choose to use it. Camera access is used to show
+                    the live AR experience. RentWise does not use the guest page to create or store a camera recording.
+                  </Text>
+                  <Text style={styles.policySection}>3. External communication</Text>
                   <Text style={styles.policyBody}>
                     If you contact KaDomeng through the provided phone number or Facebook link, the information you
-                    choose to provide is handled through that communication service. RentWise does not sell visitor
-                    information. Access is limited to authorized services and personnel where required for security
-                    and operation.
+                    choose to provide is also handled under that communication service's privacy practices.
+                  </Text>
+                  <Text style={styles.policySection}>4. Use and protection</Text>
+                  <Text style={styles.policyBody}>
+                    RentWise does not sell visitor information. Limited technical information is used only to operate,
+                    secure, maintain, and improve the guest experience. Access is limited to authorized services and
+                    personnel where needed for security and operation.
                   </Text>
                 </>
               )}
             </ScrollView>
 
             <Text style={styles.policyAgreement}>
-              By selecting Agree & Continue, you confirm that you have reviewed both policies.
+              {canAccept
+                ? "By selecting Agree & Continue, you confirm that you have reviewed both policies."
+                : "Scroll to the bottom of both Terms of Use and Privacy Policy to continue."}
             </Text>
-            <Pressable style={styles.policyAcceptButton} onPress={() => setGuestAccessAccepted(true)}>
+            <Pressable
+              style={[styles.policyAcceptButton, !canAccept && styles.policyAcceptButtonDisabled]}
+              onPress={() => setGuestAccessAccepted(true)}
+              disabled={!canAccept}
+              accessibilityState={{ disabled: !canAccept }}
+            >
               <Text style={styles.policyAcceptText}>Agree & Continue</Text>
             </Pressable>
           </View>
@@ -166,8 +231,10 @@ const styles = StyleSheet.create({
   policyTabText: { color: "#53615B", fontSize: 13, fontWeight: "700" },
   policyTabTextActive: { color: "#FFFFFF" },
   policyScroll: { flexGrow: 0, maxHeight: 280, borderRadius: 12, backgroundColor: "#F6F3EC" },
+  policyScrollMobile: { maxHeight: 230 },
   policyContent: { padding: 18 },
   policyHeading: { color: "#103D30", fontSize: 18, fontWeight: "800", marginBottom: 10 },
+  policySection: { color: "#103D30", fontSize: 13, fontWeight: "800", marginBottom: 4 },
   policyBody: { color: "#45534D", fontSize: 13, lineHeight: 20, marginBottom: 12 },
   policyAgreement: { color: "#69746F", fontSize: 12, lineHeight: 17, marginTop: 15, marginBottom: 13 },
   policyAcceptButton: {
@@ -177,5 +244,6 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 14,
   },
+  policyAcceptButtonDisabled: { backgroundColor: "#9AA8A2", opacity: 0.72 },
   policyAcceptText: { color: "#FFFFFF", fontSize: 15, fontWeight: "800" },
 });
