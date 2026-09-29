@@ -26,7 +26,7 @@ export default function Layout() {
   const [guestAccessAccepted, setGuestAccessAccepted] = useState(false);
   const [policyTab, setPolicyTab] = useState<"terms" | "privacy">("terms");
   const [policiesRead, setPoliciesRead] = useState({ terms: false, privacy: false });
-  const { isDesktop, isMobile } = useBreakpoints();
+  const { isMobile } = useBreakpoints();
   const [fontsLoaded] = useFonts({
     ...Ionicons.font,
     Poppins_400Regular,
@@ -59,8 +59,7 @@ export default function Layout() {
   // than a brief blank frame.
   if (!fontsLoaded) return null;
 
-  const mustReadBothPolicies = !isDesktop;
-  const canAccept = !mustReadBothPolicies || (policiesRead.terms && policiesRead.privacy);
+  const canAccept = policiesRead.terms && policiesRead.privacy;
 
   const handlePolicyScroll = ({ nativeEvent }: NativeSyntheticEvent<NativeScrollEvent>) => {
     const bottomThreshold = 16;
