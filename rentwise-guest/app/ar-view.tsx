@@ -125,7 +125,7 @@ export default function ARView() {
         toValue: 1,
         duration: 1400,
         easing: Easing.out(Easing.ease),
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== "web",
       })
     );
     loop.start();
@@ -559,13 +559,15 @@ export default function ARView() {
             )}
             <TouchableOpacity
               style={styles.topAction}
+              onPressIn={suppressPressIn}
+              onPressOut={suppressPressOut}
               onPress={() => {
                 setTourStep(0);
                 setTourVisible(true);
               }}
             >
-              <Text style={styles.topActionIcon}>?</Text>
               <Text style={styles.topActionText}>Help</Text>
+              <Text style={styles.topActionIcon}>?</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -625,8 +627,12 @@ export default function ARView() {
         )}
 
         {tourVisible && (
-          <Modal transparent animationType="fade" onRequestClose={() => setTourVisible(false)}>
-            <View style={styles.modalOverlay}>
+            <View
+              style={[styles.modalOverlay, styles.tourOverlay]}
+              onTouchStart={suppressPressIn}
+              onTouchEnd={suppressPressOut}
+              onTouchCancel={suppressPressOut}
+            >
               <View style={styles.modalCard}>
                 <View style={styles.tourDotsRow}>
                   {AR_TOUR_STEPS.map((_, i) => (
@@ -658,7 +664,6 @@ export default function ARView() {
                 </View>
               </View>
             </View>
-          </Modal>
         )}
 
         {sessionActive && (
@@ -1091,6 +1096,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     padding: 24,
+  },
+  tourOverlay: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 1000,
   },
   modalCard: {
     backgroundColor: SURFACE,
