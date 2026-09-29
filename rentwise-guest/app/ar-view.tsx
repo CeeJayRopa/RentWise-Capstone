@@ -51,7 +51,7 @@ function translateSessionStartError(e: any): string {
 }
 
 const AXIS_LABELS: { axis: ScaleAxis; label: string }[] = [
-  { axis: "x", label: "Width" },
+  { axis: "x", label: "Length" },
   { axis: "y", label: "Height" },
   { axis: "z", label: "Width" },
 ];
@@ -839,7 +839,7 @@ export default function ARView() {
                 <View style={styles.axisTabs}>
                   {AXIS_LABELS.map(({ axis, label }) => (
                     <TouchableOpacity key={axis} style={[styles.axisTab, resizeAxis === axis && styles.axisTabActive]} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => setResizeAxis(axis)}>
-                      <Text style={[styles.axisTabText, resizeAxis === axis && styles.axisTabTextActive]}>{axis === "x" ? "Size" : label}</Text>
+                      <Text style={[styles.axisTabText, resizeAxis === axis && styles.axisTabTextActive]}>{label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
