@@ -179,15 +179,6 @@ export default function NavigableMap({ height, isMobile = false }: Props) {
           <Text style={s.navBtnText}>Navigate to Market →</Text>
         )}
       </TouchableOpacity>
-      <TouchableOpacity
-        style={[s.hideBtn, isMobile && s.hideBtnMobile]}
-        onPress={() => setIsRevealed(false)}
-        accessibilityRole="button"
-        accessibilityLabel="Hide market map and navigation button"
-      >
-        <Ionicons name="eye-off-outline" size={17} color={G_MID} />
-        <Text style={s.hideBtnText}>Hide Map</Text>
-      </TouchableOpacity>
         </>
       )}
     </View>
@@ -263,22 +254,6 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   navBtnText: { color: WHITE, fontSize: 16, fontWeight: "700" },
-  hideBtn: {
-    alignSelf: "center",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 7,
-    borderWidth: 1,
-    borderColor: G_MID,
-    paddingHorizontal: 22,
-    paddingVertical: 11,
-    borderRadius: 28,
-    marginTop: 4,
-    marginBottom: 8,
-  },
-  hideBtnMobile: { alignSelf: "stretch" },
-  hideBtnText: { color: G_MID, fontSize: 14, fontWeight: "700" },
   // Matches MarketMapEmbed's mobile action-pill layout (icon-in-circle,
   // label, trailing arrow) instead of the plain centered "label →" text.
   navBtnMobile: {
