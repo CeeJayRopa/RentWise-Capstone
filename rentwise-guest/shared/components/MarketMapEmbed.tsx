@@ -137,7 +137,7 @@ export default function MarketMapEmbed({
     Animated.timing(viewStallsPressScale, {
       toValue: pressed ? 0.95 : 1,
       duration: pressed ? 80 : 150,
-      useNativeDriver: true,
+      useNativeDriver: Platform.OS !== "web",
     }).start();
   };
 
@@ -185,10 +185,10 @@ export default function MarketMapEmbed({
       : undefined;
     setHoveredStall({ hotspot, stall, left, top, width, height, anchorX, anchorY });
     hoverAnim.stopAnimation();
-    Animated.timing(hoverAnim, { toValue: 1, duration: 160, useNativeDriver: true }).start();
+    Animated.timing(hoverAnim, { toValue: 1, duration: 160, useNativeDriver: Platform.OS !== "web" }).start();
   };
   const handleHoverOut = () => {
-    Animated.timing(hoverAnim, { toValue: 0, duration: 120, useNativeDriver: true }).start(({ finished }) => {
+    Animated.timing(hoverAnim, { toValue: 0, duration: 120, useNativeDriver: Platform.OS !== "web" }).start(({ finished }) => {
       if (finished) setHoveredStall(null);
     });
   };
@@ -489,6 +489,25 @@ export default function MarketMapEmbed({
             </Text>
           </View>
           {isDesktop && (
+            <View style={styles.desktopStallStatus}>
+              <Text style={styles.desktopStallStatusTitle}>Stall Status</Text>
+              <View style={styles.desktopStallStatusRow}>
+                <View style={styles.infoCardRowLabel}>
+                  <View style={[styles.infoDot, { backgroundColor: "#8B5E3C" }]} />
+                  <Text style={styles.desktopStallStatusLabel}>Occupied</Text>
+                </View>
+                <Text style={styles.desktopStallStatusValue}>{loading ? "—" : occupiedCount}</Text>
+              </View>
+              <View style={[styles.desktopStallStatusRow, { marginBottom: 0 }]}>
+                <View style={styles.infoCardRowLabel}>
+                  <View style={[styles.infoDot, { backgroundColor: PRIMARY_DARK }]} />
+                  <Text style={styles.desktopStallStatusLabel}>Unoccupied</Text>
+                </View>
+                <Text style={styles.desktopStallStatusValue}>{loading ? "—" : vacantCount}</Text>
+              </View>
+            </View>
+          )}
+          {isDesktop && (
             <View style={styles.desktopArNotice}>
               <View style={styles.desktopArNoticeIcon}>
                 <Ionicons name="phone-portrait-outline" size={20} color={PRIMARY_DARK} />
@@ -673,6 +692,37 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: TEXT_MUTED,
     marginBottom: 24,
+  },
+  desktopStallStatus: {
+    width: 240,
+    marginTop: 18,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: "#EFE8DE",
+  },
+  desktopStallStatusTitle: {
+    color: PRIMARY,
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+    marginBottom: 10,
+  },
+  desktopStallStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  desktopStallStatusLabel: {
+    color: TEXT_DARK,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  desktopStallStatusValue: {
+    color: TEXT_DARK,
+    fontSize: 14,
+    fontWeight: "700",
   },
   desktopArNotice: {
     flexDirection: "row",

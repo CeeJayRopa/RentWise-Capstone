@@ -167,10 +167,10 @@ export default function MarketMap() {
   ) => {
     setHoveredStall({ hotspot, stall, left, top, width, height });
     hoverAnim.stopAnimation();
-    Animated.timing(hoverAnim, { toValue: 1, duration: 160, useNativeDriver: true }).start();
+    Animated.timing(hoverAnim, { toValue: 1, duration: 160, useNativeDriver: Platform.OS !== "web" }).start();
   };
   const handleHoverOut = () => {
-    Animated.timing(hoverAnim, { toValue: 0, duration: 120, useNativeDriver: true }).start(({ finished }) => {
+    Animated.timing(hoverAnim, { toValue: 0, duration: 120, useNativeDriver: Platform.OS !== "web" }).start(({ finished }) => {
       if (finished) setHoveredStall(null);
     });
   };

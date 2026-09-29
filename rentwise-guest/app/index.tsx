@@ -379,29 +379,29 @@ export default function GuestLanding() {
   const heroHeadlineFade = useRef(new Animated.Value(1)).current;
   const heroBodyFade = useRef(new Animated.Value(1)).current;
   const goToHeroSlide = (updateIndex: (i: number) => number) => {
-    Animated.timing(heroFade, { toValue: 0, duration: 250, useNativeDriver: true }).start(() => {
+    Animated.timing(heroFade, { toValue: 0, duration: 250, useNativeDriver: Platform.OS !== "web" }).start(() => {
       setHeroSlide(updateIndex);
       heroEyebrowFade.setValue(0);
       heroHeadlineFade.setValue(0);
       heroBodyFade.setValue(0);
-      Animated.timing(heroFade, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+      Animated.timing(heroFade, { toValue: 1, duration: 250, useNativeDriver: Platform.OS !== "web" }).start();
       Animated.timing(heroEyebrowFade, {
         toValue: 1,
         duration: 400,
         delay: 1000,
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== "web",
       }).start();
       Animated.timing(heroHeadlineFade, {
         toValue: 1,
         duration: 400,
         delay: 1500,
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== "web",
       }).start();
       Animated.timing(heroBodyFade, {
         toValue: 1,
         duration: 400,
         delay: 2000,
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== "web",
       }).start();
     });
   };
@@ -441,12 +441,17 @@ export default function GuestLanding() {
     scrollRef.current?.scrollTo({ y: Math.max(0, y - STICKY_NAV_CLEARANCE), animated: true });
   };
 
+  const handleBrandPress = () => {
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+    setMobileMenuOpen(false);
+  };
+
   React.useEffect(() => {
     Animated.timing(stickyNavAnim, {
       toValue: showStickyNav ? 1 : 0,
       duration: showStickyNav ? 300 : 0,
       delay: 0,
-      useNativeDriver: true,
+      useNativeDriver: Platform.OS !== "web",
     }).start();
   }, [showStickyNav]);
 
@@ -518,19 +523,19 @@ export default function GuestLanding() {
               <View style={{ flex: 1, alignItems: "center" }}>
               <View style={[styles.navRightGroup, isTablet && { gap: 20, left: 24 }]}>
                 <View style={[styles.navLinks, isTablet && { gap: 16 }]}>
-                  <View style={[styles.navBrand, isTablet && { left: -46 }]}>
+                  <Pressable
+                    accessibilityRole="link"
+                    accessibilityLabel="Go to the hero section"
+                    onPress={handleBrandPress}
+                    style={[styles.navBrand, isTablet && { left: -46 }]}
+                  >
                     <Image
                       source={require("../assets/hero-section/logo.png")}
                       resizeMode="contain"
                       style={[styles.navBrandMark, isTablet && { width: 54, height: 54 }]}
                     />
                     <Text style={[styles.navBrandText, isTablet && { fontSize: 17 }]}>KaDomeng</Text>
-                  </View>
-                  <NavLinkButton
-                    label="Home"
-                    isTablet={isTablet}
-                    onPress={() => scrollRef.current?.scrollTo({ y: 0, animated: true })}
-                  />
+                  </Pressable>
                   <NavLinkButton
                     label="About Us"
                     isTablet={isTablet}
@@ -806,13 +811,10 @@ export default function GuestLanding() {
                       <Image
                         source={CARD_IMAGES[card.slug]}
                         resizeMode="cover"
-                        style={{
-                          width: "100%",
+                        style={[styles.catCardEditorialImage, {
                           height: isMiddle ? 560 : 520,
                           marginTop: isMiddle ? -20 : 0,
-                          borderRadius: 4,
-                          backgroundColor: CATEGORY_BG,
-                        }}
+                        }]}
                       />
                       <Text style={styles.catCardEditorialName}>{card.name}</Text>
                       <Text style={styles.catCardEditorialCaption}>{card.caption}</Text>
@@ -836,7 +838,7 @@ export default function GuestLanding() {
                   <View style={styles.catCardPlainScrim} />
                   <View style={{ flex: 1, padding: 28, justifyContent: "flex-end" }}>
                     <Text style={[styles.catCardPlainHeading, { color: WHITE }]}>Quality Protein</Text>
-                    <Text style={[styles.catCardPlainSubtext, { color: "rgba(255,255,255,0.85)" }]}>
+                    <Text style={[styles.catCardPlainSubtext, { color: "rgba(255,255,255,0.98)" }]}>
                       FRESH POULTRY, SEAFOOD & MEAT
                     </Text>
                   </View>
@@ -850,7 +852,7 @@ export default function GuestLanding() {
                   <View style={styles.catCardPlainScrim} />
                   <View style={{ flex: 1, padding: 28, justifyContent: "flex-end" }}>
                     <Text style={[styles.catCardPlainHeading, { color: WHITE }]}>Farm to Table</Text>
-                    <Text style={[styles.catCardPlainSubtext, { color: "rgba(255,255,255,0.85)" }]}>
+                    <Text style={[styles.catCardPlainSubtext, { color: "rgba(255,255,255,0.98)" }]}>
                       ORGANIC LEAFY GREENS
                     </Text>
                   </View>
@@ -870,7 +872,7 @@ export default function GuestLanding() {
                   <Text
                     style={[
                       styles.catCardPlainSubtext,
-                      { color: "rgba(255,255,255,0.85)", textTransform: "none", letterSpacing: 0 },
+                      { color: "rgba(255,255,255,0.98)", textTransform: "none", letterSpacing: 0 },
                     ]}
                   >
                     Everyday essentials, fully stocked for your home or business needs.
@@ -887,9 +889,9 @@ export default function GuestLanding() {
               <View style={{ width: "100%", aspectRatio: 4 / 3, borderRadius: 16, overflow: "hidden" }}>
                 <Image source={CARD_IMAGES["wet-market"]} resizeMode="contain" style={styles.categoryCardImage} />
                 <View style={styles.catCardPlainScrim} />
-                <View style={{ padding: 20, justifyContent: "flex-end" }}>
+                <View style={{ flex: 1, padding: 20, justifyContent: "flex-end" }}>
                   <Text style={[styles.catCardPlainHeading, { color: WHITE }]}>Quality Protein</Text>
-                  <Text style={[styles.catCardPlainSubtext, { color: "rgba(255,255,255,0.85)" }]}>
+                  <Text style={[styles.catCardPlainSubtext, { color: "rgba(255,255,255,0.98)" }]}>
                     FRESH POULTRY, SEAFOOD & MEAT
                   </Text>
                 </View>
@@ -897,9 +899,9 @@ export default function GuestLanding() {
               <View style={{ width: "100%", aspectRatio: 4 / 3, borderRadius: 16, overflow: "hidden" }}>
                 <Image source={CARD_IMAGES["dry-market"]} resizeMode="contain" style={styles.categoryCardImage} />
                 <View style={styles.catCardPlainScrim} />
-                <View style={{ padding: 20, justifyContent: "flex-end" }}>
+                <View style={{ flex: 1, padding: 20, justifyContent: "flex-end" }}>
                   <Text style={[styles.catCardPlainHeading, { color: WHITE }]}>Farm to Table</Text>
-                  <Text style={[styles.catCardPlainSubtext, { color: "rgba(255,255,255,0.85)" }]}>
+                  <Text style={[styles.catCardPlainSubtext, { color: "rgba(255,255,255,0.98)" }]}>
                     ORGANIC LEAFY GREENS
                   </Text>
                 </View>
@@ -907,14 +909,14 @@ export default function GuestLanding() {
               <View style={{ width: "100%", aspectRatio: 4 / 3, borderRadius: 16, overflow: "hidden" }}>
                 <Image source={CARD_IMAGES["home-essentials"]} resizeMode="contain" style={styles.categoryCardImage} />
                 <View style={styles.catCardPlainScrim} />
-                <View style={{ padding: 20, justifyContent: "flex-end" }}>
+                <View style={{ flex: 1, padding: 20, justifyContent: "flex-end" }}>
                   <Text style={[styles.catCardPlainHeading, { color: WHITE, fontSize: 20 }]}>
                     Keep your space fresh &{"\n"}clean
                   </Text>
                   <Text
                     style={[
                       styles.catCardPlainSubtext,
-                      { color: "rgba(255,255,255,0.85)", textTransform: "none", letterSpacing: 0 },
+                      { color: "rgba(255,255,255,0.98)", textTransform: "none", letterSpacing: 0 },
                     ]}
                   >
                     Everyday essentials, fully stocked for your home or business needs.
@@ -1089,19 +1091,19 @@ export default function GuestLanding() {
           <View style={{ flex: 1, alignItems: "center" }}>
             <View style={[styles.navRightGroup, isTablet && { gap: 20, left: 24 }]}>
               <View style={[styles.navLinks, isTablet && { gap: 16 }]}>
-                <View style={[styles.navBrand, isTablet && { left: -46 }]}>
+                <Pressable
+                  accessibilityRole="link"
+                  accessibilityLabel="Go to the hero section"
+                  onPress={handleBrandPress}
+                  style={[styles.navBrand, isTablet && { left: -46 }]}
+                >
                   <Image
                     source={require("../assets/hero-section/logo.png")}
                     resizeMode="contain"
                     style={[styles.navBrandMark, isTablet && { width: 54, height: 54 }]}
                   />
                   <Text style={[styles.navBrandText, isTablet && { fontSize: 17 }]}>KaDomeng</Text>
-                </View>
-                <NavLinkButton
-                  label="Home"
-                  isTablet={isTablet}
-                  onPress={() => scrollRef.current?.scrollTo({ y: 0, animated: true })}
-                />
+                </Pressable>
                 <NavLinkButton
                   label="About Us"
                   isTablet={isTablet}
@@ -1128,29 +1130,25 @@ export default function GuestLanding() {
           the sticky nav above) that toggles a dropdown of the same links. */}
       {SHOW_NAV && isMobile && (
         <View style={[styles.navBar, styles.navBarSticky, { paddingHorizontal: navPad, justifyContent: "space-between" }]}>
-          <View style={styles.navBrandMobile}>
+          <Pressable
+            accessibilityRole="link"
+            accessibilityLabel="Go to the hero section"
+            onPress={handleBrandPress}
+            style={styles.navBrandMobile}
+          >
             <Image
               source={require("../assets/hero-section/logo.png")}
               resizeMode="contain"
               style={styles.navBrandMarkMobile}
             />
             <Text style={styles.navBrandTextMobile}>KaDomeng</Text>
-          </View>
+          </Pressable>
           <Pressable onPress={() => setMobileMenuOpen((v) => !v)} hitSlop={10}>
             <Ionicons name={mobileMenuOpen ? "close" : "menu"} size={26} color={TEXT_DARK} />
           </Pressable>
 
           {mobileMenuOpen && (
             <View style={styles.mobileMenuPanel}>
-              <Pressable
-                style={styles.mobileMenuItem}
-                onPress={() => {
-                  scrollRef.current?.scrollTo({ y: 0, animated: true });
-                  setMobileMenuOpen(false);
-                }}
-              >
-                <Text style={styles.mobileMenuItemText}>Home</Text>
-              </Pressable>
               <Pressable
                 style={styles.mobileMenuItem}
                 onPress={() => {
@@ -1536,6 +1534,17 @@ const styles = StyleSheet.create({
     height: "100%",
     backgroundColor: CATEGORY_BG,
   },
+  catCardEditorialImage: {
+    width: "100%",
+    borderRadius: 4,
+    backgroundColor: CATEGORY_BG,
+    shadowColor: "#132A20",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 14,
+    elevation: 5,
+    boxShadow: "0 10px 24px rgba(19,42,32,0.16)",
+  } as any,
   catCardEditorialName: {
     fontFamily: "PlayfairDisplay_400Regular_Italic",
     color: TEXT_DARK,
@@ -1551,6 +1560,9 @@ const styles = StyleSheet.create({
     fontFamily: "PlayfairDisplay_700Bold",
     color: PRIMARY_DARK,
     fontSize: 22,
+    textShadowColor: "#000000",
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 6,
   },
   catCardPlainSubtext: {
     color: TEXT_MUTED,
@@ -1559,6 +1571,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     textTransform: "uppercase",
     marginTop: 6,
+    textShadowColor: "#000000",
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 5,
   },
   // Fades the card photo from clear at the top to dark at the bottom (real
   // CSS gradient -- rentwise-guest is web-only, so this passes straight
@@ -1570,7 +1585,7 @@ const styles = StyleSheet.create({
     right: 0,
     top: 0,
     bottom: 0,
-    backgroundImage: "linear-gradient(to bottom, rgba(0,0,0,0) 35%, rgba(0,0,0,0.7) 100%)",
+    backgroundImage: "linear-gradient(to bottom, rgba(0,0,0,0.12) 15%, rgba(0,0,0,0.42) 58%, rgba(0,0,0,0.92) 100%)",
   } as any,
 
   // Find Us

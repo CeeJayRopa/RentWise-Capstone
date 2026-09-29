@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Linking,
   Platform,
@@ -36,11 +36,13 @@ interface Props {
 export default function NavigableMap({ height, isMobile = false }: Props) {
   const containerId = useRef(`nav-map-${Math.random().toString(36).slice(2)}`).current;
   const mapRef = useRef<any>(null);
+  const [isRevealed, setIsRevealed] = useState(false);
 
   // Static preview map — just shows where the market is. Actual turn-by-turn
   // routing happens in Google Maps itself once the button below is tapped.
   useEffect(() => {
     if (Platform.OS !== "web") return;
+    if (!isRevealed) return;
     if (!TOKEN) {
       console.warn("[NavigableMap] EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN is not set.");
       return;
@@ -110,7 +112,7 @@ export default function NavigableMap({ height, isMobile = false }: Props) {
       mapRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isRevealed]);
 
   function openInGoogleMaps() {
     Linking.openURL(GOOGLE_MAPS_URL);
@@ -128,6 +130,26 @@ export default function NavigableMap({ height, isMobile = false }: Props) {
 
   return (
     <View style={s.root}>
+      {!isRevealed ? (
+        <View style={[s.revealCard, { height }]}>
+          <View style={s.revealIconWrap}>
+            <Ionicons name="location-outline" size={28} color={G_MID} />
+          </View>
+          <Text style={s.revealTitle}>Market location hidden</Text>
+          <Text style={s.revealText}>Reveal the map when you are ready to view directions.</Text>
+          <TouchableOpacity
+            style={[s.revealBtn, isMobile && s.revealBtnMobile]}
+            onPress={() => setIsRevealed(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Reveal market map and navigation button"
+            {...({ className: "rw-btn-primary" } as any)}
+          >
+            <Ionicons name="map-outline" size={18} color={WHITE} />
+            <Text style={s.revealBtnText}>Reveal Market Map</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <>
       {/* ── Map card ── */}
       <View style={[s.card, { height }]}>
         {React.createElement("div", {
@@ -157,6 +179,17 @@ export default function NavigableMap({ height, isMobile = false }: Props) {
           <Text style={s.navBtnText}>Navigate to Market →</Text>
         )}
       </TouchableOpacity>
+      <TouchableOpacity
+        style={[s.hideBtn, isMobile && s.hideBtnMobile]}
+        onPress={() => setIsRevealed(false)}
+        accessibilityRole="button"
+        accessibilityLabel="Hide market map and navigation button"
+      >
+        <Ionicons name="eye-off-outline" size={17} color={G_MID} />
+        <Text style={s.hideBtnText}>Hide Map</Text>
+      </TouchableOpacity>
+        </>
+      )}
     </View>
   );
 }
@@ -167,6 +200,39 @@ const MUTED = "#666";
 
 const s = StyleSheet.create({
   root: { width: "100%", alignSelf: "center", alignItems: "center" },
+  revealCard: {
+    width: "100%",
+    borderRadius: 16,
+    backgroundColor: "#F0F4EF",
+    borderWidth: 1,
+    borderColor: "#D9E5D8",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  revealIconWrap: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: "#DDECDD",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  revealTitle: { color: "#17351E", fontSize: 18, fontWeight: "700", marginBottom: 6 },
+  revealText: { color: MUTED, fontSize: 13, lineHeight: 19, textAlign: "center", marginBottom: 20 },
+  revealBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: G_MID,
+    paddingHorizontal: 24,
+    paddingVertical: 13,
+    borderRadius: 28,
+  },
+  revealBtnMobile: { alignSelf: "stretch" },
+  revealBtnText: { color: WHITE, fontSize: 15, fontWeight: "700" },
   card: {
     width: "100%",
     borderRadius: 16,
@@ -197,6 +263,22 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   navBtnText: { color: WHITE, fontSize: 16, fontWeight: "700" },
+  hideBtn: {
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    borderWidth: 1,
+    borderColor: G_MID,
+    paddingHorizontal: 22,
+    paddingVertical: 11,
+    borderRadius: 28,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  hideBtnMobile: { alignSelf: "stretch" },
+  hideBtnText: { color: G_MID, fontSize: 14, fontWeight: "700" },
   // Matches MarketMapEmbed's mobile action-pill layout (icon-in-circle,
   // label, trailing arrow) instead of the plain centered "label →" text.
   navBtnMobile: {
