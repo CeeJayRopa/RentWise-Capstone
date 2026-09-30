@@ -53,6 +53,8 @@ interface AxisScale {
 
 interface PlacedObject extends PlacedObjectInfo {
   group: THREE.Group;
+  anchor: any | null;
+  anchorMatrix: THREE.Matrix4 | null;
   scale: AxisScale;
   groundOffset: number;
   spawnStartTime: number;
@@ -284,6 +286,13 @@ export class ARSessionScene {
   private tooCloseToWallDebounced = false;
   private candidatePosition = new THREE.Vector3();
   private candidateQuaternion = new THREE.Quaternion();
+  private latestHitTestResult: any = null;
+  private anchorPoseMatrix = new THREE.Matrix4();
+  private anchorDeltaMatrix = new THREE.Matrix4();
+  private anchorObjectMatrix = new THREE.Matrix4();
+  private anchorPosition = new THREE.Vector3();
+  private anchorQuaternion = new THREE.Quaternion();
+  private anchorScale = new THREE.Vector3();
   private hitCheckMatrix = new THREE.Matrix4();
   private hitCheckNormal = new THREE.Vector3();
   private hitCheckPosition = new THREE.Vector3();
@@ -555,7 +564,7 @@ export class ARSessionScene {
 
     const session = await nav.xr.requestSession("immersive-ar", {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay", "light-estimation", "plane-detection", "depth-sensing"],
+      optionalFeatures: ["dom-overlay", "light-estimation", "plane-detection", "depth-sensing", "anchors"],
       depthSensing: {
         usagePreference: ["cpu-optimized"],
         dataFormatPreference: ["luminance-alpha"],
@@ -566,6 +575,7 @@ export class ARSessionScene {
     this.session = session;
     this.hitTestSource = null;
     this.hitTestSourceRequested = false;
+    this.latestHitTestResult = null;
 
     session.addEventListener("end", () => this.onSessionEnd());
 
@@ -898,6 +908,8 @@ export class ARSessionScene {
       id: `placed-${this.nextInstanceId++}`,
       objectId: this.armedObjectId,
       group,
+      anchor: null,
+      anchorMatrix: this.reticle.matrix.clone(),
       scale: { x: 1, y: 1, z: 1 },
       groundOffset: this.armedGroundOffset,
       spawnStartTime: performance.now(),
@@ -907,6 +919,7 @@ export class ARSessionScene {
 
     this.placedGroup.add(group);
     this.placed.push(placedObject);
+    this.attachAnchor(placedObject, this.latestHitTestResult);
     this.selected = placedObject;
     this.updateSelectionOutline();
     this.history.push({ type: "place", object: placedObject });
@@ -919,6 +932,43 @@ export class ARSessionScene {
     this.armedModel = null;
 
     this.notifyPlacedChange();
+  }
+
+  private attachAnchor(placedObject: PlacedObject, hitTestResult: any) {
+    if (!hitTestResult || typeof hitTestResult.createAnchor !== "function") return;
+
+    placedObject.anchor?.delete?.();
+    placedObject.anchor = null;
+    hitTestResult.createAnchor().then((anchor: any) => {
+      if (!this.session || !this.placed.includes(placedObject)) {
+        anchor.delete?.();
+        return;
+      }
+      placedObject.anchor = anchor;
+    }).catch(() => {});
+  }
+
+  private updateAnchoredObjects(frame: any, referenceSpace: any) {
+    for (const placedObject of this.placed) {
+      if (!placedObject.anchor || !placedObject.anchorMatrix) continue;
+      const pose = frame.getPose(placedObject.anchor.anchorSpace, referenceSpace);
+      if (!pose) continue;
+
+      this.anchorPoseMatrix.fromArray(pose.transform.matrix);
+      this.anchorDeltaMatrix.copy(placedObject.anchorMatrix).invert();
+      this.anchorDeltaMatrix.premultiply(this.anchorPoseMatrix);
+      this.anchorObjectMatrix.compose(
+        placedObject.group.position,
+        placedObject.group.quaternion,
+        placedObject.group.scale,
+      );
+      this.anchorObjectMatrix.premultiply(this.anchorDeltaMatrix);
+      this.anchorObjectMatrix.decompose(this.anchorPosition, this.anchorQuaternion, this.anchorScale);
+      placedObject.group.position.copy(this.anchorPosition);
+      placedObject.group.quaternion.copy(this.anchorQuaternion);
+      placedObject.group.scale.copy(this.anchorScale);
+      placedObject.anchorMatrix.copy(this.anchorPoseMatrix);
+    }
   }
 
   async armObject(objectId: string, modelUrl: string): Promise<void> {
@@ -1163,6 +1213,8 @@ export class ARSessionScene {
     }
 
     this.snapToFloor(this.selected.group, floorY, this.selected.objectId);
+    this.selected.anchorMatrix = this.reticle.matrix.clone();
+    this.attachAnchor(this.selected, this.latestHitTestResult);
   }
 
   deleteSelected() {
@@ -1518,6 +1570,7 @@ export class ARSessionScene {
     const referenceSpace = this.renderer.xr.getReferenceSpace();
 
     if (referenceSpace) this.updatePlaneVisualizations(frame, referenceSpace);
+    if (referenceSpace) this.updateAnchoredObjects(frame, referenceSpace);
     if (DEV_LOG_PLANE_DIAGNOSTICS && referenceSpace) this.logPlaneDiagnostics(frame, referenceSpace);
 
     // Kick off hit-test-source setup once, without awaiting: an XRFrame is only valid
@@ -1668,6 +1721,7 @@ export class ARSessionScene {
           this.reportSurfaceIssue(null);
         }
       } else {
+        this.latestHitTestResult = null;
         this.reticleHasTarget = false;
         this.reticleStableFrames = 0;
         this.isPlacementConfident = false;
@@ -1707,6 +1761,7 @@ export class ARSessionScene {
   // valid surfaces are both in view (e.g. a tabletop and the floor beneath it).
   private findValidHit(hitTestResults: any[], referenceSpace: any): THREE.Matrix4 | null {
     let best: THREE.Matrix4 | null = null;
+    let bestResult: any = null;
     let bestDist = Infinity;
 
     for (const result of hitTestResults) {
@@ -1718,7 +1773,10 @@ export class ARSessionScene {
       const tiltDeg = THREE.MathUtils.radToDeg(this.hitCheckNormal.angleTo(ARSessionScene.WORLD_UP));
       if (tiltDeg > MAX_FLOOR_TILT_DEG) continue;
 
-      if (!this.reticleHasTarget) return this.hitCheckMatrix.clone();
+      if (!this.reticleHasTarget) {
+        this.latestHitTestResult = result;
+        return this.hitCheckMatrix.clone();
+      }
 
       const dist = this.hitCheckPosition
         .setFromMatrixPosition(this.hitCheckMatrix)
@@ -1726,8 +1784,10 @@ export class ARSessionScene {
       if (dist < bestDist) {
         bestDist = dist;
         best = this.hitCheckMatrix.clone();
+        bestResult = result;
       }
     }
+    this.latestHitTestResult = bestResult;
     return best;
   }
 
