@@ -11,17 +11,17 @@ import {
   Animated,
   Easing,
   RefreshControl,
+  Modal,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, getDocs } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Print from "expo-print";
 import RNBlobUtil from "react-native-blob-util";
-import DateTimePicker from "@react-native-community/datetimepicker";
 
-import { House, HelpCircle, Download, FileText, Archive, Wallet, CheckCircle2 } from "lucide-react-native";
+import { House, HelpCircle, Download, FileText, Archive, Wallet, CheckCircle2, Clock, XCircle, ChevronLeft, ChevronRight } from "lucide-react-native";
 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
@@ -29,6 +29,7 @@ import HelpTour, { HelpStep } from "../components/HelpTour";
 import OwnerBellIcon from "../components/OwnerBellIcon";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
+import { readLocalCache, saveLocalCache } from "../../shared/services/localCache";
 
 type ReportDoc = {
   id: string;
@@ -46,11 +47,21 @@ type ReportDoc = {
   spaceNo?: string;
   tenantName?: string;
   approvalStatus?: string;
+  reportCategory?: string;
   createdAt?: any;
 };
 
+type ReportPeriod = "Daily" | "Monthly" | "Annual";
+
+function localDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function moduleToCategory(module: string): "building" | "finance" | "archive" {
-  if (module === "Building Management") return "building";
+  if (module === "Building Management" || module === "Stall Management") return "building";
   if (module === "Financials") return "finance";
   return "archive";
 }
@@ -61,9 +72,20 @@ function resolveCategory(r: ReportDoc): "building" | "finance" | "archive" {
 }
 
 function categoryLabel(cat: string): string {
-  if (cat === "building") return "Building Management Update";
+  if (cat === "building") return "Stall Management Update";
   if (cat === "finance") return "Financial Change";
   return "Account Archive Update";
+}
+
+function displayCategory(r: ReportDoc): string {
+  return r.reportCategory || categoryLabel(resolveCategory(r));
+}
+
+function statusLabel(r: ReportDoc): "Approved" | "Pending" | "Rejected" {
+  const status = String(r.approvalStatus ?? r.status ?? "pending").toLowerCase();
+  if (status === "approved" || status === "acknowledged") return "Approved";
+  if (status === "rejected" || status === "failed") return "Rejected";
+  return "Pending";
 }
 
 function categoryTag(r: ReportDoc): string {
@@ -100,6 +122,16 @@ function isSameDay(r: ReportDoc, target: Date): boolean {
   );
 }
 
+function isInPeriod(r: ReportDoc, target: Date, period: ReportPeriod): boolean {
+  if (!r.createdAt) return false;
+  const date: Date = r.createdAt.toDate ? r.createdAt.toDate() : new Date(r.createdAt);
+  if (period === "Annual") return date.getFullYear() === target.getFullYear();
+  if (period === "Monthly") {
+    return date.getFullYear() === target.getFullYear() && date.getMonth() === target.getMonth();
+  }
+  return isSameDay(r, target);
+}
+
 type ReportGroup = { date: string; items: ReportDoc[] };
 
 function groupByDate(reports: ReportDoc[]): ReportGroup[] {
@@ -112,13 +144,13 @@ function groupByDate(reports: ReportDoc[]): ReportGroup[] {
   return Array.from(map.entries()).map(([date, items]) => ({ date, items }));
 }
 
-function buildHtml(groups: { date: string; items: ReportDoc[] }[]): string {
+function buildHtml(groups: { date: string; items: ReportDoc[] }[], period: ReportPeriod, periodLabel: string): string {
   const rows = groups
     .map(
       (g) => `
       <div class="group">
         <h3>${g.date}</h3>
-        ${g.items.map((r) => `<div class="item"><strong>${categoryLabel(resolveCategory(r))}</strong><p>${reportDesc(r)}</p></div>`).join("")}
+        ${g.items.map((r) => `<div class="item"><strong>${displayCategory(r)}</strong><span class="status ${statusLabel(r).toLowerCase()}">${statusLabel(r)}</span><p>${reportDesc(r)}</p></div>`).join("")}
       </div>`,
     )
     .join("");
@@ -131,10 +163,13 @@ function buildHtml(groups: { date: string; items: ReportDoc[] }[]): string {
       .item { background: #F5F9FD; border-radius: 6px; padding: 10px 14px; margin-bottom: 8px; }
       .item strong { font-size: 14px; }
       .item p { font-size: 12px; color: #5A6A7A; margin: 4px 0 0; }
+      .status { float: right; font-size: 11px; font-weight: bold; }
+      .approved { color: #16835B; } .pending { color: #B7791F; } .rejected { color: #C53030; }
     </style>
   </head><body>
-    <h1>RentWise Daily Reports</h1>
+    <h1>RentWise ${period} Report</h1>
     <h2>Ka Domeng Talipapa Wet and Dry Market</h2>
+    <h2>${periodLabel}</h2>
     ${rows || "<p>No reports found.</p>"}
   </body></html>`;
 }
@@ -147,7 +182,10 @@ export default function DailyReports() {
   const [reports, setReports] = useState<ReportDoc[]>([]);
   const [downloading, setDownloading] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [reportPeriod, setReportPeriod] = useState<ReportPeriod>("Daily");
+  const [calendarVisible, setCalendarVisible] = useState(false);
+  const [calendarDate, setCalendarDate] = useState<Date>(new Date());
+  const [calendarMonth, setCalendarMonth] = useState<Date>(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const downloadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // After the very first successful load, refocus-triggered refetches (e.g. coming back
   // from a report's detail screen) skip the loading spinner so the FlatList never unmounts
@@ -166,9 +204,9 @@ export default function DailyReports() {
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
     { key: "bell", ref: bellRef, title: "Notifications", description: "Shows admin updates waiting for your review, like payments and building changes.", edgeInset: "top", round: true },
-    { key: "date", ref: datePillRef, title: "Date filter", description: "Pick a date to only download reports acknowledged on that day.", edgeInset: "top" },
-    { key: "download", ref: downloadRef, title: "Download Report", description: "Saves a PDF of the reports for the selected date to your phone's Downloads folder.", edgeInset: "top" },
-    { key: "list", ref: listRef, title: "Report list", description: "Every update the admin made that you've acknowledged, grouped by date. Reports are auto-deleted once they're over a month old.", edgeInset: "top", clipBottom: 90 },
+    { key: "date", ref: datePillRef, title: "Report period", description: "Choose Daily, Monthly, or Annual, then select the date, month, or year to review.", edgeInset: "top" },
+    { key: "download", ref: downloadRef, title: "Download Report", description: "Saves a PDF for the selected reporting period to your phone's Downloads folder.", edgeInset: "top" },
+    { key: "list", ref: listRef, title: "Report list", description: "Shows admin updates grouped by date, with consistent approved, pending, and rejected statuses.", edgeInset: "top", clipBottom: 90 },
   ];
 
   // Reset downloading state on mount — prevents stuck button on app restart/revisit
@@ -218,25 +256,31 @@ export default function DailyReports() {
   const fetchData = async () => {
     if (!hasLoadedOnceRef.current) setLoading(true);
     try {
-      const snap = await getDocs(
-        query(collection(db, "updates"), where("approvalStatus", "==", "approved")),
-      );
+      const snap = await getDocs(collection(db, "updates"));
       const docs = snap.docs
         .map((d) => ({ id: d.id, ...d.data() } as ReportDoc))
         .sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
       setReports(docs);
+      await saveLocalCache("owner:reports", docs);
     } catch (err) {
       console.error("DAILY REPORTS ERROR:", err);
+      const cached = await readLocalCache<ReportDoc[]>("owner:reports");
+      if (cached) setReports(cached);
     } finally {
       setLoading(false);
       hasLoadedOnceRef.current = true;
     }
   };
 
-  const onDateChange = (_: unknown, date?: Date) => {
-    setShowDatePicker(false);
-    if (!date) return;
+  const openCalendar = () => {
+    setCalendarDate(selectedDate);
+    setCalendarMonth(new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1));
+    setCalendarVisible(true);
+  };
+
+  const applyCalendarDate = (date: Date) => {
     setSelectedDate(date);
+    setCalendarVisible(false);
 
     // If the picked date has a group in the (already-loaded) list, scroll
     // to it -- lets the owner jump straight to that day's reports instead
@@ -251,6 +295,50 @@ export default function DailyReports() {
     }
   };
 
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const displayedYear = calendarMonth.getFullYear();
+  const displayedMonth = calendarMonth.getMonth();
+  const daysInDisplayedMonth = new Date(displayedYear, displayedMonth + 1, 0).getDate();
+  const firstWeekday = new Date(displayedYear, displayedMonth, 1).getDay();
+  const calendarCells: Array<number | null> = [
+    ...Array.from({ length: firstWeekday }, () => null),
+    ...Array.from({ length: daysInDisplayedMonth }, (_, index) => index + 1),
+  ];
+  while (calendarCells.length % 7 !== 0) calendarCells.push(null);
+
+  const changeCalendarMonth = (amount: number) => {
+    const next = new Date(displayedYear, displayedMonth + amount, 1);
+    if (next > new Date(today.getFullYear(), today.getMonth(), 1)) return;
+    setCalendarMonth(next);
+  };
+
+  const changeCalendarYear = (amount: number) => {
+    const nextYear = displayedYear + amount;
+    if (nextYear > today.getFullYear()) return;
+    const nextMonth = reportPeriod === "Daily"
+      ? displayedMonth
+      : nextYear === today.getFullYear()
+        ? Math.min(displayedMonth, today.getMonth())
+        : displayedMonth;
+    const next = new Date(nextYear, nextMonth, 1);
+    const currentMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    if (next > currentMonth) return;
+    setCalendarMonth(next);
+  };
+
+  const applySelectedPeriod = () => {
+    if (reportPeriod === "Annual") {
+      applyCalendarDate(new Date(displayedYear, 0, 1));
+      return;
+    }
+    if (reportPeriod === "Monthly") {
+      applyCalendarDate(new Date(displayedYear, displayedMonth, 1));
+      return;
+    }
+    applyCalendarDate(calendarDate);
+  };
+
   const downloadPdf = async () => {
     setDownloading(true);
     downloadTimeoutRef.current = setTimeout(() => {
@@ -258,18 +346,28 @@ export default function DailyReports() {
       Alert.alert("Timed Out", "Download took too long. Please try again.");
     }, 15000);
     try {
-      const filtered = reports.filter((r) => isSameDay(r, selectedDate));
+      const filtered = reports.filter((r) => isInPeriod(r, selectedDate, reportPeriod));
       if (filtered.length === 0) {
-        Alert.alert("No Reports", `No acknowledged reports found for ${formatDate({ toDate: () => selectedDate })}.`);
+        Alert.alert("No Reports", `No reports found for the selected ${reportPeriod.toLowerCase()} period.`);
         return;
       }
 
       const groups = groupByDate(filtered);
-      const html = buildHtml(groups);
+      const periodLabel = reportPeriod === "Annual"
+        ? String(selectedDate.getFullYear())
+        : reportPeriod === "Monthly"
+          ? selectedDate.toLocaleDateString("en-PH", { month: "long", year: "numeric" })
+          : formatDate({ toDate: () => selectedDate });
+      const html = buildHtml(groups, reportPeriod, periodLabel);
       const { base64 } = await Print.printToFileAsync({ html, base64: true });
 
       const pad = (n: number) => String(n).padStart(2, "0");
-      const fileName = `daily-reports-${selectedDate.getFullYear()}-${pad(selectedDate.getMonth() + 1)}-${pad(selectedDate.getDate())}.pdf`;
+      const periodKey = reportPeriod === "Annual"
+        ? `${selectedDate.getFullYear()}`
+        : reportPeriod === "Monthly"
+          ? `${selectedDate.getFullYear()}-${pad(selectedDate.getMonth() + 1)}`
+          : `${selectedDate.getFullYear()}-${pad(selectedDate.getMonth() + 1)}-${pad(selectedDate.getDate())}`;
+      const fileName = `${reportPeriod.toLowerCase()}-reports-${periodKey}.pdf`;
       const cachePath = `${RNBlobUtil.fs.dirs.CacheDir}/daily-reports-temp.pdf`;
       await RNBlobUtil.fs.writeFile(cachePath, base64!, "base64");
       await RNBlobUtil.MediaCollection.copyToMediaStore(
@@ -296,7 +394,16 @@ export default function DailyReports() {
     return <View style={styles.fullCenter}><ActivityIndicator color={colors.emerald} size="large" /></View>;
   }
 
-  const groups = groupByDate(reports);
+  const visibleReports = reports.filter((r) => isInPeriod(r, selectedDate, reportPeriod));
+  const groups = groupByDate(visibleReports);
+  const approvedCount = visibleReports.filter((r) => statusLabel(r) === "Approved").length;
+  const pendingCount = visibleReports.filter((r) => statusLabel(r) === "Pending").length;
+  const rejectedCount = visibleReports.filter((r) => statusLabel(r) === "Rejected").length;
+  const selectedPeriodLabel = reportPeriod === "Annual"
+    ? String(selectedDate.getFullYear())
+    : reportPeriod === "Monthly"
+      ? selectedDate.toLocaleDateString("en-PH", { month: "short", year: "numeric" })
+      : formatDate({ toDate: () => selectedDate });
 
   return (
     <View style={styles.screen}>
@@ -326,25 +433,43 @@ export default function DailyReports() {
 
         {/* Sub-header */}
         <View style={styles.subHeader}>
-          <Text style={styles.pageTitle}>Daily reports</Text>
-          <View ref={datePillRef} collapsable={false}>
-            <TouchableOpacity style={styles.datePill} onPress={() => setShowDatePicker(true)} activeOpacity={0.7}>
-              <Text style={styles.datePillText}>{formatDate({ toDate: () => selectedDate })}</Text>
+          <Text style={styles.pageTitle}>Reports</Text>
+          <View>
+            <TouchableOpacity style={styles.datePill} onPress={openCalendar} activeOpacity={0.7}>
+              <Text style={styles.datePillText}>{selectedPeriodLabel}</Text>
             </TouchableOpacity>
           </View>
         </View>
       </LinearGradient>
 
-      {showDatePicker && (
-        <DateTimePicker
-          value={selectedDate}
-          mode="date"
-          display="default"
-          maximumDate={new Date()}
-          onValueChange={onDateChange}
-          onDismiss={() => setShowDatePicker(false)}
-        />
-      )}
+      <View style={styles.periodSection} ref={datePillRef} collapsable={false}>
+        <View style={styles.periodTabs}>
+          {(["Daily", "Monthly", "Annual"] as ReportPeriod[]).map((period) => (
+            <TouchableOpacity
+              key={period}
+              style={[styles.periodTab, reportPeriod === period && styles.periodTabActive]}
+              onPress={() => setReportPeriod(period)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.periodTabText, reportPeriod === period && styles.periodTabTextActive]}>{period}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <View style={styles.statusSummary}>
+          <View style={[styles.statusSummaryCard, styles.statusApprovedCard]}>
+            <CheckCircle2 size={14} color={colors.success} />
+            <Text style={styles.statusApprovedText}>{approvedCount} Approved</Text>
+          </View>
+          <View style={[styles.statusSummaryCard, styles.statusPendingCard]}>
+            <Clock size={14} color={colors.warning} />
+            <Text style={styles.statusPendingText}>{pendingCount} Pending</Text>
+          </View>
+          <View style={[styles.statusSummaryCard, styles.statusRejectedCard]}>
+            <XCircle size={14} color={colors.error} />
+            <Text style={styles.statusRejectedText}>{rejectedCount} Rejected</Text>
+          </View>
+        </View>
+      </View>
 
       {/* Download Report button */}
       <View style={styles.downloadRow}>
@@ -374,7 +499,7 @@ export default function DailyReports() {
       <View style={{ flex: 1 }} ref={listRef} collapsable={false}>
       {loading ? (
         <ActivityIndicator color={colors.emerald} size="large" style={styles.loader} />
-      ) : reports.length === 0 ? (
+      ) : visibleReports.length === 0 ? (
         <View style={styles.emptyBox}>
           <FileText size={40} color={colors.emeraldSoft} style={{ marginBottom: 10 }} />
           <Text style={styles.emptyText}>No reports for this period.</Text>
@@ -424,11 +549,17 @@ export default function DailyReports() {
                       <CategoryIcon size={18} color={colors.emerald} />
                     </View>
                     <View style={styles.cardText}>
-                      <Text style={styles.reportTitle} numberOfLines={1} ellipsizeMode="tail">{categoryLabel(cat)}</Text>
+                      <Text style={styles.reportTitle} numberOfLines={1} ellipsizeMode="tail">{displayCategory(r)}</Text>
                       <Text style={styles.reportDesc} numberOfLines={1} ellipsizeMode="tail">{reportDesc(r)}</Text>
                     </View>
-                    <View style={styles.tagPill}>
-                      <Text style={styles.tagPillText} numberOfLines={1}>{categoryTag(r)}</Text>
+                    <View style={[
+                      styles.tagPill,
+                      statusLabel(r) === "Approved" ? styles.tagApproved : statusLabel(r) === "Rejected" ? styles.tagRejected : styles.tagPending,
+                    ]}>
+                      <Text style={[
+                        styles.tagPillText,
+                        statusLabel(r) === "Approved" ? styles.tagApprovedText : statusLabel(r) === "Rejected" ? styles.tagRejectedText : styles.tagPendingText,
+                      ]} numberOfLines={1}>{statusLabel(r)}</Text>
                     </View>
                   </TouchableOpacity>
                 );
@@ -438,6 +569,121 @@ export default function DailyReports() {
         />
       )}
       </View>
+
+      <Modal
+        visible={calendarVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCalendarVisible(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setCalendarVisible(false)}>
+          <Pressable style={styles.calendarSheet} onPress={(event) => event.stopPropagation()}>
+            <Text style={styles.dateMenuTitle}>
+              {reportPeriod === "Annual" ? "Choose report year" : reportPeriod === "Monthly" ? "Choose report month" : "Choose report date"}
+            </Text>
+            <View style={styles.calendarYearRow}>
+              <TouchableOpacity style={styles.calendarYearButton} onPress={() => changeCalendarYear(-1)}>
+                <Text style={styles.calendarYearButtonText}>Previous year</Text>
+              </TouchableOpacity>
+              <Text style={styles.calendarYearText}>{displayedYear}</Text>
+              <TouchableOpacity
+                style={styles.calendarYearButton}
+                onPress={() => changeCalendarYear(1)}
+                disabled={displayedYear >= today.getFullYear()}
+              >
+                <Text style={[styles.calendarYearButtonText, displayedYear >= today.getFullYear() && styles.calendarDisabledText]}>
+                  Next year
+                </Text>
+              </TouchableOpacity>
+            </View>
+            {reportPeriod === "Annual" ? (
+              <View style={styles.annualSelection}>
+                <Text style={styles.annualSelectionYear}>{displayedYear}</Text>
+                <Text style={styles.annualSelectionHint}>The report will include the full year.</Text>
+              </View>
+            ) : reportPeriod === "Monthly" ? (
+              <View style={styles.monthSelectionGrid}>
+                {Array.from({ length: 12 }, (_, month) => {
+                  const disabled = displayedYear === today.getFullYear() && month > today.getMonth();
+                  const selected = month === displayedMonth;
+                  return (
+                    <TouchableOpacity
+                      key={month}
+                      style={[styles.monthSelectionCell, selected && styles.monthSelectionCellSelected]}
+                      disabled={disabled}
+                      onPress={() => setCalendarMonth(new Date(displayedYear, month, 1))}
+                    >
+                      <Text style={[
+                        styles.monthSelectionText,
+                        disabled && styles.calendarDisabledText,
+                        selected && styles.monthSelectionTextSelected,
+                      ]}>
+                        {new Date(displayedYear, month, 1).toLocaleDateString("en-PH", { month: "short" })}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ) : (
+              <>
+                <View style={styles.calendarMonthRow}>
+                  <TouchableOpacity style={styles.calendarArrowButton} onPress={() => changeCalendarMonth(-1)}>
+                    <ChevronLeft size={21} color={colors.emerald} />
+                  </TouchableOpacity>
+                  <Text style={styles.calendarMonthText}>
+                    {calendarMonth.toLocaleDateString("en-PH", { month: "long" })}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.calendarArrowButton}
+                    onPress={() => changeCalendarMonth(1)}
+                    disabled={displayedYear === today.getFullYear() && displayedMonth === today.getMonth()}
+                  >
+                    <ChevronRight
+                      size={21}
+                      color={displayedYear === today.getFullYear() && displayedMonth === today.getMonth() ? colors.textMuted : colors.emerald}
+                    />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.calendarGrid}>
+                  {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => (
+                    <Text key={`${day}-${index}`} style={styles.calendarWeekday}>{day}</Text>
+                  ))}
+                  {calendarCells.map((day, index) => {
+                    if (!day) return <View key={`empty-${index}`} style={styles.calendarDayCell} />;
+                    const cellDate = new Date(displayedYear, displayedMonth, day);
+                    const disabled = cellDate > today;
+                    const selected = localDateKey(cellDate) === localDateKey(calendarDate);
+                    return (
+                      <TouchableOpacity
+                        key={`${displayedYear}-${displayedMonth}-${day}`}
+                        style={[styles.calendarDayCell, selected && styles.calendarDaySelected]}
+                        disabled={disabled}
+                        onPress={() => setCalendarDate(cellDate)}
+                      >
+                        <Text style={[
+                          styles.calendarDayText,
+                          disabled && styles.calendarDisabledText,
+                          selected && styles.calendarDaySelectedText,
+                        ]}>
+                          {day}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </>
+            )}
+            <View style={styles.calendarActions}>
+              <TouchableOpacity onPress={() => setCalendarVisible(false)} style={styles.calendarCancelButton}>
+                <Text style={styles.calendarCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={applySelectedPeriod} style={styles.calendarApplyButton}>
+                <Text style={styles.calendarApplyText}>Show Reports</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
 
@@ -529,6 +775,202 @@ const styles = StyleSheet.create({
   },
   datePillText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.emeraldSoft },
 
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: colors.overlay,
+    justifyContent: "center",
+    padding: spacing.xl,
+  },
+  calendarSheet: {
+    backgroundColor: colors.white,
+    borderRadius: radius.xl,
+    padding: spacing.md,
+    ...shadow.card,
+  },
+  dateMenuTitle: {
+    fontSize: fontSize.md,
+    color: colors.ink,
+    fontFamily: fontFamily.bold,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  calendarYearRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+  },
+  calendarYearButton: {
+    minWidth: 86,
+    paddingVertical: spacing.sm,
+    alignItems: "center",
+  },
+  calendarYearButtonText: {
+    fontSize: fontSize.xs,
+    color: colors.emerald,
+    fontFamily: fontFamily.semibold,
+  },
+  calendarYearText: {
+    fontSize: fontSize.base,
+    color: colors.ink,
+    fontFamily: fontFamily.bold,
+  },
+  calendarMonthRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+  },
+  calendarArrowButton: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+    backgroundColor: colors.mist,
+  },
+  calendarMonthText: {
+    fontSize: fontSize.md,
+    color: colors.ink,
+    fontFamily: fontFamily.bold,
+  },
+  calendarGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginBottom: spacing.sm,
+  },
+  calendarWeekday: {
+    width: "14.2857%",
+    textAlign: "center",
+    paddingVertical: spacing.sm,
+    color: colors.textSecondary,
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.bold,
+  },
+  calendarDayCell: {
+    width: "14.2857%",
+    aspectRatio: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+  },
+  calendarDaySelected: { backgroundColor: colors.emerald },
+  calendarDayText: {
+    color: colors.textPrimary,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+  },
+  calendarDaySelectedText: { color: colors.white, fontFamily: fontFamily.bold },
+  calendarDisabledText: { color: colors.textMuted },
+  annualSelection: {
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.mist,
+    borderRadius: radius.lg,
+    paddingVertical: spacing.xl,
+    marginVertical: spacing.sm,
+  },
+  annualSelectionYear: {
+    fontSize: fontSize.xl,
+    color: colors.emerald,
+    fontFamily: fontFamily.bold,
+  },
+  annualSelectionHint: {
+    marginTop: spacing.xs,
+    fontSize: fontSize.xs,
+    color: colors.textSecondary,
+    fontFamily: fontFamily.regular,
+  },
+  monthSelectionGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginVertical: spacing.sm,
+  },
+  monthSelectionCell: {
+    width: "33.3333%",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+  },
+  monthSelectionCellSelected: { backgroundColor: colors.emerald },
+  monthSelectionText: {
+    fontSize: fontSize.sm,
+    color: colors.textPrimary,
+    fontFamily: fontFamily.semibold,
+  },
+  monthSelectionTextSelected: { color: colors.white, fontFamily: fontFamily.bold },
+  calendarActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  calendarCancelButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+  },
+  calendarCancelText: {
+    color: colors.textSecondary,
+    fontFamily: fontFamily.semibold,
+    fontSize: fontSize.sm,
+  },
+  calendarApplyButton: {
+    backgroundColor: colors.emerald,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm + 2,
+  },
+  calendarApplyText: {
+    color: colors.white,
+    fontFamily: fontFamily.bold,
+    fontSize: fontSize.sm,
+  },
+
+  periodSection: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+  },
+  periodTabs: {
+    flexDirection: "row",
+    backgroundColor: colors.mist,
+    borderRadius: radius.pill,
+    padding: 3,
+  },
+  periodTab: {
+    flex: 1,
+    alignItems: "center",
+    borderRadius: radius.pill,
+    paddingVertical: spacing.sm,
+  },
+  periodTabActive: { backgroundColor: colors.emerald },
+  periodTabText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.textSecondary },
+  periodTabTextActive: { color: colors.white },
+  statusSummary: {
+    flexDirection: "row",
+    gap: 5,
+    marginTop: spacing.sm,
+  },
+  statusSummaryCard: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    paddingVertical: 7,
+    paddingHorizontal: 4,
+  },
+  statusApprovedCard: { backgroundColor: colors.successSoft, borderColor: colors.success },
+  statusPendingCard: { backgroundColor: colors.warningSoft, borderColor: colors.warning },
+  statusRejectedCard: { backgroundColor: colors.errorSoft, borderColor: colors.error },
+  statusApprovedText: { flexShrink: 1, fontSize: fontSize.xs - 1, fontFamily: fontFamily.bold, color: colors.success },
+  statusPendingText: { flexShrink: 1, fontSize: fontSize.xs - 1, fontFamily: fontFamily.bold, color: colors.warning },
+  statusRejectedText: { flexShrink: 1, fontSize: fontSize.xs - 1, fontFamily: fontFamily.bold, color: colors.error },
+
   loader: { marginTop: 60 },
 
   emptyBox: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60 },
@@ -587,6 +1029,12 @@ const styles = StyleSheet.create({
     color: colors.emerald,
     textTransform: "uppercase",
   },
+  tagApproved: { backgroundColor: colors.successSoft },
+  tagPending: { backgroundColor: colors.warningSoft },
+  tagRejected: { backgroundColor: colors.errorSoft },
+  tagApprovedText: { color: colors.success },
+  tagPendingText: { color: colors.warning },
+  tagRejectedText: { color: colors.error },
 
   toast: {
     position: "absolute",

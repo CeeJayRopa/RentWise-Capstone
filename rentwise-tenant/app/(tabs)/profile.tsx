@@ -19,7 +19,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { doc, onSnapshot, updateDoc } from "firebase/firestore";
-import { sendEmailVerification, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
+import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 import { auth } from "../../shared/firebaseConfig";
 import { db } from "../../shared/services/firestore";
 import { getTenantData, updateTenantProfile, syncPersonalEmail } from "../../services/tenantService";
@@ -40,9 +40,6 @@ export default function Profile() {
   const [lastName, setLastName] = useState("");
   const [contact, setContact] = useState("");
   const [personalEmail, setPersonalEmail] = useState("");
-  const [emailVerified, setEmailVerified] = useState(false);
-  const [resendingVerification, setResendingVerification] = useState(false);
-  const [showSpamReminder, setShowSpamReminder] = useState(false);
   const [stallId, setStallId] = useState("");
   const [memberSince, setMemberSince] = useState("");
   const [category, setCategory] = useState<MarketCategory | "">("");
@@ -162,7 +159,7 @@ export default function Profile() {
   const tourSteps: HelpStep[] = [
     { key: "identity", ref: identityRef, title: "Your space", description: "Your space ID and how long you've been a tenant.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(identityRef) },
     { key: "category", ref: categoryRef, title: "Market category", description: "The kind of goods sold at your stall. Tap Edit Profile to change it — updates here sync with the admin's records too.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(categoryRef) },
-    { key: "form", ref: formRef, endRef: emailSectionRef, title: "Your details", description: "Your name, contact number, and personal email — the email enables self-service password reset without needing the admin, once verified. Didn't get the verification email? Resend it here.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(formRef) },
+    { key: "form", ref: formRef, endRef: emailSectionRef, title: "Your details", description: "Your name, contact number, and registered Gmail. Gmail identifies your account, while SMS OTP secures password recovery.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(formRef) },
     { key: "save", ref: saveBtnRef, title: "Edit Profile", description: "Unlocks the fields above so you can update them.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(saveBtnRef) },
     { key: "password", ref: pwSectionRef, title: "Change password", description: "Set a new login password without needing the Forgot Password flow. Must be 8-12 characters with an uppercase letter, a number, and a special character.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(pwSectionRef) },
     { key: "signout", ref: signOutRef, title: "Sign out", description: "Signs you out of your account.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(signOutRef) },
@@ -220,7 +217,6 @@ export default function Profile() {
         setLastName(data.lastName || "");
         setContact(data.contactNo || "");
         setPersonalEmail(data.personalEmail || "");
-        setEmailVerified((data as any).emailVerified === true);
         setStallId(data.stallId || "");
         const createdAt = (data as any).createdAt;
         if (createdAt?.toDate) {
@@ -242,21 +238,6 @@ export default function Profile() {
       }
     } catch (error) {
       console.log("Profile Load Error:", error);
-    }
-  }
-
-  async function handleResendVerification() {
-    const user = auth.currentUser;
-    if (!user) return;
-    setResendingVerification(true);
-    try {
-      await sendEmailVerification(user);
-      Alert.alert("Verification email sent", "Check your inbox and tap the link to confirm your email.");
-      setTimeout(() => setShowSpamReminder(true), 5000);
-    } catch {
-      Alert.alert("Error", "Couldn't send the verification email. Please try again later.");
-    } finally {
-      setResendingVerification(false);
     }
   }
 
@@ -411,15 +392,19 @@ export default function Profile() {
     const fn = firstName.trim();
     const ln = lastName.trim();
     const cn = contact.trim();
-    const pe = personalEmail.trim();
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const pe = personalEmail.trim().toLowerCase();
+    const emailRegex = /^[A-Z0-9._%+-]+@gmail\.com$/i;
 
     if (!fn || !ln || !cn) {
       Alert.alert("Missing Information", "Name and contact no. are required.");
       return;
     }
+    if (!/^9\d{9}$/.test(cn)) {
+      Alert.alert("Invalid Contact Number", "Enter a valid 10-digit number starting with 9.");
+      return;
+    }
     if (pe && !emailRegex.test(pe)) {
-      Alert.alert("Invalid Email", "Enter a valid email address, or leave it blank.");
+      Alert.alert("Invalid Gmail", "Enter a valid @gmail.com address, or leave it blank.");
       return;
     }
 
@@ -634,23 +619,10 @@ export default function Profile() {
 
             {!!original.personalEmail && (
               <View style={styles.verifyRow}>
-                {emailVerified ? (
-                  <View style={styles.verifyBadgeSuccess}>
-                    <CheckCircle2 size={13} color={colors.emerald} />
-                    <Text style={styles.verifyBadgeSuccessText}>Email verified</Text>
-                  </View>
-                ) : (
-                  <>
-                    <View style={styles.verifyBadgeWarning}>
-                      <Text style={styles.verifyBadgeWarningText}>Email not verified yet</Text>
-                    </View>
-                    <Pressable onPress={handleResendVerification} disabled={resendingVerification} hitSlop={8}>
-                      <Text style={styles.resendLink}>
-                        {resendingVerification ? "Sending..." : "Resend verification email"}
-                      </Text>
-                    </Pressable>
-                  </>
-                )}
+                <View style={styles.verifyBadgeSuccess}>
+                  <Mail size={13} color={colors.emerald} />
+                  <Text style={styles.verifyBadgeSuccessText}>Registered Gmail</Text>
+                </View>
               </View>
             )}
           </View>
@@ -1000,42 +972,6 @@ export default function Profile() {
         </View>
       </Modal>
 
-      {/* SPAM FOLDER REMINDER MODAL */}
-      <Modal
-        visible={showSpamReminder}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowSpamReminder(false)}
-      >
-        <View style={styles.alertOverlay}>
-          <TouchableOpacity
-            style={StyleSheet.absoluteFill}
-            activeOpacity={1}
-            onPress={() => setShowSpamReminder(false)}
-          />
-          <View style={styles.alertCard}>
-            <View style={styles.alertBody}>
-              <Text style={styles.alertTitleNeutral}>Check your spam folder</Text>
-              <Text style={styles.alertMessage}>
-                Didn't see the email? It sometimes lands in spam or junk instead of your main inbox.
-              </Text>
-            </View>
-            <View style={styles.alertDivider} />
-            <View style={styles.alertBtnRow}>
-              <Pressable
-                style={({ pressed }) => [styles.alertBtn, pressed && styles.alertBtnConfirmPressed]}
-                onPress={() => setShowSpamReminder(false)}
-              >
-                {({ pressed }) => (
-                  <Text style={[styles.alertBtnConfirmText, pressed && styles.alertBtnConfirmTextPressed]}>
-                    Got it
-                  </Text>
-                )}
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }

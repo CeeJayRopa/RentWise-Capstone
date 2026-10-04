@@ -18,11 +18,12 @@ import {
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { doc, onSnapshot, updateDoc } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { House, HelpCircle, CheckCircle2, LogOut } from "lucide-react-native";
 
 import { auth, logoutUser } from "../shared/services/auth";
+import { clearLocalCache } from "../shared/services/localCache";
 import { db } from "../shared/services/firestore";
 import { setRememberMe } from "../shared/services/rememberMe";
 import HelpTour, { HelpStep } from "./components/HelpTour";
@@ -132,8 +133,29 @@ export default function AdminProfile() {
       router.replace("/");
       return;
     }
-    loadProfile(user.uid);
-  }, []);
+
+    setLoading(true);
+    return onSnapshot(
+      doc(db, "users", user.uid),
+      (snap) => {
+        if (snap.exists() && !isEditing) {
+          const data = snap.data();
+          const fn = data.firstName ?? "";
+          const ln = data.lastName ?? "";
+          const cn = data.contactNo ?? "";
+          setFirstName(fn);
+          setLastName(ln);
+          setContactNo(cn);
+          originalRef.current = { firstName: fn, lastName: ln, contactNo: cn };
+        }
+        setLoading(false);
+      },
+      (err) => {
+        console.error("ADMIN PROFILE LISTENER ERROR:", err);
+        setLoading(false);
+      },
+    );
+  }, [isEditing]);
 
   // Auto-opens the guided tour the first time the admin ever lands on this
   // page — never again after that, since it flips a persisted per-device
@@ -166,26 +188,6 @@ export default function AdminProfile() {
     ]).start(() => setSaved(false));
   }, [saved]);
 
-  const loadProfile = async (uid: string) => {
-    try {
-      const snap = await getDoc(doc(db, "users", uid));
-      if (snap.exists()) {
-        const data = snap.data();
-        const fn = data.firstName ?? "";
-        const ln = data.lastName ?? "";
-        const cn = data.contactNo ?? "";
-        setFirstName(fn);
-        setLastName(ln);
-        setContactNo(cn);
-        originalRef.current = { firstName: fn, lastName: ln, contactNo: cn };
-      }
-    } catch (err) {
-      console.error("ADMIN PROFILE LOAD ERROR:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const hasChanges =
     firstName.trim() !== originalRef.current.firstName ||
     lastName.trim() !== originalRef.current.lastName ||
@@ -204,6 +206,10 @@ export default function AdminProfile() {
 
     if (!fn || !ln || !cn) {
       Alert.alert("Missing Information", "All fields are required.");
+      return;
+    }
+    if (!/^9\d{9}$/.test(cn)) {
+      Alert.alert("Invalid Contact Number", "Enter a valid 10-digit number starting with 9.");
       return;
     }
 
@@ -238,6 +244,7 @@ export default function AdminProfile() {
   const handleLogout = async () => {
     setLoggingOut(true);
     try {
+      await clearLocalCache().catch(() => {});
       await logoutUser();
       await setRememberMe(false);
       router.replace("/");

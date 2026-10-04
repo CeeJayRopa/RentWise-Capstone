@@ -34,6 +34,7 @@ type StallInfo = {
 type TenantInfo = {
   uid: string;
   firstName: string;
+  middleName: string;
   lastName: string;
   email: string;
   contactNo: string;
@@ -56,6 +57,7 @@ export default function Account() {
 
   // Create mode form fields
   const [firstName, setFirstName] = useState("");
+  const [middleName, setMiddleName] = useState("");
   const [lastName, setLastName] = useState("");
   const [contactNo, setContactNo] = useState("");
   const [personalEmail, setPersonalEmail] = useState("");
@@ -63,6 +65,7 @@ export default function Account() {
   // Field errors (create mode)
   const [firstNameError, setFirstNameError] = useState("");
   const [lastNameError, setLastNameError] = useState("");
+  const [contactNoError, setContactNoError] = useState("");
   const [personalEmailError, setPersonalEmailError] = useState("");
 
   // Shared submit state
@@ -158,6 +161,7 @@ export default function Account() {
             setTenantInfo({
               uid: userSnap.id,
               firstName: (ud.firstName as string) ?? "",
+              middleName: (ud.middleName as string) ?? "",
               lastName: (ud.lastName as string) ?? "",
               email: (ud.personalEmail as string) ?? (ud.email as string) ?? "",
               contactNo: (ud.contactNo as string) ?? "",
@@ -184,11 +188,15 @@ export default function Account() {
       setLastNameError("Required.");
       valid = false;
     } else setLastNameError("");
+    if (!/^9\d{9}$/.test(contactNo.trim())) {
+      setContactNoError("Enter a valid 10-digit number starting with 9.");
+      valid = false;
+    } else setContactNoError("");
     if (!personalEmail.trim()) {
       setPersonalEmailError("Email is required.");
       valid = false;
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(personalEmail.trim())) {
-      setPersonalEmailError("Enter a valid email address.");
+    } else if (!/^[A-Z0-9._%+-]+@gmail\.com$/i.test(personalEmail.trim())) {
+      setPersonalEmailError("Enter a valid @gmail.com email address.");
       valid = false;
     } else {
       setPersonalEmailError("");
@@ -203,10 +211,11 @@ export default function Account() {
     try {
       await createTenantAccount({
         firstName: firstName.trim(),
+        middleName: middleName.trim(),
         lastName: lastName.trim(),
         contactNo: contactNo.trim(),
         stallId,
-        personalEmail: personalEmail.trim(),
+        personalEmail: personalEmail.trim().toLowerCase(),
       });
       setSubmitSuccess("Tenant account created successfully.");
       setTimeout(() => {
@@ -217,6 +226,7 @@ export default function Account() {
       if (e.code === "auth/email-already-in-use") {
         setSubmitError("This email is already in use by another account.");
       } else if (
+        e.message?.includes("@gmail.com") ||
         e.message?.includes("registered by another admin") ||
         e.message === "Stall not found."
       ) {
@@ -306,6 +316,12 @@ export default function Account() {
                     disabled={submitting || !!submitSuccess}
                   />
                   <Field
+                    label="Middle Name (Optional)"
+                    value={middleName}
+                    onChange={setMiddleName}
+                    disabled={submitting || !!submitSuccess}
+                  />
+                  <Field
                     label="Last Name"
                     value={lastName}
                     onChange={(t) => {
@@ -324,7 +340,10 @@ export default function Account() {
                       <TextInput
                         style={styles.phoneInput}
                         value={contactNo}
-                        onChangeText={(t) => setContactNo(t.replace(/\D/g, "").slice(0, 10))}
+                        onChangeText={(t) => {
+                          setContactNo(t.replace(/\D/g, "").slice(0, 10));
+                          setContactNoError("");
+                        }}
                         placeholder="9XXXXXXXXX"
                         placeholderTextColor={colors.textMuted}
                         keyboardType="phone-pad"
@@ -332,6 +351,11 @@ export default function Account() {
                         editable={!submitting && !submitSuccess}
                       />
                     </View>
+                    {!!contactNoError && (
+                      <Text style={{ color: colors.error, fontSize: 12, marginTop: 4 }}>
+                        {contactNoError}
+                      </Text>
+                    )}
                   </View>
 
                   <View style={styles.field}>
@@ -391,7 +415,7 @@ export default function Account() {
                       <Card noPadding style={styles.infoCard}>
                         <InfoRow
                           label="Name"
-                          value={`${tenantInfo.firstName} ${tenantInfo.lastName}`}
+                          value={[tenantInfo.firstName, tenantInfo.middleName, tenantInfo.lastName].filter(Boolean).join(" ")}
                         />
                         <InfoRow label="Email" value={tenantInfo.email} />
                         <InfoRow
@@ -413,6 +437,7 @@ export default function Account() {
                               mode: "move",
                               uid: tenantInfo.uid,
                               firstName: tenantInfo.firstName,
+                              middleName: tenantInfo.middleName,
                               lastName: tenantInfo.lastName,
                               email: tenantInfo.email,
                               buildingNumber: stallInfo?.buildingNumber ?? "",

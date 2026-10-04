@@ -33,6 +33,34 @@ import { getUserRole } from "../shared/services/userServices";
 import { setRememberMe } from "../shared/services/rememberMe";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
+const CREDENTIAL_ERROR_CODES = new Set([
+  "auth/invalid-credential",
+  "auth/wrong-password",
+  "auth/user-not-found",
+  "auth/invalid-email",
+]);
+
+function loginServiceMessage(err: any): string | null {
+  const code = String(err?.code ?? "");
+  const message = String(err?.message ?? "").toLowerCase();
+  if (CREDENTIAL_ERROR_CODES.has(code)) return null;
+  if (code === "functions/unauthenticated" || message.includes("app check") || message.includes("verification")) {
+    return "App verification failed. Please update the app and try again.";
+  }
+  if (
+    code === "auth/network-request-failed" ||
+    code === "functions/unavailable" ||
+    code === "functions/deadline-exceeded" ||
+    message.includes("network") ||
+    message.includes("offline") ||
+    message.includes("timeout") ||
+    message.includes("failed to fetch")
+  ) {
+    return "No internet connection. Check your connection and try again.";
+  }
+  return "Login service is temporarily unavailable. Please try again.";
+}
+
 const cloudFunctions = getFunctions(firebaseApp);
 
 export default function Login() {
@@ -215,6 +243,10 @@ export default function Login() {
   async function handleLogin() {
     setErrorMsg("");
     const identifier = email.trim();
+    if (!identifier || !password.trim()) {
+      setErrorMsg("Please enter your email and password.");
+      return;
+    }
 
     const existingLockout = await checkLockout(identifier);
     if (existingLockout) {
@@ -239,14 +271,9 @@ export default function Login() {
       // Network/infra failures aren't proof of a wrong password -- counting
       // them against the lockout would lock out someone with a bad
       // connection just as fast as someone actually guessing wrong.
-      const code = err?.code ?? "";
-      const isConnectivityIssue =
-        code === "auth/network-request-failed" ||
-        code === "functions/unavailable" ||
-        code === "functions/internal" ||
-        code === "functions/deadline-exceeded";
-      if (isConnectivityIssue) {
-        setErrorMsg("Connection problem. Check your internet and try again.");
+      const serviceError = loginServiceMessage(err);
+      if (serviceError) {
+        setErrorMsg(serviceError);
         return;
       }
 
@@ -441,7 +468,10 @@ export default function Login() {
         {/* Dim lives on its own full-screen layer so keyboard padding can't
             shift it (see fp.backdrop). */}
         <View style={fp.backdrop} pointerEvents="none" />
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
           <View style={fp.overlay}>
             <View style={fp.card}>
               {/* Close button */}
@@ -460,7 +490,7 @@ export default function Login() {
 
               {/* Email field */}
               <View style={{ marginTop: spacing.xxl - 2, alignSelf: "stretch" }}>
-                <Text style={fp.label}>Verified Gmail</Text>
+                <Text style={fp.label}>Registered Gmail</Text>
                 <View style={fp.inputWrapper}>
                   <Mail size={16} color={colors.emeraldBright} style={fp.inputIcon} />
                   <TextInput

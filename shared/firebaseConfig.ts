@@ -58,6 +58,7 @@ try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const {
       initializeAppCheck: initializeRnfbAppCheck,
+      getToken: getRnfbAppCheckToken,
       ReactNativeFirebaseAppCheckProvider,
     } = require("@react-native-firebase/app-check");
 
@@ -78,11 +79,12 @@ try {
     initializeAppCheck(firebaseApp, {
       provider: new CustomProvider({
         getToken: async () => {
-          await rnfbReady;
-          // Same provider instance the native side already activated --
-          // its getToken() returns the real {token, expireTimeMillis} pair,
-          // re-attested by Play Integrity/App Attest each time it's called.
-          return rnfbProvider.getToken();
+          // initializeAppCheck resolves to the native AppCheck instance.
+          // The provider object's getToken() is only an interface placeholder
+          // and deliberately throws; tokens must be requested from that
+          // initialized instance through the RNFirebase modular API.
+          const rnfbAppCheck = await rnfbReady;
+          return getRnfbAppCheckToken(rnfbAppCheck, false);
         },
       }),
       isTokenAutoRefreshEnabled: true,

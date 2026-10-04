@@ -11,6 +11,7 @@ import {
   Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { router, useLocalSearchParams } from "expo-router";
 import React, { useRef, useState } from "react";
 import { subscribeToStalls } from "../services/stallService";
 import NavigableMap from "../shared/components/NavigableMap";
@@ -273,8 +274,15 @@ function NavLinkButton({
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function GuestLanding() {
+  const { open } = useLocalSearchParams<{ open?: string }>();
   const { width, height, isMobile, isTablet, isDesktop } = useBreakpoints();
   const [stallOccupancy, setStallOccupancy] = useState<{ occupied: number; total: number } | null>(null);
+
+  React.useEffect(() => {
+    if (open === "ar") {
+      router.replace("/ar-view");
+    }
+  }, [open]);
 
   React.useEffect(() => {
     const unsubscribe = subscribeToStalls(

@@ -12,8 +12,8 @@ const PILL_HEIGHT = 28;
 
 const TAB_CONFIG: { routeName: string; key: NavKey; label: string; Icon: typeof Wallet }[] = [
   { routeName: "financials", key: "financials", label: "Financials", Icon: Wallet },
-  { routeName: "building", key: "building", label: "Building", Icon: Building2 },
-  { routeName: "manage-admin", key: "admins", label: "Admins", Icon: ShieldCheck },
+  { routeName: "building", key: "building", label: "Stalls", Icon: Building2 },
+  { routeName: "manage-admin", key: "admins", label: "Admin", Icon: ShieldCheck },
   { routeName: "archives", key: "archives", label: "Archives", Icon: Archive },
   { routeName: "daily-reports", key: "reports", label: "Reports", Icon: FileText },
 ];

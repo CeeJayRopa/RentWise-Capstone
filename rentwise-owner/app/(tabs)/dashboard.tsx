@@ -32,6 +32,8 @@ import {
   AlertCircle,
   TrendingUp,
   TrendingDown,
+  FileText,
+  Clock3,
 } from "lucide-react-native";
 
 import { auth } from "../../shared/services/auth";
@@ -46,7 +48,6 @@ import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../sha
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 type Stats = {
-  tenantCount: number;
   occupiedCount: number;
   unoccupiedCount: number;
   paidCount: number;
@@ -58,7 +59,6 @@ type Stats = {
 };
 
 const ZERO_STATS: Stats = {
-  tenantCount: 0,
   occupiedCount: 0,
   unoccupiedCount: 0,
   paidCount: 0,
@@ -68,6 +68,22 @@ const ZERO_STATS: Stats = {
   collectedThisMonth: 0,
   collectedLastMonth: 0,
 };
+
+type ReportStats = {
+  pendingToday: number;
+  acknowledgedToday: number;
+  active: number;
+};
+
+const ZERO_REPORT_STATS: ReportStats = {
+  pendingToday: 0,
+  acknowledgedToday: 0,
+  active: 0,
+};
+
+function localDayKey(date = new Date()): string {
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
 
 function pctChange(current: number, previous: number): number {
   if (previous <= 0) return current > 0 ? 100 : 0;
@@ -85,7 +101,11 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
+  const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const liveRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [stats, setStats] = useState<Stats>(ZERO_STATS);
+  const [reportStats, setReportStats] = useState<ReportStats>(ZERO_REPORT_STATS);
+  const [reportDayKey, setReportDayKey] = useState(() => localDayKey());
   const [tourVisible, setTourVisible] = useState(false);
   const [focusTick, setFocusTick] = useState(0);
   const donutAnim = useRef(new Animated.Value(0)).current;
@@ -96,6 +116,7 @@ export default function Dashboard() {
   const marketChartRef = useRef<View>(null);
   const financeChartRef = useRef<View>(null);
   const collectedRef = useRef<View>(null);
+  const reportsRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
     { key: "profile", ref: profileRef, title: "Profile", description: "View and edit your owner account details.", edgeInset: "top", round: true },
@@ -103,9 +124,10 @@ export default function Dashboard() {
     { key: "market", ref: marketChartRef, title: "Market overview", description: "How many stalls are occupied vs. unoccupied right now.", edgeInset: "top" },
     { key: "finance", ref: financeChartRef, title: "Financial performance", description: "Amount collected today and this month, compared against the prior period.", edgeInset: "top" },
     { key: "collected", ref: collectedRef, title: "Payment status", description: "How many active tenants have paid this month vs. are still unpaid.", edgeInset: "top" },
+    { key: "reportsSummary", ref: reportsRef, title: "Report status", description: "Today's acknowledged and pending reports, plus every older report that still needs your attention.", edgeInset: "top" },
     { key: "navfinancials", ref: bottomNavRefs.financials, title: "Financials", description: "Track tenant payments, view receipts, and see who's paid or unpaid.", edgeInset: "bottom" },
-    { key: "navbuilding", ref: bottomNavRefs.building, title: "Building", description: "Browse every stall across your buildings and see which are occupied or vacant.", edgeInset: "bottom" },
-    { key: "navadmins", ref: bottomNavRefs.admins, title: "Admins", description: "Manage the market admin's profile and login password.", edgeInset: "bottom" },
+    { key: "navbuilding", ref: bottomNavRefs.building, title: "Stalls", description: "Browse every stall across your buildings and see which are occupied or vacant.", edgeInset: "bottom" },
+    { key: "navadmins", ref: bottomNavRefs.admins, title: "Admin", description: "Manage the market admin's profile and login password.", edgeInset: "bottom" },
     { key: "navarchives", ref: bottomNavRefs.archives, title: "Archives", description: "View archived tenant accounts, and restore or permanently delete them.", edgeInset: "bottom" },
     { key: "navreports", ref: bottomNavRefs.reports, title: "Reports", description: "Download a daily PDF report of every update the admin made and you acknowledged.", edgeInset: "bottom" },
     { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
@@ -113,7 +135,13 @@ export default function Dashboard() {
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
-      if (!user) { router.replace("/login"); return; }
+      if (!user) {
+        if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+        offlineTimerRef.current = null;
+        setIsOffline(false);
+        router.replace("/login");
+        return;
+      }
       setChecking(false);
       fetchData();
     });
@@ -140,12 +168,107 @@ export default function Dashboard() {
     if (checking || !auth.currentUser) return;
 
     const tenantsQuery = query(collection(db, "users"), where("role", "==", "tenant"));
-    return onSnapshot(
+    const unsubscribe = onSnapshot(
       tenantsQuery,
       { includeMetadataChanges: true },
-      (snapshot) => setIsOffline(snapshot.metadata.fromCache),
+      (snapshot) => {
+        if (!snapshot.metadata.fromCache) {
+          if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+          offlineTimerRef.current = null;
+          setIsOffline(false);
+          return;
+        }
+        if (!offlineTimerRef.current) {
+          offlineTimerRef.current = setTimeout(() => {
+            if (auth.currentUser) setIsOffline(true);
+            offlineTimerRef.current = null;
+          }, 5000);
+        }
+      },
     );
+    return () => {
+      unsubscribe();
+      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+      offlineTimerRef.current = null;
+      setIsOffline(false);
+    };
   }, [checking]);
+
+  useEffect(() => {
+    if (checking || !auth.currentUser) return;
+
+    const refreshFromLiveChange = () => {
+      if (liveRefreshTimerRef.current) clearTimeout(liveRefreshTimerRef.current);
+      liveRefreshTimerRef.current = setTimeout(() => fetchData(false), 120);
+    };
+
+    const unsubscribeStalls = onSnapshot(collection(db, "stalls"), refreshFromLiveChange);
+    const unsubscribePayments = onSnapshot(
+      query(collection(db, "payments"), where("status", "==", "approved")),
+      refreshFromLiveChange,
+    );
+    const unsubscribeTenants = onSnapshot(
+      query(collection(db, "users"), where("role", "==", "tenant")),
+      refreshFromLiveChange,
+    );
+
+    return () => {
+      unsubscribeStalls();
+      unsubscribePayments();
+      unsubscribeTenants();
+      if (liveRefreshTimerRef.current) clearTimeout(liveRefreshTimerRef.current);
+      liveRefreshTimerRef.current = null;
+    };
+  }, [checking]);
+
+  // Move the two daily report counters to a new day even if the dashboard
+  // remains open across midnight. The underlying reports are never reset or
+  // deleted here; only the date window changes.
+  useEffect(() => {
+    const now = new Date();
+    const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const timer = setTimeout(() => setReportDayKey(localDayKey()), nextMidnight.getTime() - now.getTime() + 250);
+    return () => clearTimeout(timer);
+  }, [reportDayKey]);
+
+  // Use the same owner-scoped notification records as the Notifications page,
+  // so the dashboard count always matches the reports the current owner can see.
+  useEffect(() => {
+    if (checking || !auth.currentUser) return;
+
+    const ownerNotifications = query(
+      collection(db, "notifications"),
+      where("userId", "==", auth.currentUser.uid),
+    );
+
+    return onSnapshot(
+      ownerNotifications,
+      (snapshot) => {
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        const tomorrowStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+        let pendingToday = 0;
+        let acknowledgedToday = 0;
+        let active = 0;
+
+        snapshot.docs.forEach((notification) => {
+          const data = notification.data();
+          const status = data.status as string | undefined;
+          const submittedMs = data.createdAt?.toMillis?.();
+          const isPending = status === "To be Acknowledged" || status === "To be Approved";
+          const isAcknowledged = status === "Acknowledged" || status === "Approved";
+          const isToday = typeof submittedMs === "number" && submittedMs >= todayStart && submittedMs < tomorrowStart;
+
+          if (isPending) active += 1;
+          if (isToday && isPending) pendingToday += 1;
+          if (isToday && isAcknowledged) acknowledgedToday += 1;
+        });
+
+        setReportStats({ pendingToday, acknowledgedToday, active });
+      },
+      (err) => console.error("OWNER REPORT SUMMARY ERROR:", err),
+    );
+  }, [checking, reportDayKey]);
 
   const hasFinanceData = stats.paidCount + stats.unpaidCount > 0;
   const occupancyTotal = stats.occupiedCount + stats.unoccupiedCount;
@@ -251,7 +374,6 @@ export default function Dashboard() {
       }).length;
 
       setStats({
-        tenantCount: activeTenants.length,
         occupiedCount,
         unoccupiedCount,
         paidCount,
@@ -340,9 +462,6 @@ export default function Dashboard() {
               <View style={styles.overviewDivider} />
 
               <View style={styles.overviewRight}>
-                <Text style={styles.overviewTotalLabel}>Total tenants</Text>
-                <Text style={styles.overviewTotalValue}>{stats.tenantCount}</Text>
-
                 <View style={styles.overviewSplitRow}>
                   <View style={styles.overviewSplitItem}>
                     <Text style={styles.overviewSplitLabelGreen}>Occupied</Text>
@@ -440,13 +559,64 @@ export default function Dashboard() {
                 </View>
               </View>
             </View>
+
+            <View ref={reportsRef} collapsable={false}>
+              <View style={styles.reportsSummaryCard}>
+                <View style={styles.reportsSummaryHeader}>
+                  <View>
+                    <Text style={styles.paymentStatusTitle}>Reports today</Text>
+                    <Text style={styles.paymentStatusSubtitle}>Resets automatically each day</Text>
+                  </View>
+                  <FileText size={22} color={colors.emerald} />
+                </View>
+
+                <View style={styles.reportsTodayRow}>
+                  <TouchableOpacity
+                    style={styles.reportMetric}
+                    activeOpacity={0.75}
+                    onPress={() => router.push("/notifications")}
+                  >
+                    <Text style={[styles.reportMetricValue, styles.reportPendingValue]}>{reportStats.pendingToday}</Text>
+                    <Text style={styles.reportMetricLabel}>NOT ACKNOWLEDGED</Text>
+                    <Text style={styles.reportMetricHint}>Needs review</Text>
+                  </TouchableOpacity>
+
+                  <View style={styles.reportMetricDivider} />
+
+                  <TouchableOpacity
+                    style={styles.reportMetric}
+                    activeOpacity={0.75}
+                    onPress={() => router.push("/(tabs)/daily-reports")}
+                  >
+                    <Text style={[styles.reportMetricValue, styles.reportAcknowledgedValue]}>{reportStats.acknowledgedToday}</Text>
+                    <Text style={styles.reportMetricLabel}>ACKNOWLEDGED</Text>
+                    <Text style={styles.reportMetricHint}>Reviewed today</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={styles.activeReportsCard}
+                activeOpacity={0.78}
+                onPress={() => router.push("/notifications")}
+              >
+                <View style={styles.activeReportsIcon}>
+                  <Clock3 size={21} color={colors.warning} />
+                </View>
+                <View style={styles.activeReportsCopy}>
+                  <Text style={styles.activeReportsTitle}>Active reports</Text>
+                  <Text style={styles.activeReportsSubtitle}>All reports still waiting for acknowledgment</Text>
+                </View>
+                <Text style={styles.activeReportsValue}>{reportStats.active}</Text>
+              </TouchableOpacity>
+            </View>
           </>
         )}
       </ScrollView>
 
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
 
-      <Modal visible={isOffline} transparent animationType="fade" onRequestClose={() => {}}>
+      <Modal visible={isOffline && !!auth.currentUser} transparent animationType="fade" onRequestClose={() => {}}>
         <View style={styles.offlineOverlay}>
           <View style={styles.offlineCard}>
             <View style={styles.offlineIcon}>
@@ -618,18 +788,7 @@ const styles = StyleSheet.create({
   },
   overviewRight: {
     flex: 1,
-  },
-  overviewTotalLabel: {
-    fontSize: fontSize.xs,
-    fontFamily: fontFamily.medium,
-    color: colors.textSecondary,
-  },
-  overviewTotalValue: {
-    fontSize: fontSize.xl,
-    fontFamily: fontFamily.extrabold,
-    color: colors.textPrimary,
-    marginTop: 2,
-    marginBottom: spacing.sm + 2,
+    justifyContent: "center",
   },
   overviewSplitRow: {
     flexDirection: "row",
@@ -774,5 +933,87 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.bold,
     color: colors.textPrimary,
     marginTop: 1,
+  },
+  reportsSummaryCard: {
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    padding: spacing.lg + 2,
+    marginBottom: spacing.md,
+    ...shadow.card,
+  },
+  reportsSummaryHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    marginBottom: spacing.lg,
+  },
+  reportsTodayRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+  },
+  reportMetric: {
+    flex: 1,
+    minHeight: 92,
+    justifyContent: "center",
+  },
+  reportMetricDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+    marginHorizontal: spacing.lg,
+  },
+  reportMetricValue: {
+    fontSize: 30,
+    fontFamily: fontFamily.extrabold,
+    marginBottom: 3,
+  },
+  reportPendingValue: { color: colors.warning },
+  reportAcknowledgedValue: { color: colors.emerald },
+  reportMetricLabel: {
+    fontSize: 9,
+    fontFamily: fontFamily.bold,
+    color: colors.textMuted,
+    letterSpacing: 0.35,
+  },
+  reportMetricHint: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+    marginTop: 4,
+  },
+  activeReportsCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    padding: spacing.lg + 2,
+    marginBottom: spacing.lg,
+    ...shadow.card,
+  },
+  activeReportsIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: colors.warningSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: spacing.md,
+  },
+  activeReportsCopy: { flex: 1 },
+  activeReportsTitle: {
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.bold,
+    color: colors.textPrimary,
+  },
+  activeReportsSubtitle: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  activeReportsValue: {
+    fontSize: 30,
+    fontFamily: fontFamily.extrabold,
+    color: colors.warning,
+    marginLeft: spacing.md,
   },
 });

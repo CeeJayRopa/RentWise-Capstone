@@ -13,7 +13,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
-import { ArrowLeft, HelpCircle, KeyRound, Bell } from "lucide-react-native";
+import { ArrowLeft, HelpCircle, KeyRound, Bell, ChevronDown, Check, CreditCard, Store, UserRound } from "lucide-react-native";
 import {
   addDoc,
   collection,
@@ -39,11 +39,29 @@ type OwnerNotification = {
   id: string;
   userId: string;
   message: string;
+  title?: string;
   status?: string;
   read: boolean;
   createdAt?: any;
   updateId?: string;
+  reportCategory?: ReportCategory;
 };
+
+type ReportCategory = "finance" | "building" | "archive";
+type CategoryFilter = "all" | ReportCategory;
+
+const CATEGORY_OPTIONS: { value: CategoryFilter; label: string }[] = [
+  { value: "all", label: "All Categories" },
+  { value: "finance", label: "Payment" },
+  { value: "building", label: "Stalls" },
+  { value: "archive", label: "Tenant & Archive" },
+];
+
+function resolveReportCategory(data: Record<string, any>): ReportCategory {
+  if (data.module === "Building Management" || data.module === "Stall Management" || data.category === "building") return "building";
+  if (data.module === "Financials" || data.category === "finance") return "finance";
+  return "archive";
+}
 
 type AdminPasswordReset = {
   id: string;
@@ -69,9 +87,15 @@ function relativeTime(ts: any): string {
 }
 
 function categoryLabel(cat: string): string {
-  if (cat === "building") return "Building Management Update";
-  if (cat === "finance") return "Finance Update";
-  return "Account Archive Update";
+  if (cat === "building") return "Stall";
+  if (cat === "finance") return "Payment";
+  return "Account";
+}
+
+function categoryColor(cat?: ReportCategory): string {
+  if (cat === "finance") return colors.emerald;
+  if (cat === "building") return colors.gold;
+  return colors.warning;
 }
 
 // Notifications created before the "Approve" → "Acknowledge" wording change
@@ -96,17 +120,24 @@ export default function Notifications() {
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
+  const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
   const unsubRef = useRef<(() => void) | null>(null);
   const [tourVisible, setTourVisible] = useState(false);
   const actionRowRef = useRef<View>(null);
   const cardRef = useRef<View>(null);
   const checkReportRef = useRef<View>(null);
+  const categoryRef = useRef<View>(null);
 
-  const firstPendingIndex = notifications.findIndex((n) => isPendingStatus(n.status) && n.updateId);
+  const filteredNotifications = categoryFilter === "all"
+    ? notifications
+    : notifications.filter((notification) => notification.reportCategory === categoryFilter);
+  const firstPendingIndex = filteredNotifications.findIndex((n) => isPendingStatus(n.status) && n.updateId);
 
   const tourSteps: HelpStep[] = [
-    { key: "actions", ref: actionRowRef, title: "Acknowledge All / Clear All", description: "Acknowledge All approves every pending update at once. Clear All removes already-acknowledged notifications from this list.", edgeInset: "top" },
-    { key: "card", ref: cardRef, title: "Notification", description: "Shows who made the update, when, and its current status.", edgeInset: "top" },
+    { key: "actions", ref: actionRowRef, title: "Acknowledge All / Clear All", description: "Acknowledge All records that you reviewed every pending report. Clear All removes reports already acknowledged.", edgeInset: "top" },
+    { key: "category", ref: categoryRef, title: "Category filter", description: "Show all reports or narrow them to payments, stalls, or accounts.", edgeInset: "top" },
+    { key: "card", ref: cardRef, title: "Automatic report", description: "Shows the Admin action, category, time, summary, and acknowledgment status.", edgeInset: "top" },
     ...(firstPendingIndex !== -1
       ? [{ key: "checkreport", ref: checkReportRef, title: "Check Report", description: "Opens the full details of a pending update so you can review it before acknowledging.", edgeInset: "top" as const }]
       : []),
@@ -158,14 +189,29 @@ export default function Notifications() {
       orderBy("createdAt", "desc"),
     );
 
-    const unsub = onSnapshot(q, (snap) => {
-      setNotifications(
-        snap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<OwnerNotification, "id">),
-        })),
-      );
-      setLoading(false);
+    const unsub = onSnapshot(q, async (snap) => {
+      try {
+        const rows = await Promise.all(
+          snap.docs.map(async (notificationDoc) => {
+            const notification = {
+              id: notificationDoc.id,
+              ...(notificationDoc.data() as Omit<OwnerNotification, "id">),
+            };
+            if (!notification.updateId || notification.reportCategory) return notification;
+
+            const updateSnap = await getDoc(doc(db, "updates", notification.updateId));
+            return {
+              ...notification,
+              reportCategory: updateSnap.exists() ? resolveReportCategory(updateSnap.data()) : undefined,
+            };
+          }),
+        );
+        setNotifications(rows);
+      } catch (err) {
+        console.error("NOTIFICATION CATEGORY ERROR:", err);
+      } finally {
+        setLoading(false);
+      }
     });
 
     unsubRef.current = unsub;
@@ -286,7 +332,7 @@ export default function Notifications() {
   };
 
   const handleApproveAll = () => {
-    const pending = notifications.filter((n) => isPendingStatus(n.status));
+    const pending = filteredNotifications.filter((n) => isPendingStatus(n.status));
     if (pending.length === 0) {
       Alert.alert("Nothing Pending", "There are no pending notifications to acknowledge.");
       return;
@@ -302,7 +348,7 @@ export default function Notifications() {
   };
 
   const handleClearAll = () => {
-    if (notifications.length === 0) return;
+    if (filteredNotifications.length === 0) return;
     if (pendingCount > 0) return;
     Alert.alert(
       "Clear Notifications",
@@ -312,15 +358,16 @@ export default function Notifications() {
         {
           text: "Clear All",
           style: "destructive",
-          onPress: () => doClearAll(notifications),
+          onPress: () => doClearAll(filteredNotifications),
         },
       ],
     );
   };
 
-  const pendingCount = notifications.filter((n) =>
+  const pendingCount = filteredNotifications.filter((n) =>
     isPendingStatus(n.status),
   ).length;
+  const selectedCategoryLabel = CATEGORY_OPTIONS.find((option) => option.value === categoryFilter)?.label ?? "All Categories";
   const busy = approving || clearing;
 
   if (loading) {
@@ -429,8 +476,60 @@ export default function Notifications() {
           </View>
         )}
 
-        {/* Action buttons */}
         {notifications.length > 0 && (
+          <View ref={categoryRef} collapsable={false} style={styles.categorySection}>
+            <Text style={styles.categoryLabel}>Category</Text>
+            <Pressable
+              style={({ pressed }) => [styles.categorySelect, pressed && styles.categorySelectPressed]}
+              onPress={() => setCategoryMenuOpen((open) => !open)}
+            >
+              <Text style={styles.categorySelectText}>{selectedCategoryLabel}</Text>
+              <View style={styles.categorySelectRight}>
+                <Text style={styles.categoryCount}>{filteredNotifications.length}</Text>
+                <ChevronDown
+                  size={18}
+                  color={colors.emerald}
+                  style={{ transform: [{ rotate: categoryMenuOpen ? "180deg" : "0deg" }] }}
+                />
+              </View>
+            </Pressable>
+
+            {categoryMenuOpen && (
+              <View style={styles.categoryMenu}>
+                {CATEGORY_OPTIONS.map((option, index) => {
+                  const selected = option.value === categoryFilter;
+                  const count = option.value === "all"
+                    ? notifications.length
+                    : notifications.filter((notification) => notification.reportCategory === option.value).length;
+                  return (
+                    <Pressable
+                      key={option.value}
+                      style={({ pressed }) => [
+                        styles.categoryOption,
+                        index < CATEGORY_OPTIONS.length - 1 && styles.categoryOptionBorder,
+                        selected && styles.categoryOptionSelected,
+                        pressed && styles.categoryOptionPressed,
+                      ]}
+                      onPress={() => {
+                        setCategoryFilter(option.value);
+                        setCategoryMenuOpen(false);
+                      }}
+                    >
+                      <View style={styles.categoryOptionCheck}>
+                        {selected && <Check size={15} color={colors.emerald} />}
+                      </View>
+                      <Text style={[styles.categoryOptionText, selected && styles.categoryOptionTextSelected]}>{option.label}</Text>
+                      <Text style={styles.categoryOptionCount}>{count}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* Action buttons */}
+        {filteredNotifications.length > 0 && (
           <View style={styles.actionRow} ref={actionRowRef} collapsable={false}>
             {pendingCount > 0 && (
               <Pressable
@@ -470,12 +569,14 @@ export default function Notifications() {
           </View>
         )}
 
-        {notifications.length === 0 ? (
+        {filteredNotifications.length === 0 ? (
           <View style={styles.empty}>
-            <Text style={styles.emptyText}>No notifications yet.</Text>
+            <Text style={styles.emptyText}>
+              {notifications.length === 0 ? "No notifications yet." : `No ${selectedCategoryLabel} reports found.`}
+            </Text>
           </View>
         ) : (
-          notifications.map((item, index) => {
+          filteredNotifications.map((item, index) => {
             const isPending = isPendingStatus(item.status);
             const isRejected = item.status === "Rejected";
             return (
@@ -486,13 +587,28 @@ export default function Notifications() {
                 style={[styles.card, !item.read && styles.cardUnread]}
               >
                 <View style={styles.cardRow}>
-                  <View style={styles.bellCircle}>
-                    <Bell size={20} color={colors.emerald} />
+                  <View style={[styles.bellCircle, { backgroundColor: `${categoryColor(item.reportCategory)}18` }]}>
+                    {item.reportCategory === "finance" ? (
+                      <CreditCard size={20} color={categoryColor(item.reportCategory)} />
+                    ) : item.reportCategory === "building" ? (
+                      <Store size={20} color={categoryColor(item.reportCategory)} />
+                    ) : item.reportCategory === "archive" ? (
+                      <UserRound size={20} color={categoryColor(item.reportCategory)} />
+                    ) : (
+                      <Bell size={20} color={colors.emerald} />
+                    )}
                   </View>
 
                   <View style={styles.cardContent}>
                     <View style={styles.topRow}>
-                      <Text style={styles.senderName}>Admin</Text>
+                      <View style={styles.titleBlock}>
+                        <Text style={styles.reportTitle}>
+                          {item.title || `${categoryLabel(item.reportCategory ?? "archive")} Update`}
+                        </Text>
+                        <Text style={[styles.categoryText, { color: categoryColor(item.reportCategory) }]}>
+                          {categoryLabel(item.reportCategory ?? "archive")}
+                        </Text>
+                      </View>
                       <Text style={styles.timeText}>
                         {relativeTime(item.createdAt)}
                       </Text>
@@ -532,7 +648,7 @@ export default function Notifications() {
                     onPress={() => handleCheckReport(item)}
                   >
                     {({ pressed }) => (
-                      <Text style={[styles.checkReportText, pressed && styles.checkReportTextPressed]}>Check Report</Text>
+                      <Text style={[styles.checkReportText, pressed && styles.checkReportTextPressed]}>View Details</Text>
                     )}
                   </Pressable>
                 ) : null}
@@ -597,6 +713,69 @@ const styles = StyleSheet.create({
   },
 
   body: { flex: 1 },
+
+  categorySection: {
+    marginBottom: spacing.lg,
+    zIndex: 20,
+  },
+  categoryLabel: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.textSecondary,
+    marginBottom: spacing.xs + 1,
+  },
+  categorySelect: {
+    minHeight: 46,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
+    paddingHorizontal: spacing.lg,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  categorySelectPressed: { borderColor: colors.emerald },
+  categorySelectText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.ink },
+  categorySelectRight: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  categoryCount: {
+    minWidth: 24,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    backgroundColor: colors.emeraldSoft,
+    color: colors.emerald,
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.bold,
+    textAlign: "center",
+  },
+  categoryMenu: {
+    position: "absolute",
+    top: 70,
+    left: 0,
+    right: 0,
+    zIndex: 30,
+    elevation: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
+    overflow: "hidden",
+    ...shadow.card,
+  },
+  categoryOption: {
+    minHeight: 44,
+    paddingHorizontal: spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  categoryOptionBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  categoryOptionSelected: { backgroundColor: colors.emeraldSoft },
+  categoryOptionPressed: { opacity: 0.72 },
+  categoryOptionCheck: { width: 24, alignItems: "flex-start" },
+  categoryOptionText: { flex: 1, fontSize: fontSize.sm, fontFamily: fontFamily.medium, color: colors.textPrimary },
+  categoryOptionTextSelected: { fontFamily: fontFamily.bold, color: colors.emerald },
+  categoryOptionCount: { fontSize: fontSize.xs, fontFamily: fontFamily.semibold, color: colors.textMuted },
 
   actionRow: {
     flexDirection: "row",
@@ -686,8 +865,18 @@ const styles = StyleSheet.create({
   topRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "flex-start",
     marginBottom: 4,
+    gap: spacing.sm,
+  },
+  titleBlock: { flex: 1 },
+  reportTitle: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.ink },
+  categoryText: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    marginTop: 2,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
   },
   senderName: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.ink },
   timeText: { fontSize: fontSize.xs + 1, color: colors.textSecondary, fontFamily: fontFamily.regular },

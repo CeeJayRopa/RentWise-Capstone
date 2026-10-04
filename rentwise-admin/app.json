@@ -5,7 +5,7 @@
     "scheme": "rentwiseadmin",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/admin-icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true
@@ -13,7 +13,7 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#0E6B54",
-        "foregroundImage": "./assets/icon.png",
+        "foregroundImage": "./assets/admin-icon.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
@@ -55,7 +55,8 @@
         }
       ],
       "@react-native-firebase/app",
-      "@react-native-firebase/app-check"
+      "@react-native-firebase/app-check",
+      "expo-sqlite"
     ],
     "extra": {
       "router": {},
@@ -64,9 +65,9 @@
         "style": "dark"
       },
       "eas": {
-        "projectId": "db1ecc2d-5d77-4283-84df-fbed1c7b9f53"
+        "projectId": "01d97f24-bca6-4722-be42-f3d4db780e48"
       }
     },
-    "owner": "rentwiseeeee"
+    "owner": "cj27"
   }
 }

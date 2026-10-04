@@ -25,15 +25,17 @@ import {
   Timestamp,
 } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { House, HelpCircle, Search, ChevronDown, FileText } from "lucide-react-native";
+import { House, HelpCircle, Search, ChevronDown, FileText, Building2, CheckCircle2, AlertCircle, Clock } from "lucide-react-native";
 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
+import { isTenantPaidThisMonth } from "../../shared/services/financeServices";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import OwnerBellIcon from "../components/OwnerBellIcon";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { Badge, Button } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
+import { readLocalCache, saveLocalCache } from "../../shared/services/localCache";
 
 type StatusFilter = "All" | "Paid" | "Unpaid";
 type DateFilter = "All" | "Daily" | "Weekly" | "Semi-Monthly" | "Monthly";
@@ -119,6 +121,7 @@ export default function Financials() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [rows, setRows] = useState<PaymentRow[]>([]);
+  const [pendingPaymentAmount, setPendingPaymentAmount] = useState(0);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [dateFilter, setDateFilter] = useState<DateFilter>("All");
   const [search, setSearch] = useState("");
@@ -133,6 +136,7 @@ export default function Financials() {
   const cardColorRef = useRef<View>(null);
   const receiptBtnRef = useRef<View>(null);
   const listRef = useRef<FlatList<PaymentRow>>(null);
+  const liveRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Sliding pill behind the status filter's selected option — segments are
   // different widths ("All" vs "Unpaid"), so the pill's x/width are driven
@@ -197,18 +201,25 @@ export default function Financials() {
 
   useFocusEffect(useCallback(() => { if (!checking) fetchData(); }, [checking, dateFilter]));
 
-  // Live-refreshes the tenant/stall join whenever a tenant doc changes (e.g.
-  // an admin relocates one to a different stall) -- without this, a tenant
-  // relocated while this screen is already open and focused would keep
-  // showing their OLD building/space until the owner switches tabs or pulls
-  // to refresh. `silent` skips the full-screen loading spinner since this
-  // fires in the background, not from an explicit user action.
   useEffect(() => {
     if (checking) return;
-    const unsub = onSnapshot(query(collection(db, "users"), where("role", "==", "tenant")), () => {
-      fetchData(true);
-    });
-    return unsub;
+
+    const refreshFromLiveChange = () => {
+      if (liveRefreshTimerRef.current) clearTimeout(liveRefreshTimerRef.current);
+      liveRefreshTimerRef.current = setTimeout(() => fetchData(true), 120);
+    };
+
+    const unsubscribeTenants = onSnapshot(query(collection(db, "users"), where("role", "==", "tenant")), refreshFromLiveChange);
+    const unsubscribeStalls = onSnapshot(collection(db, "stalls"), refreshFromLiveChange);
+    const unsubscribePayments = onSnapshot(collection(db, "payments"), refreshFromLiveChange);
+
+    return () => {
+      unsubscribeTenants();
+      unsubscribeStalls();
+      unsubscribePayments();
+      if (liveRefreshTimerRef.current) clearTimeout(liveRefreshTimerRef.current);
+      liveRefreshTimerRef.current = null;
+    };
   }, [checking, dateFilter]);
 
   const onRefresh = async () => {
@@ -223,7 +234,7 @@ export default function Financials() {
       const [usersSnap, stallsSnap, paymentsSnap] = await Promise.all([
         getDocs(query(collection(db, "users"), where("role", "==", "tenant"))),
         getDocs(collection(db, "stalls")),
-        getDocs(query(collection(db, "payments"), where("status", "==", "approved"))),
+        getDocs(collection(db, "payments")),
       ]);
 
       // paymentSchedule lives on the tenant, not the stall -- travels with
@@ -249,72 +260,78 @@ export default function Financials() {
       });
 
       const scheduleKey = dateFilter === "All" ? null : dateFilter.toLowerCase();
-      const fixedRange = dateFilter !== "All" ? getDateRange(dateFilter) : null;
-
-      const paidUids = new Set<string>();
       const result: PaymentRow[] = [];
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime();
+      let pendingTotal = 0;
 
-      paymentsSnap.docs.forEach((d) => {
-        const data = d.data();
-        const date = data.date as Timestamp | null;
-        const dateMs = date?.toMillis ? date.toMillis() : 0;
-
-        const uid = data.userId as string;
-        const tenant = tenantMap.get(uid);
-        if (!tenant || tenant.status !== "active") return;
-        const stall = stallMap.get(tenant.stallId ?? "");
+      usersSnap.docs.forEach((d) => {
+        if (d.data().status !== "active") return;
+        const tenant = tenantMap.get(d.id)!;
+        const stall = stallMap.get(d.data().stallId ?? "");
         if (scheduleKey && tenant.paymentSchedule !== scheduleKey) return;
 
-        const range = fixedRange ?? getDateRangeForSchedule(tenant.paymentSchedule ?? "monthly");
-        if (dateMs < range.start.getTime() || dateMs > range.end.getTime()) return;
+        const tenantPayments = paymentsSnap.docs.filter((payment) => payment.data().userId === d.id);
+        const approvedThisMonth = tenantPayments.filter((payment) => {
+          const data = payment.data();
+          const paymentMs = (data.date as Timestamp | undefined)?.toMillis?.() ?? 0;
+          return data.status === "approved" && paymentMs >= monthStart && paymentMs < monthEnd;
+        });
+        const paidThisMonth = approvedThisMonth.reduce(
+          (sum, payment) => sum + Number(payment.data().amount ?? payment.data().paymentAmount ?? 0),
+          0,
+        );
+        const isPaid = isTenantPaidThisMonth(
+          Number(d.data().price ?? 0),
+          tenant.paymentSchedule || "monthly",
+          paidThisMonth,
+          now,
+        );
+        pendingTotal += tenantPayments
+          .filter((payment) => payment.data().status === "pending")
+          .reduce((sum, payment) => sum + Number(payment.data().amount ?? payment.data().paymentAmount ?? 0), 0);
 
-        if (paidUids.has(uid)) return;
-        paidUids.add(uid);
-        const rentAmount = (data.rentAmount ?? data.amount ?? data.paymentAmount ?? 0) as number;
-        const paymentAmt = (data.cashReceived ?? data.amount ?? data.paymentAmount ?? 0) as number;
+        const latestApproved = approvedThisMonth.sort(
+          (a, b) => ((b.data().date as Timestamp | undefined)?.toMillis?.() ?? 0) - ((a.data().date as Timestamp | undefined)?.toMillis?.() ?? 0),
+        )[0];
+        const paymentData = latestApproved?.data();
+        const paymentDate = (paymentData?.date as Timestamp | null | undefined) ?? null;
+        const rentAmount = Number(paymentData?.rentAmount ?? paymentData?.amount ?? paymentData?.paymentAmount ?? 0);
+        const paymentAmount = Number(paymentData?.cashReceived ?? paymentData?.amount ?? paymentData?.paymentAmount ?? 0);
+
         result.push({
           id: d.id,
           tenantName: tenant.name,
           buildingNumber: stall?.buildingNumber ?? "—",
           spaceId: stall?.spaceId ?? "—",
-          amount: (data.amount ?? data.paymentAmount ?? 0) as number,
-          status: "paid",
-          date,
-          receipt: {
-            receiptNo: data.receiptNo ?? d.id,
+          amount: paidThisMonth,
+          status: isPaid ? "paid" : "unpaid",
+          date: paymentDate,
+          receipt: isPaid && latestApproved ? {
+            receiptNo: paymentData?.receiptNo ?? latestApproved.id,
             tenantName: tenant.name,
             buildingNumber: stall?.buildingNumber ?? "—",
             spaceId: stall?.spaceId ?? "—",
-            paymentMethod: data.method === "cash" ? "Cash" : (data.paymentMethod ?? "Online"),
-            date,
+            paymentMethod: paymentData?.method === "cash" ? "Cash" : (paymentData?.paymentMethod ?? "Online"),
+            date: paymentDate,
             rentAmount,
-            payment: paymentAmt,
-            change: (data.change ?? 0) as number,
-          },
-        });
-      });
-
-      usersSnap.docs.forEach((d) => {
-        if (d.data().status !== "active") return;
-        if (paidUids.has(d.id)) return;
-        const tenant = tenantMap.get(d.id)!;
-        const stall = stallMap.get(d.data().stallId ?? "");
-        if (scheduleKey && tenant.paymentSchedule !== scheduleKey) return;
-        result.push({
-          id: `unpaid-${d.id}`,
-          tenantName: tenant.name,
-          buildingNumber: stall?.buildingNumber ?? "—",
-          spaceId: stall?.spaceId ?? "—",
-          amount: 0,
-          status: "unpaid",
-          date: null,
-          receipt: null,
+            payment: paymentAmount,
+            change: Number(paymentData?.change ?? 0),
+          } : null,
         });
       });
 
       setRows(result);
+      setPendingPaymentAmount(pendingTotal);
+      await saveLocalCache(`owner:financials:${dateFilter}`, {rows: result, pendingPaymentAmount: pendingTotal});
     } catch (err) {
       console.error("OWNER FINANCIALS ERROR:", err);
+      const cached = await readLocalCache<{rows: PaymentRow[]; pendingPaymentAmount: number}>(`owner:financials:${dateFilter}`);
+      if (cached) {
+        setRows(cached.rows);
+        setPendingPaymentAmount(cached.pendingPaymentAmount);
+      }
     } finally {
       if (!silent) setLoading(false);
     }
@@ -343,7 +360,7 @@ export default function Financials() {
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
     { key: "bell", ref: bellRef, title: "Notifications", description: "Shows admin updates waiting for your review, like payments and building changes.", edgeInset: "top", round: true },
-    { key: "summary", ref: summaryRef, title: "Spaces / Paid / Unpaid", description: "Total stalls tracked here, and how many tenants have paid vs. are still unpaid this period.", edgeInset: "top" },
+    { key: "summary", ref: summaryRef, title: "Payment summary", description: "Shows active spaces, paid and unpaid tenants, plus online payments waiting for confirmation.", edgeInset: "top" },
     { key: "search", ref: searchRef, title: "Search", description: "Find a tenant fast by typing their name or building/space number.", edgeInset: "top" },
     { key: "filter", ref: filterRef, title: "Period & status filters", description: "Narrow the list by payment schedule (daily, weekly, etc.) or by paid/unpaid status.", edgeInset: "top" },
     {
@@ -416,16 +433,34 @@ export default function Financials() {
         {/* Summary stats */}
         <View style={styles.summaryRow} ref={summaryRef} collapsable={false}>
           <View style={[styles.summaryCard, styles.summaryCardSpaces]}>
-            <Text style={styles.summaryLabelSpaces}>Spaces</Text>
+            <View style={styles.summaryCardHeader}>
+              <Text style={styles.summaryLabelSpaces} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Spaces</Text>
+              <Building2 size={12} color={colors.emeraldSoft} />
+            </View>
             <Text style={styles.summaryValueSpaces}>{spacesCount}</Text>
           </View>
           <View style={[styles.summaryCard, styles.summaryCardPaid]}>
-            <Text style={styles.summaryLabelPaid}>Paid</Text>
+            <View style={styles.summaryCardHeader}>
+              <Text style={styles.summaryLabelPaid} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Paid</Text>
+              <CheckCircle2 size={12} color={colors.emerald} />
+            </View>
             <Text style={styles.summaryValuePaid}>{paidCount}</Text>
           </View>
           <View style={[styles.summaryCard, styles.summaryCardUnpaid]}>
-            <Text style={styles.summaryLabelUnpaid}>Unpaid</Text>
+            <View style={styles.summaryCardHeader}>
+              <Text style={styles.summaryLabelUnpaid} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Unpaid</Text>
+              <AlertCircle size={12} color={colors.error} />
+            </View>
             <Text style={styles.summaryValueUnpaid}>{unpaidCount}</Text>
+          </View>
+          <View style={[styles.summaryCard, styles.summaryCardPending]}>
+            <View style={styles.summaryCardHeader}>
+              <Text style={styles.summaryLabelPending} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>Pending</Text>
+              <Clock size={12} color={colors.warning} />
+            </View>
+            <Text style={styles.summaryValuePending} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.55}>
+              ₱{pendingPaymentAmount.toLocaleString("en-PH", { maximumFractionDigits: 2 })}
+            </Text>
           </View>
         </View>
 
@@ -678,27 +713,46 @@ const styles = StyleSheet.create({
 
   body: {
     flex: 1,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
   },
 
   // ── Summary stats — mirrors rentwise-admin/app/financials.tsx exactly ─────────
 
   summaryRow: {
     flexDirection: "row",
-    gap: spacing.sm + 2,
-    marginBottom: spacing.lg,
+    width: "100%",
+    gap: 5,
+    marginBottom: spacing.sm,
+    overflow: "hidden",
   },
   summaryCard: {
-    flex: 1,
-    borderRadius: radius.lg,
-    paddingVertical: spacing.md + 2,
-    paddingHorizontal: spacing.lg - 2,
+    width: "23%",
+    flexGrow: 0,
+    flexShrink: 0,
+    flexBasis: "23%",
+    minWidth: 0,
+    minHeight: 58,
+    borderRadius: radius.md,
+    paddingVertical: 6,
+    paddingHorizontal: 7,
+    borderWidth: 1,
+    borderColor: "transparent",
+    overflow: "hidden",
   },
   summaryCardSpaces: { backgroundColor: colors.emerald },
-  summaryCardPaid: { backgroundColor: colors.emeraldSoft },
-  summaryCardUnpaid: { backgroundColor: colors.warningSoft },
+  summaryCardPaid: { backgroundColor: colors.emeraldSoft, borderColor: colors.success },
+  summaryCardUnpaid: { backgroundColor: colors.errorSoft, borderColor: colors.error },
+  summaryCardPending: { backgroundColor: colors.warningSoft, borderColor: colors.warning },
+  summaryCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 2,
+    minWidth: 0,
+  },
   summaryLabelSpaces: {
+    flexShrink: 1,
     fontSize: fontSize.xs - 1,
     fontFamily: fontFamily.semibold,
     color: colors.emeraldSoft,
@@ -706,6 +760,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   summaryLabelPaid: {
+    flexShrink: 1,
     fontSize: fontSize.xs - 1,
     fontFamily: fontFamily.semibold,
     color: colors.emerald,
@@ -713,26 +768,41 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   summaryLabelUnpaid: {
+    flexShrink: 1,
+    fontSize: fontSize.xs - 1,
+    fontFamily: fontFamily.semibold,
+    color: colors.error,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  summaryValueSpaces: {
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.extrabold,
+    color: colors.white,
+    marginTop: 2,
+  },
+  summaryValuePaid: {
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.extrabold,
+    color: colors.emerald,
+    marginTop: 2,
+  },
+  summaryValueUnpaid: {
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.extrabold,
+    color: colors.error,
+    marginTop: 2,
+  },
+  summaryLabelPending: {
+    flexShrink: 1,
     fontSize: fontSize.xs - 1,
     fontFamily: fontFamily.semibold,
     color: colors.warning,
     textTransform: "uppercase",
     letterSpacing: 0.4,
   },
-  summaryValueSpaces: {
-    fontSize: fontSize.xl,
-    fontFamily: fontFamily.extrabold,
-    color: colors.white,
-    marginTop: 2,
-  },
-  summaryValuePaid: {
-    fontSize: fontSize.xl,
-    fontFamily: fontFamily.extrabold,
-    color: colors.emerald,
-    marginTop: 2,
-  },
-  summaryValueUnpaid: {
-    fontSize: fontSize.xl,
+  summaryValuePending: {
+    fontSize: fontSize.md,
     fontFamily: fontFamily.extrabold,
     color: colors.warning,
     marginTop: 2,

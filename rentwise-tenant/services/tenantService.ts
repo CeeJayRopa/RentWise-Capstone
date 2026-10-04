@@ -2,6 +2,7 @@ import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 
 import { db, firebaseApp, auth } from "../shared/firebaseConfig";
+import { readLocalCache, saveLocalCache } from "../shared/services/localCache";
 
 const cloudFunctions = getFunctions(firebaseApp);
 
@@ -56,13 +57,13 @@ export async function syncPersonalEmail(personalEmail: string): Promise<void> {
 }
 
 export async function getTenantData(uid: string): Promise<Tenant | null> {
-  const userRef = doc(db, "users", uid);
+  const cacheKey = `tenant:${uid}:profile`;
+  try {
+    const userRef = doc(db, "users", uid);
 
-  const userSnap = await getDoc(userRef);
+    const userSnap = await getDoc(userRef);
 
-  if (!userSnap.exists()) {
-    return null;
-  }
+    if (!userSnap.exists()) return null;
 
   const userData = userSnap.data() as Tenant;
 
@@ -88,11 +89,12 @@ export async function getTenantData(uid: string): Promise<Tenant | null> {
     }
   }
 
-  return {
-    ...userData,
-
-    id: userSnap.id,
-
-    stall: stallData,
-  };
+    const tenant = {...userData, id: userSnap.id, stall: stallData};
+    await saveLocalCache(cacheKey, tenant);
+    return tenant;
+  } catch (error) {
+    const cached = await readLocalCache<Tenant>(cacheKey);
+    if (cached) return cached;
+    throw error;
+  }
 }

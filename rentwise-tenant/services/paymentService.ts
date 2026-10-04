@@ -7,6 +7,7 @@ import {
 import { getFunctions, httpsCallable } from "firebase/functions";
 
 import { db, firebaseApp } from "../shared/firebaseConfig";
+import { readLocalCache, saveLocalCache } from "../shared/services/localCache";
 
 export type PaymentMethodType = "gcash" | "paymaya";
 
@@ -54,7 +55,9 @@ export async function createOnlinePayment(
 }
 
 export async function getTenantPayments(userId: string) {
-  const ref = collection(db, "payments");
+  const cacheKey = `tenant:${userId}:payments`;
+  try {
+    const ref = collection(db, "payments");
 
   const q = query(
     ref,
@@ -64,9 +67,12 @@ export async function getTenantPayments(userId: string) {
 
   const snapshot = await getDocs(q);
 
-  return snapshot.docs.map((doc) => ({
-    id: doc.id,
-
-    ...doc.data(),
-  }));
+    const payments = snapshot.docs.map((doc) => ({id: doc.id, ...doc.data()}));
+    await saveLocalCache(cacheKey, payments);
+    return payments;
+  } catch (error) {
+    const cached = await readLocalCache<Array<Record<string, unknown>>>(cacheKey);
+    if (cached) return cached;
+    throw error;
+  }
 }

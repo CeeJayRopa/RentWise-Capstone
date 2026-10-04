@@ -11,7 +11,7 @@ export { cleanupOldDailyReports } from "./reportCleanup";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
-import { createHash, randomInt, timingSafeEqual } from "crypto";
+import { createHash, randomBytes, randomInt, scryptSync, timingSafeEqual } from "crypto";
 
 import {
   normalizePhilippinePhone,
@@ -138,6 +138,13 @@ function inputObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function networkRateLimitKey(request: any, endpoint: string): string {
+  const forwarded = String(request.rawRequest?.headers?.["x-forwarded-for"] ?? "");
+  const ip = forwarded.split(",")[0].trim() || String(request.rawRequest?.ip ?? "unknown");
+  const networkHash = createHash("sha256").update(ip).digest("hex").slice(0, 32);
+  return `network:${endpoint}:${networkHash}`;
+}
+
 function requiredText(value: unknown, field: string, maxLength: number): string {
   if (typeof value !== "string") {
     throw new HttpsError("invalid-argument", `${field} must be text.`);
@@ -200,6 +207,14 @@ function validPhilippinePhone(value: unknown): string {
   }
 }
 
+function normalizeSecurityAnswer(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function hashSecurityAnswer(answer: string, salt: string): string {
+  return scryptSync(normalizeSecurityAnswer(answer), salt, 64).toString("hex");
+}
+
 async function assertTargetRole(uid: string, expectedRole: "admin" | "tenant") {
   const targetDoc = await db.collection("users").doc(uid).get();
   if (!targetDoc.exists || targetDoc.data()?.role !== expectedRole) {
@@ -222,6 +237,8 @@ export const adminCreateTenant = onCall(async (request) => {
 
   const input = inputObject(request.data);
   const firstName = validName(input.firstName, "First name");
+  const middleNameInput = typeof input.middleName === "string" ? input.middleName.trim() : "";
+  const middleName = middleNameInput ? validName(middleNameInput, "Middle name") : "";
   const lastName = validName(input.lastName, "Last name");
   const username = validUsername(input.username);
   const contactNo = validPhilippinePhone(input.contactNo);
@@ -262,6 +279,8 @@ export const adminCreateTenant = onCall(async (request) => {
 
     batch.set(userRef, {
       firstName,
+
+      middleName,
 
       lastName,
 
@@ -418,6 +437,10 @@ export const ownerResetAdminPassword = onCall(async (request) => {
   await assertIsAdmin(uid);
 
   await auth.updateUser(uid, { password: newPassword });
+  await auth.revokeRefreshTokens(uid);
+  await db.collection("users").doc(uid).update({
+    sessionRevokedAt: FieldValue.serverTimestamp(),
+  });
 
   return { success: true };
 });
@@ -439,6 +462,8 @@ export const ownerUpdateAdminProfile = onCall(async (request) => {
   const input = inputObject(request.data);
   const uid = validUid(input.uid);
   const firstName = validName(input.firstName, "First name");
+  const middleNameInput = typeof input.middleName === "string" ? input.middleName.trim() : "";
+  const middleName = middleNameInput ? validName(middleNameInput, "Middle name") : "";
   const lastName = validName(input.lastName, "Last name");
   const username = validUsername(input.username);
   const contactNo = validPhilippinePhone(input.contactNo);
@@ -459,6 +484,7 @@ export const ownerUpdateAdminProfile = onCall(async (request) => {
 
   await db.collection("users").doc(uid).update({
     firstName,
+    middleName,
     lastName,
     username,
     contactNo,
@@ -820,22 +846,12 @@ export const adminDeleteTenant = onCall(async (request) => {
   const input = inputObject(request.data);
   const uid = validUid(input.uid);
 
-  // Admin or owner can permanently delete an archived tenant. Verified via
-  // the caller's OWN auth identity (request.auth.uid), not a client-supplied
-  // uid. See CAPSTONE_NOTES.txt.
   await assertIsAdminOrOwner(callerUid);
-
-  // Delete Firebase Auth account — silently ignore if already gone
   await assertTargetRole(uid, "tenant");
-  try {
-    await auth.deleteUser(uid);
-  } catch (err: any) {
-    if (err?.errorInfo?.code !== "auth/user-not-found") {
-      throw new HttpsError("internal", "Failed to delete auth account");
-    }
-  }
-
-  return { success: true };
+  throw new HttpsError(
+    "failed-precondition",
+    "Permanent tenant deletion is disabled. Archived accounts must retain their credentials.",
+  );
 });
 
 // =====================================
@@ -848,7 +864,7 @@ export const adminDeleteTenant = onCall(async (request) => {
 // the client never touches that collection directly.
 // =====================================
 
-export const ownerSaveSecurityQuestions = onCall(async (request) => {
+export const ownerSaveSecurityQuestions = onCall({enforceAppCheck: true}, async (request) => {
   const callerUid = request.auth?.uid;
   if (!callerUid) {
     throw new HttpsError("unauthenticated", "You must be logged in.");
@@ -875,9 +891,12 @@ export const ownerSaveSecurityQuestions = onCall(async (request) => {
 
   const cleanQuestions = securityQuestions.map((entry) => {
     const q = entry as Record<string, unknown>;
+    const answer = requiredText(q.answer, "Security answer", 120);
+    const answerSalt = randomBytes(16).toString("hex");
     return {
       question: requiredText(q.question, "Security question", 160),
-      answer: requiredText(q.answer, "Security answer", 120),
+      answerSalt,
+      answerHash: hashSecurityAnswer(answer, answerSalt),
     };
   });
   if (new Set(cleanQuestions.map((q) => q.question.toLowerCase())).size !== 3) {
@@ -896,8 +915,9 @@ export const ownerSaveSecurityQuestions = onCall(async (request) => {
   return { success: true };
 });
 
-export const getOwnerSecurityQuestions = onCall(async () => {
-  await checkRateLimit("getOwnerSecurityQuestions:global", 30, 5 * 60_000);
+export const getOwnerSecurityQuestions = onCall({enforceAppCheck: true}, async (request) => {
+  // This endpoint returns only the selected questions, never their answers.
+  await checkRateLimit(networkRateLimitKey(request, "ownerQuestions"), 30, 5 * 60_000);
 
   // There's only ever one owner account, so recovery skips identifying an
   // account by email/username — tapping "Forgot password" goes straight to
@@ -914,12 +934,34 @@ export const getOwnerSecurityQuestions = onCall(async () => {
   const ownerDoc = recoverySnap.docs[0];
   const stored = (ownerDoc.data()?.securityQuestions ?? []) as {
     question: string;
+    answer?: string;
+    answerSalt?: string;
+    answerHash?: string;
   }[];
+
+  // Transparently remove legacy plaintext answers as soon as the recovery
+  // flow is opened. This migration does not need the caller to know them;
+  // it hashes the existing values and overwrites the old representation.
+  if (stored.some((q) => typeof q.answer === "string" && !q.answerHash)) {
+    const migrated = stored.map((q) => {
+      if (typeof q.answer !== "string") return q;
+      const answerSalt = randomBytes(16).toString("hex");
+      return {
+        question: q.question,
+        answerSalt,
+        answerHash: hashSecurityAnswer(q.answer, answerSalt),
+      };
+    });
+    await ownerDoc.ref.update({
+      securityQuestions: migrated,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  }
 
   return { ownerId: ownerDoc.id, questions: stored.map((q) => q.question) };
 });
 
-export const verifyOwnerSecurityAnswers = onCall(async (request) => {
+export const verifyOwnerSecurityAnswers = onCall({enforceAppCheck: true}, async (request) => {
   const input = inputObject(request.data);
   const ownerId = validUid(input.ownerId);
   const answers = input.answers;
@@ -928,6 +970,7 @@ export const verifyOwnerSecurityAnswers = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "Missing answers.");
   }
   const cleanAnswers = answers.map((answer) => requiredText(answer, "Answer", 120));
+  await checkRateLimit(networkRateLimitKey(request, "ownerRecovery"), 15, 15 * 60_000);
   // Keyed per-ownerId (not per-caller, since there's no caller identity yet)
   // so guessing security answers can't be scripted.
   await checkRateLimit(`verifyOwnerSecurityAnswers:${ownerId}`, 5, 15 * 60_000);
@@ -939,16 +982,48 @@ export const verifyOwnerSecurityAnswers = onCall(async (request) => {
 
   const stored = (recoverySnap.data()?.securityQuestions ?? []) as {
     question: string;
-    answer: string;
+    answer?: string;
+    answerSalt?: string;
+    answerHash?: string;
   }[];
 
-  const normalize = (s: string) => (s ?? "").trim().toLowerCase();
-  const allMatch =
-    stored.length === 3 &&
-    stored.every((q, i) => normalize(q.answer) === normalize(cleanAnswers[i]));
+  const matches = stored.length === 3 && stored.every((q, i) => {
+    if (q.answerSalt && q.answerHash) {
+      const inputHash = hashSecurityAnswer(cleanAnswers[i], q.answerSalt);
+      const expected = Buffer.from(q.answerHash, "hex");
+      const actual = Buffer.from(inputHash, "hex");
+      return expected.length === actual.length && timingSafeEqual(expected, actual);
+    }
 
-  if (!allMatch) {
+    // Backward-compatible check for recovery data saved before answers were
+    // hashed. A successful legacy recovery is immediately migrated below.
+    if (typeof q.answer !== "string") return false;
+    const expected = createHash("sha256")
+      .update(normalizeSecurityAnswer(q.answer))
+      .digest();
+    const actual = createHash("sha256")
+      .update(normalizeSecurityAnswer(cleanAnswers[i]))
+      .digest();
+    return timingSafeEqual(expected, actual);
+  });
+
+  if (!matches) {
     throw new HttpsError("permission-denied", "One or more answers are incorrect.");
+  }
+
+  if (stored.some((q) => !q.answerSalt || !q.answerHash)) {
+    const migrated = stored.map((q, i) => {
+      const answerSalt = randomBytes(16).toString("hex");
+      return {
+        question: q.question,
+        answerSalt,
+        answerHash: hashSecurityAnswer(cleanAnswers[i], answerSalt),
+      };
+    });
+    await recoverySnap.ref.update({
+      securityQuestions: migrated,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
   }
 
   // Generate a real, one-time-use Firebase password-reset code after the
@@ -968,8 +1043,8 @@ export const verifyOwnerSecurityAnswers = onCall(async (request) => {
   return { oobCode, email: ownerRecord.email };
 });
 
-// Owner notifications are now created explicitly by the admin FAB
-// "Apply Changes" button — see rentwise-admin/app/components/UpdatesReportFAB.tsx.
+// Owner notifications are created automatically with each completed admin
+// action by shared/services/updatesService.ts.
 
 // =====================================
 // PRE-AUTH USER LOOKUPS (server-side, narrow-response versions of what
@@ -986,13 +1061,14 @@ export const verifyOwnerSecurityAnswers = onCall(async (request) => {
 // signInWithEmailAndPassword; a null result just means "treat the input as
 // a raw email instead", not an error -- the client already falls back to
 // that.
-export const resolveLoginEmail = onCall(async (request) => {
+export const resolveLoginEmail = onCall({enforceAppCheck: false}, async (request) => {
   const input = inputObject(request.data);
   const identifier = requiredText(input.identifier, "Identifier", 254);
   const role = input.role;
   if (role !== "admin" && role !== "owner") {
     throw new HttpsError("invalid-argument", "Invalid account role.");
   }
+  await checkRateLimit(networkRateLimitKey(request, "resolveLoginEmail"), 40, 5 * 60_000);
   await checkRateLimit(`resolveLoginEmail:${role}:${identifier}`, 15, 5 * 60_000);
 
   // Two field-name conventions exist in the data (see the old
@@ -1035,9 +1111,12 @@ function maskPhone(phone: string): string {
   return `••••••${digits.slice(-3)}`;
 }
 
-export const sendResetOtp = onCall({secrets: [semaphoreApiKey]}, async (request) => {
+export const sendResetOtp = onCall(
+  {secrets: [semaphoreApiKey], enforceAppCheck: true},
+  async (request) => {
   const input = inputObject(request.data);
   const email = validEmail(input.email);
+  await checkRateLimit(networkRateLimitKey(request, "sendResetOtp"), 10, 15 * 60_000);
   await checkRateLimit(`sendResetOtp:${email}`, 3, 15 * 60_000);
 
   const snap = await db
@@ -1071,23 +1150,9 @@ export const sendResetOtp = onCall({secrets: [semaphoreApiKey]}, async (request)
     });
   };
 
-  // Gate 1: the email must be verified on the Auth account itself -- the
-  // authoritative source, not the denormalized Firestore `emailVerified`
-  // badge copy. getUserByEmail resolves because syncPersonalEmail sets the
-  // Auth login email to the personalEmail.
-  let authUser;
-  try {
-    authUser = await auth.getUserByEmail(email);
-  } catch {
-    await fileManual();
-    return { status: "manual" };
-  }
-  if (!authUser.emailVerified) {
-    await fileManual();
-    return { status: "manual" };
-  }
-
-  // Gate 2: a phone number must be on file to receive the code.
+  // The registered Gmail identifies the tenant account. Possession is
+  // confirmed by the SMS sent to the phone number stored on that account.
+  // Gmail inbox verification is intentionally not part of this flow.
   const contactNo = data.contactNo as string | undefined;
   if (!contactNo) {
     await fileManual();
@@ -1112,12 +1177,26 @@ export const sendResetOtp = onCall({secrets: [semaphoreApiKey]}, async (request)
   const otpHash = createHash("sha256").update(otp).digest("hex");
 
   const otpRef = db.collection("passwordResetOtps").doc(tenantId);
-  await otpRef.set({
-    emailKey: email,
-    otpHash,
-    attempts: 0,
-    expiresAt: Date.now() + 10 * 60_000,
-    createdAt: FieldValue.serverTimestamp(),
+  const issuedAt = Date.now();
+  await db.runTransaction(async (tx) => {
+    const existingSnap = await tx.get(otpRef);
+    const previousSentAt = existingSnap.exists ? Number(existingSnap.data()?.sentAt ?? 0) : 0;
+    const remainingCooldownMs = 60_000 - (issuedAt - previousSentAt);
+    if (remainingCooldownMs > 0) {
+      const remainingSeconds = Math.ceil(remainingCooldownMs / 1000);
+      throw new HttpsError(
+        "resource-exhausted",
+        `Please wait ${remainingSeconds} second${remainingSeconds === 1 ? "" : "s"} before requesting another code.`,
+      );
+    }
+    tx.set(otpRef, {
+      emailKey: email,
+      otpHash,
+      attempts: 0,
+      expiresAt: issuedAt + 10 * 60_000,
+      sentAt: issuedAt,
+      createdAt: FieldValue.serverTimestamp(),
+    });
   });
 
   try {
@@ -1143,16 +1222,18 @@ export const sendResetOtp = onCall({secrets: [semaphoreApiKey]}, async (request)
     );
   }
 
-  return { status: "sent", phoneHint: maskPhone(contactNo) };
-});
+    return { status: "sent", phoneHint: maskPhone(contactNo) };
+  },
+);
 
-export const verifyResetOtp = onCall(async (request) => {
+export const verifyResetOtp = onCall({enforceAppCheck: true}, async (request) => {
   const input = inputObject(request.data);
   const email = validEmail(input.email);
   const otp = typeof input.otp === "string" ? input.otp.trim() : "";
   if (!/^\d{6}$/.test(otp)) {
     throw new HttpsError("invalid-argument", "Enter the 6-digit code.");
   }
+  await checkRateLimit(networkRateLimitKey(request, "verifyResetOtp"), 30, 15 * 60_000);
   await checkRateLimit(`verifyResetOtp:${email}`, 10, 15 * 60_000);
 
   const snap = await db
@@ -1162,12 +1243,15 @@ export const verifyResetOtp = onCall(async (request) => {
     .limit(1)
     .get();
   if (snap.empty) {
-    throw new HttpsError("not-found", "No account found with this email.");
+    throw new HttpsError("failed-precondition", "No active code. Please request a new one.");
   }
   const tenantId = snap.docs[0].id;
   const otpRef = db.collection("passwordResetOtps").doc(tenantId);
 
   const inputHash = createHash("sha256").update(otp).digest("hex");
+  const resetToken = randomBytes(32).toString("hex");
+  const resetTokenHash = createHash("sha256").update(resetToken).digest("hex");
+  const resetSessionRef = db.collection("passwordResetSessions").doc(resetTokenHash);
 
   // A transaction so a burst of guesses can't race the attempt counter or
   // reuse a code that another call is consuming at the same moment.
@@ -1187,17 +1271,11 @@ export const verifyResetOtp = onCall(async (request) => {
 
     if (Date.now() > o.expiresAt) {
       tx.delete(otpRef);
-      throw new HttpsError(
-        "deadline-exceeded",
-        "This code has expired. Please request a new one.",
-      );
+      return {status: "expired" as const, attemptsLeft: 0};
     }
     if (o.attempts >= 5) {
       tx.delete(otpRef);
-      throw new HttpsError(
-        "resource-exhausted",
-        "Too many incorrect attempts. Please request a new code.",
-      );
+      return {status: "locked" as const, attemptsLeft: 0};
     }
 
     // Constant-time compare of equal-length SHA-256 hex digests.
@@ -1206,15 +1284,38 @@ export const verifyResetOtp = onCall(async (request) => {
       timingSafeEqual(Buffer.from(inputHash), Buffer.from(o.otpHash));
 
     if (!match) {
-      tx.update(otpRef, { attempts: FieldValue.increment(1) });
-      return { ok: false, attemptsLeft: 5 - (o.attempts + 1) };
+      const nextAttempts = o.attempts + 1;
+      if (nextAttempts >= 5) {
+        tx.delete(otpRef);
+        return {status: "locked" as const, attemptsLeft: 0};
+      }
+      tx.update(otpRef, {attempts: nextAttempts});
+      return {status: "incorrect" as const, attemptsLeft: 5 - nextAttempts};
     }
 
     tx.delete(otpRef); // one-time use — consume on success
-    return { ok: true, attemptsLeft: 0 };
+    tx.set(resetSessionRef, {
+      tenantId,
+      email,
+      expiresAt: Date.now() + 10 * 60_000,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    return {status: "ok" as const, attemptsLeft: 0};
   });
 
-  if (!result.ok) {
+  if (result.status === "expired") {
+    throw new HttpsError(
+      "deadline-exceeded",
+      "This code has expired. Please request a new one.",
+    );
+  }
+  if (result.status === "locked") {
+    throw new HttpsError(
+      "resource-exhausted",
+      "Too many incorrect attempts. Please request a new code.",
+    );
+  }
+  if (result.status === "incorrect") {
     throw new HttpsError(
       "invalid-argument",
       `Incorrect code. ${result.attemptsLeft} attempt${
@@ -1225,18 +1326,52 @@ export const verifyResetOtp = onCall(async (request) => {
 
   // OTP proven — NOW (and only now) mint the Firebase reset code, the same
   // and hand it to the app's own reset screen.
-  const link = await auth.generatePasswordResetLink(email, {
-    url: "https://rentwise-capstone-project.web.app/reset-password",
-    handleCodeInApp: true,
-  });
-  const oobCode = new URL(link).searchParams.get("oobCode");
-
-  return { oobCode };
+  return {resetToken};
 });
 
-export const adminForgotPassword = onCall(async (request) => {
+export const completeTenantPasswordReset = onCall(
+  {enforceAppCheck: true},
+  async (request) => {
+    const input = inputObject(request.data);
+    const resetToken = typeof input.resetToken === "string" ? input.resetToken.trim() : "";
+    if (!/^[a-f0-9]{64}$/.test(resetToken)) {
+      throw new HttpsError("invalid-argument", "This reset session is invalid or expired.");
+    }
+    const newPassword = validPassword(input.newPassword);
+    const resetTokenHash = createHash("sha256").update(resetToken).digest("hex");
+    const resetSessionRef = db.collection("passwordResetSessions").doc(resetTokenHash);
+
+    const result = await db.runTransaction(async (tx) => {
+      const sessionSnap = await tx.get(resetSessionRef);
+      if (!sessionSnap.exists) return {status: "invalid" as const, tenantId: ""};
+      const session = sessionSnap.data() as {tenantId?: string; expiresAt?: number};
+      tx.delete(resetSessionRef);
+      if (!session.tenantId || Date.now() > Number(session.expiresAt ?? 0)) {
+        return {status: "invalid" as const, tenantId: ""};
+      }
+      return {status: "ok" as const, tenantId: session.tenantId};
+    });
+
+    if (result.status !== "ok") {
+      throw new HttpsError("deadline-exceeded", "This reset session is invalid or expired.");
+    }
+
+    await assertTargetRole(result.tenantId, "tenant");
+    await auth.updateUser(result.tenantId, {password: newPassword});
+    await auth.revokeRefreshTokens(result.tenantId);
+    await db.collection("users").doc(result.tenantId).update({
+      mustChangePassword: false,
+      sessionRevokedAt: FieldValue.serverTimestamp(),
+    });
+
+    return {success: true};
+  },
+);
+
+export const adminForgotPassword = onCall({enforceAppCheck: true}, async (request) => {
   const input = inputObject(request.data);
   const email = validEmail(input.email);
+  await checkRateLimit(networkRateLimitKey(request, "adminForgotPassword"), 15, 15 * 60_000);
   await checkRateLimit(`adminForgotPassword:${email}`, 5, 15 * 60_000);
 
   const snap = await db
@@ -1247,7 +1382,9 @@ export const adminForgotPassword = onCall(async (request) => {
     .get();
 
   if (snap.empty) {
-    throw new HttpsError("not-found", "No admin account found with this email.");
+    // Generic success prevents unauthenticated callers from discovering
+    // which email addresses belong to administrator accounts.
+    return { ok: true };
   }
 
   const matched = snap.docs[0];
@@ -1317,9 +1454,33 @@ async function rebuildPublicStallsCache() {
   return stalls;
 }
 
-// Rebuild the one-document public projection only when source stall data
-// changes. The cache contains no tenant identity, contact, or payment fields.
-export const syncPublicStallsCache = onDocumentWritten("stalls/{stallId}", async () => {
+// Rebuild the one-document public projection only when a field displayed by
+// the Guest map changes. Private/internal stall edits do not create needless
+// cache writes or notify every connected Guest listener.
+export const syncPublicStallsCache = onDocumentWritten("stalls/{stallId}", async (event) => {
+  const before = event.data?.before;
+  const after = event.data?.after;
+  if (!before || !after) return;
+
+  if (before.exists && after.exists) {
+    const beforeData = before.data() ?? {};
+    const afterData = after.data() ?? {};
+    const publicFields = [
+      "name",
+      "spaceId",
+      "status",
+      "buildingNumber",
+      "category",
+      "marketType",
+      "width",
+      "length",
+      "price",
+      "spaceDimension",
+    ];
+    const publicDataChanged = publicFields.some((field) => beforeData[field] !== afterData[field]);
+    if (!publicDataChanged) return;
+  }
+
   await rebuildPublicStallsCache();
 });
 

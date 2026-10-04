@@ -1,6 +1,6 @@
-import { useEffect } from "react";
-import { View, StyleSheet, Platform } from "react-native";
-import { Stack } from "expo-router";
+import { useEffect, useRef } from "react";
+import { BackHandler, View, StyleSheet, Platform, ToastAndroid } from "react-native";
+import { Stack, router, usePathname } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import * as SplashScreen from "expo-splash-screen";
 import * as NavigationBar from "expo-navigation-bar";
@@ -20,6 +20,7 @@ import {
 } from "../shared/services/pushNotifications";
 import { useResponsive, MAX_CONTENT_WIDTH } from "../shared/hooks/useResponsive";
 import { colors } from "../shared/theme";
+import { initializeLocalCache } from "../shared/services/localCache";
 
 configurePushNotifications();
 
@@ -31,6 +32,8 @@ configurePushNotifications();
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
+  const pathname = usePathname();
+  const lastDashboardBack = useRef(0);
   const [fontsLoaded, fontError] = useFonts({
     PlusJakartaSans_400Regular,
     PlusJakartaSans_500Medium,
@@ -38,6 +41,10 @@ export default function RootLayout() {
     PlusJakartaSans_700Bold,
     PlusJakartaSans_800ExtraBold,
   });
+
+  useEffect(() => {
+    initializeLocalCache().catch((error) => console.warn("LOCAL CACHE INIT WARNING:", error));
+  }, []);
 
   const { isTablet } = useResponsive();
 
@@ -52,6 +59,33 @@ export default function RootLayout() {
       } catch {}
     }
   }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+
+    lastDashboardBack.current = 0;
+    const publicOrLockedRoute = ["/", "/login", "/welcome", "/quick-unlock", "/owner-forgot-password"].includes(pathname);
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (!auth.currentUser || publicOrLockedRoute) return false;
+
+      if (pathname !== "/dashboard") {
+        router.replace("/(tabs)/dashboard");
+        return true;
+      }
+
+      const now = Date.now();
+      if (now - lastDashboardBack.current <= 2000) {
+        BackHandler.exitApp();
+        return true;
+      }
+
+      lastDashboardBack.current = now;
+      ToastAndroid.show("Press back again to exit", ToastAndroid.SHORT);
+      return true;
+    });
+
+    return () => subscription.remove();
+  }, [pathname]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {

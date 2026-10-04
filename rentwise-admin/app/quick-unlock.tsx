@@ -116,7 +116,7 @@ export default function QuickUnlock() {
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: colors.emerald }}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <LinearGradient
         colors={[colors.emerald, colors.ink]}
@@ -225,7 +225,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    marginTop: -24,
+    marginTop: -12,
     paddingHorizontal: spacing.xxl + 4,
     paddingTop: spacing.xxxl,
   },

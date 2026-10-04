@@ -18,7 +18,7 @@ import { colors, fontFamily, fontSize, lineHeight, radius, spacing, shadow } fro
 
 const cloudFunctions = getFunctions(firebaseApp);
 const OTP_LENGTH = 6;
-const RESEND_COOLDOWN = 45; // seconds
+const RESEND_COOLDOWN = 60; // seconds
 
 // Second step of the SMS-OTP password reset (after /reset-sending). The tenant
 // enters the 6-digit code we texted; verifyResetOtp checks it server-side and,
@@ -67,14 +67,13 @@ export default function ResetOtp() {
     setNotice(null);
     try {
       const verifyResetOtp = httpsCallable(cloudFunctions, "verifyResetOtp");
-      const res = (await verifyResetOtp({ email, otp })).data as { oobCode?: string };
-      if (!res.oobCode) {
+      const res = (await verifyResetOtp({ email, otp })).data as { resetToken?: string };
+      if (!res.resetToken) {
         setError("Something went wrong. Please request a new code.");
         setOtp("");
         return;
       }
-      // Success: the oobCode was minted only just now, after the correct OTP.
-      router.replace({ pathname: "/reset-password", params: { oobCode: res.oobCode } });
+      router.replace({ pathname: "/reset-password", params: { resetToken: res.resetToken, email } });
     } catch (err: any) {
       // Server messages are already user-facing (incorrect + attempts left,
       // expired, locked out). Clear the field and let them retry / resend.

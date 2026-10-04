@@ -1,9 +1,9 @@
-import { useEffect } from "react";
-import { Stack, router } from "expo-router";
+import { useEffect, useRef } from "react";
+import { Stack, router, usePathname } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { onAuthStateChanged, signOut } from "firebase/auth";
-import { doc, getDoc, onSnapshot, updateDoc } from "firebase/firestore";
-import { Alert, View, StyleSheet, Platform } from "react-native";
+import { doc, onSnapshot } from "firebase/firestore";
+import { Alert, BackHandler, View, StyleSheet, Platform, ToastAndroid } from "react-native";
 import * as SplashScreen from "expo-splash-screen";
 import * as NavigationBar from "expo-navigation-bar";
 import {
@@ -22,6 +22,7 @@ import {
 } from "../shared/services/pushNotifications";
 import { useResponsive, MAX_CONTENT_WIDTH } from "../shared/hooks/useResponsive";
 import { colors } from "../shared/theme";
+import { initializeLocalCache } from "../shared/services/localCache";
 
 configurePushNotifications();
 
@@ -33,6 +34,8 @@ configurePushNotifications();
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
+  const pathname = usePathname();
+  const lastDashboardBack = useRef(0);
   const [fontsLoaded, fontError] = useFonts({
     PlusJakartaSans_400Regular,
     PlusJakartaSans_500Medium,
@@ -42,6 +45,10 @@ export default function RootLayout() {
   });
 
   useEffect(() => {
+    initializeLocalCache().catch((error) => console.warn("LOCAL CACHE INIT WARNING:", error));
+  }, []);
+
+  useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       if (user) {
         registerForPushNotificationsAsync(user.uid);
@@ -49,6 +56,65 @@ export default function RootLayout() {
     });
     return unsub;
   }, []);
+
+  useEffect(() => {
+    let unsubscribeProfile: (() => void) | undefined;
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      unsubscribeProfile?.();
+      unsubscribeProfile = undefined;
+      if (!user) return;
+
+      const token = await user.getIdTokenResult();
+      const authenticatedAt = new Date(token.authTime).getTime();
+      unsubscribeProfile = onSnapshot(doc(db, "users", user.uid), async (snapshot) => {
+        const revokedAt = snapshot.data()?.sessionRevokedAt?.toMillis?.() ?? 0;
+        if (revokedAt > authenticatedAt) {
+          await signOut(auth).catch(() => {});
+          router.replace("/login");
+        }
+      });
+    });
+
+    return () => {
+      unsubscribeProfile?.();
+      unsubscribeAuth();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+
+    lastDashboardBack.current = 0;
+    const publicOrLockedRoute = [
+      "/",
+      "/login",
+      "/welcome",
+      "/quick-unlock",
+      "/reset-sending",
+      "/reset-otp",
+      "/reset-password",
+    ].includes(pathname);
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (!auth.currentUser || publicOrLockedRoute) return false;
+
+      if (pathname !== "/dashboard") {
+        router.replace("/(tabs)/dashboard");
+        return true;
+      }
+
+      const now = Date.now();
+      if (now - lastDashboardBack.current <= 2000) {
+        BackHandler.exitApp();
+        return true;
+      }
+
+      lastDashboardBack.current = now;
+      ToastAndroid.show("Press back again to exit", ToastAndroid.SHORT);
+      return true;
+    });
+
+    return () => subscription.remove();
+  }, [pathname]);
 
   useEffect(() => {
     // Dark icons/pill so the system nav bar stays visible against this
@@ -95,32 +161,6 @@ export default function RootLayout() {
       unsubAuth();
       unsubDoc?.();
     };
-  }, []);
-
-  useEffect(() => {
-    // Firebase Auth's own emailVerified flag doesn't push itself into
-    // Firestore -- this notices it flipped (after the tenant clicks the
-    // verification link sent at account creation) and syncs it, so the
-    // admin app can show a Verified/Unverified badge without needing an
-    // Admin SDK call. reload() refetches the latest Auth state; without
-    // it, `user.emailVerified` would still reflect whatever it was at the
-    // start of this session, even if the tenant verified moments ago.
-    const unsub = onAuthStateChanged(auth, async (user) => {
-      if (!user) return;
-      try {
-        await user.reload();
-        if (!user.emailVerified) return;
-        const userRef = doc(db, "users", user.uid);
-        const snap = await getDoc(userRef);
-        if (snap.exists() && snap.data()?.emailVerified !== true) {
-          await updateDoc(userRef, { emailVerified: true });
-        }
-      } catch {
-        // Non-fatal -- the badge just stays "Unverified" a bit longer,
-        // corrected on the next app open/auth-state change.
-      }
-    });
-    return unsub;
   }, []);
 
   const { isTablet } = useResponsive();

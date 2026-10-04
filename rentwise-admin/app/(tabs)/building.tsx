@@ -13,17 +13,17 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, getDocs, onSnapshot, query, where } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { House, HelpCircle, ChevronDown, Building2 } from "lucide-react-native";
 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
-import UpdatesReportFAB, { FAB_CLEARANCE } from "../components/UpdatesReportFAB";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { Badge, EmptyState } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
+import { readLocalCache, saveLocalCache } from "../../shared/services/localCache";
 
 type StallDoc = {
   id: string;
@@ -38,6 +38,7 @@ type StallDoc = {
 
 type TenantInfo = {
   firstName: string;
+  middleName: string;
   lastName: string;
 };
 
@@ -72,7 +73,6 @@ export default function Building() {
   const manageBtnRef = useRef<View>(null);
   const editRentalBtnRef = useRef<View>(null);
   const registerBtnRef = useRef<View>(null);
-  const fabRef = useRef<View>(null);
   const listScrollRef = useRef<ScrollView>(null);
 
   // Scrolls a given stall row into view and gives the ScrollView time to
@@ -101,11 +101,67 @@ export default function Building() {
       }
 
       setChecking(false);
-      fetchData();
     });
 
     return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    if (checking || !auth.currentUser) return;
+    let stallsReady = false;
+    let usersReady = false;
+    const finishInitialLoad = () => {
+      if (stallsReady && usersReady) setLoading(false);
+    };
+
+    const unsubscribeStalls = onSnapshot(collection(db, "stalls"), (snapshot) => {
+      setAllStalls(snapshot.docs.map((stallDoc) => {
+        const data = stallDoc.data();
+        return {
+          id: stallDoc.id,
+          buildingNumber: Number(data.buildingNumber ?? 0),
+          spaceId: data.spaceId ?? "",
+          name: data.name ?? "",
+          price: Number(data.price ?? 0),
+          paymentSchedule: data.paymentSchedule ?? "",
+          status: data.status ?? "unoccupied",
+          tenantId: data.tenantId ?? null,
+        };
+      }));
+      stallsReady = true;
+      finishInitialLoad();
+    }, (error) => {
+      console.log("STALLS LISTENER ERROR:", error);
+      setLoading(false);
+    });
+
+    const unsubscribeUsers = onSnapshot(
+      query(collection(db, "users"), where("role", "==", "tenant")),
+      (snapshot) => {
+        const map = new Map<string, TenantInfo>();
+        snapshot.docs.forEach((userDoc) => {
+          const data = userDoc.data();
+          map.set(userDoc.id, {
+            firstName: data.firstName ?? "",
+            middleName: data.middleName ?? "",
+            lastName: data.lastName ?? "",
+          });
+        });
+        setTenantMap(map);
+        usersReady = true;
+        finishInitialLoad();
+      },
+      (error) => {
+        console.log("STALL TENANTS LISTENER ERROR:", error);
+        setLoading(false);
+      },
+    );
+
+    return () => {
+      unsubscribeStalls();
+      unsubscribeUsers();
+    };
+  }, [checking]);
 
   // Auto-opens the guided tour the first time the admin ever lands on this
   // page — never again after that, since it flips a persisted per-device
@@ -163,13 +219,21 @@ export default function Building() {
         map.set(doc.id, {
           firstName: data.firstName ?? "",
 
+          middleName: data.middleName ?? "",
+
           lastName: data.lastName ?? "",
         });
       });
 
       setTenantMap(map);
+      await saveLocalCache("admin:stalls", {stalls, tenants: Array.from(map.entries())});
     } catch (error) {
       console.log("BUILDING ERROR:", error);
+      const cached = await readLocalCache<{stalls: StallDoc[]; tenants: Array<[string, TenantInfo]>}>("admin:stalls");
+      if (cached) {
+        setAllStalls(cached.stalls);
+        setTenantMap(new Map(cached.tenants));
+      }
     } finally {
       setLoading(false);
     }
@@ -179,7 +243,6 @@ export default function Building() {
     useCallback(() => {
       if (!checking) {
         setSelectedBuilding(null);
-        fetchData();
       }
     }, [checking]),
   );
@@ -229,7 +292,6 @@ export default function Building() {
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
     // Moved right after "home" (was last) -- see financials.tsx for why.
-    { key: "fab", ref: fabRef, title: "Updates report", description: "Shows recent changes awaiting your review, organized by building, financials, and accounts.", edgeInset: "bottom", round: true, nudgeY: 0 },
     { key: "building", ref: buildingDropdownRef, title: "Building filter", description: "Switch between buildings to see only that building's stalls.", edgeInset: "top" },
     { key: "status", ref: statusDropdownRef, title: "Status filter", description: "Narrow the list to occupied or unoccupied stalls.", edgeInset: "top" },
     { key: "list", ref: listRef, title: "Stall list", description: "Register a tenant into a vacant stall, or manage and edit rental info for an occupied one.", edgeInset: "top" },
@@ -277,7 +339,7 @@ export default function Building() {
 
         {/* Sub-header */}
         <View style={styles.subHeader}>
-          <Text style={styles.pageTitle}>Building Management</Text>
+          <Text style={styles.pageTitle}>Stall Management</Text>
           <View style={styles.countPill}>
             <Text style={styles.countPillText}>{allStalls.length} Stalls</Text>
           </View>
@@ -434,7 +496,7 @@ export default function Building() {
               ref={listScrollRef}
               style={styles.listScroll}
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ paddingBottom: insets.bottom + FAB_CLEARANCE }}
+              contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xl }}
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
               }
@@ -466,7 +528,6 @@ export default function Building() {
         />
       )}
 
-      <UpdatesReportFAB fabRef={fabRef} />
 
       <HelpTour
         visible={tourVisible}
@@ -506,7 +567,7 @@ function StallRow({
   registerRef?: React.RefObject<View | null>;
 }) {
   const tenant = stall.tenantId ? tenantMap.get(stall.tenantId) : undefined;
-  const tenantName = tenant ? `${tenant.firstName} ${tenant.lastName}`.trim() : "";
+  const tenantName = tenant ? [tenant.firstName, tenant.middleName, tenant.lastName].filter(Boolean).join(" ") : "";
 
   return (
     <View style={styles.row}>

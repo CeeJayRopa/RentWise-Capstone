@@ -14,7 +14,7 @@ import {
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, doc, getDoc, getDocs } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, onSnapshot } from "firebase/firestore";
 import type { Timestamp } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { House, HelpCircle, Archive as ArchiveIcon, RotateCcw, Trash2, Search, Building2, DoorOpen } from "lucide-react-native";
@@ -25,14 +25,15 @@ import {
   restoreTenant,
   deleteArchivedTenant,
 } from "../../shared/services/accountServices";
-import UpdatesReportFAB, { FAB_CLEARANCE } from "../components/UpdatesReportFAB";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
+import { readLocalCache, saveLocalCache } from "../../shared/services/localCache";
 
 type ArchiveEntry = {
   uid: string;
   firstName: string;
+  middleName: string;
   lastName: string;
   email: string;
   contactNo: string;
@@ -76,17 +77,15 @@ export default function Archives() {
   const cardRef = useRef<View>(null);
   const restoreBtnRef = useRef<View>(null);
   const deleteBtnRef = useRef<View>(null);
-  const fabRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
     // Moved right after "home" (was last) -- see financials.tsx for why.
-    { key: "fab", ref: fabRef, title: "Updates report", description: "Shows recent changes awaiting your review, organized by building, financials, and accounts.", edgeInset: "bottom", round: true, nudgeY: 0 },
     { key: "count", ref: countRef, title: "Archived count", description: "Total number of tenant accounts currently archived.", edgeInset: "top" },
     { key: "search", ref: searchRef, title: "Search", description: "Find an archived tenant fast by typing their name.", edgeInset: "top" },
     { key: "card", ref: cardRef, title: "Archived tenant", description: "Shows who was archived, when, and their building/space.", edgeInset: "top" },
     { key: "restore", ref: restoreBtnRef, title: "Restore", description: "Brings the tenant's account back to active. If their old stall is occupied, you'll be asked to relocate them first.", edgeInset: "top" },
-    { key: "delete", ref: deleteBtnRef, title: "Delete", description: "Permanently removes the account and its data — this can't be undone.", edgeInset: "top" },
+    { key: "delete", ref: deleteBtnRef, title: "Deactivated", description: "The tenant cannot log in, but their credentials and records are safely retained for restoration.", edgeInset: "top" },
   ];
 
   const fetchData = useCallback(async () => {
@@ -98,6 +97,7 @@ export default function Archives() {
         return {
           uid: d.id,
           firstName: (data.firstName as string) ?? "",
+          middleName: (data.middleName as string) ?? "",
           lastName: (data.lastName as string) ?? "",
           email:
             (data.email as string) ||
@@ -118,8 +118,11 @@ export default function Archives() {
         return b.archivedAt.seconds - a.archivedAt.seconds;
       });
       setArchives(entries);
+      await saveLocalCache("admin:archives", entries);
     } catch (err) {
       console.error("ARCHIVES FETCH ERROR:", err);
+      const cached = await readLocalCache<ArchiveEntry[]>("admin:archives");
+      if (cached) setArchives(cached);
     } finally {
       setLoading(false);
     }
@@ -135,10 +138,45 @@ export default function Archives() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (!user) { router.replace("/"); return; }
       setChecking(false);
-      fetchData();
     });
     return unsubscribe;
-  }, [fetchData]);
+  }, []);
+
+  useEffect(() => {
+    if (checking || !auth.currentUser) return;
+    const unsubscribe = onSnapshot(
+      collection(db, "archives"),
+      (snapshot) => {
+        const entries: ArchiveEntry[] = snapshot.docs.map((archiveDoc) => {
+          const data = archiveDoc.data();
+          return {
+            uid: archiveDoc.id,
+            firstName: data.firstName ?? "",
+            middleName: data.middleName ?? "",
+            lastName: data.lastName ?? "",
+            email: data.email || (data.username ? `${data.username}@rentwise.app` : "") || data.userName || "",
+            contactNo: data.contactNo ?? "",
+            buildingNumber: data.buildingNumber ?? "",
+            spaceId: data.spaceId ?? "",
+            stallId: data.stallId ?? "",
+            archivedAt: data.archivedAt ?? null,
+          };
+        });
+        entries.sort((a, b) => {
+          if (!a.archivedAt) return 1;
+          if (!b.archivedAt) return -1;
+          return b.archivedAt.seconds - a.archivedAt.seconds;
+        });
+        setArchives(entries);
+        setLoading(false);
+      },
+      (error) => {
+        console.error("ARCHIVES LISTENER ERROR:", error);
+        setLoading(false);
+      },
+    );
+    return unsubscribe;
+  }, [checking]);
 
   // Auto-opens the guided tour the first time the admin ever lands on this
   // page — never again after that, since it flips a persisted per-device
@@ -166,6 +204,7 @@ export default function Archives() {
             params: {
               uid: item.uid,
               firstName: item.firstName,
+              middleName: item.middleName,
               lastName: item.lastName,
               email: item.email,
               buildingNumber: item.buildingNumber,
@@ -217,7 +256,7 @@ export default function Archives() {
   };
 
   const filteredArchives = archives.filter((item) =>
-    `${item.firstName} ${item.lastName}`.toLowerCase().includes(searchQuery.trim().toLowerCase()),
+    [item.firstName, item.middleName, item.lastName].filter(Boolean).join(" ").toLowerCase().includes(searchQuery.trim().toLowerCase()),
   );
 
   if (checking) {
@@ -289,7 +328,7 @@ export default function Archives() {
         <FlatList
           data={filteredArchives}
           keyExtractor={(item) => item.uid}
-          contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + FAB_CLEARANCE }]}
+          contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + spacing.xl }]}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.emerald} />
@@ -298,7 +337,7 @@ export default function Archives() {
             <View style={styles.card} ref={index === 0 ? cardRef : undefined} collapsable={false}>
               <View style={styles.cardTopRow}>
                 <Text style={styles.cardName} numberOfLines={1} ellipsizeMode="tail">
-                  {item.firstName} {item.lastName}
+                  {[item.firstName, item.middleName, item.lastName].filter(Boolean).join(" ")}
                 </Text>
                 <View style={styles.archivedInfo}>
                   <Text style={styles.archivedCaption}>Archived</Text>
@@ -343,13 +382,13 @@ export default function Archives() {
 
                 <View ref={index === 0 ? deleteBtnRef : undefined} collapsable={false} style={{ flex: 1 }}>
                   <Pressable
-                    style={({ pressed }) => [styles.deleteBtn, pressed && styles.deleteBtnPressed]}
-                    onPress={() => { setDeleteError(""); setDeleteTarget(item); }}
+                    style={styles.deleteBtn}
+                    disabled
                   >
-                    {({ pressed }) => (
+                    {() => (
                       <>
-                        <Trash2 size={15} color={pressed ? colors.white : colors.error} style={styles.btnIcon} />
-                        <Text style={[styles.deleteBtnText, pressed && styles.deleteBtnTextPressed]}>Delete</Text>
+                        <ArchiveIcon size={15} color={colors.error} style={styles.btnIcon} />
+                        <Text style={styles.deleteBtnText}>Deactivated</Text>
                       </>
                     )}
                   </Pressable>
@@ -360,7 +399,6 @@ export default function Archives() {
         />
       )}
 
-      <UpdatesReportFAB fabRef={fabRef} />
 
       {/* RESTORE CONFIRMATION MODAL */}
       <Modal

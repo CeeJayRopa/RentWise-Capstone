@@ -3,7 +3,7 @@ import { View, Text, Pressable, StyleSheet, Animated, LayoutChangeEvent } from "
 import type { BottomTabBarProps } from "expo-router/js-tabs";
 import { Wallet, Building2, UsersRound, Archive, FileText } from "lucide-react-native";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
-import { bottomNavRefs } from "./bottomNavRefs";
+import { bottomNavRefs } from "../../shared/services/bottomNavRefs";
 
 type NavKey = keyof typeof bottomNavRefs;
 
@@ -12,7 +12,7 @@ const PILL_HEIGHT = 28;
 
 const TAB_CONFIG: { routeName: string; key: NavKey; label: string; Icon: typeof Wallet }[] = [
   { routeName: "financials", key: "financials", label: "Financials", Icon: Wallet },
-  { routeName: "building", key: "building", label: "Building", Icon: Building2 },
+  { routeName: "building", key: "building", label: "Stalls", Icon: Building2 },
   { routeName: "tenant-management", key: "tenants", label: "Tenants", Icon: UsersRound },
   { routeName: "archives", key: "archives", label: "Archives", Icon: Archive },
   { routeName: "reports-history", key: "reports", label: "Reports", Icon: FileText },

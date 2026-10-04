@@ -51,14 +51,32 @@ service cloud.firestore {
       // stays self-editable (business type, not money). Staff can update
       // any tenant doc (archive/restore/relocate) without any of these
       // restrictions.
-      allow update: if isStaff()
-        || (isSignedIn() && request.auth.uid == userId
-            && request.resource.data.role == resource.data.role
-            && request.resource.data.status == resource.data.status
-            && request.resource.data.price == resource.data.price
-            && request.resource.data.paymentSchedule == resource.data.paymentSchedule);
+      // Enforce the role hierarchy in the backend. Staff may manage only
+      // lower-level accounts, nobody may rewrite a role, and self-service
+      // writes are limited to fields used by profile/session screens.
+      allow update: if
+        (isOwner()
+          && resource.data.role in ["admin", "tenant"]
+          && request.resource.data.role == resource.data.role)
+        || (isAdmin()
+          && resource.data.role == "tenant"
+          && request.resource.data.role == "tenant")
+        || (isSignedIn()
+          && request.auth.uid == userId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            "firstName",
+            "lastName",
+            "contactNo",
+            "username",
+            "category",
+            "mustChangePassword",
+            "expoPushToken",
+            "emailVerified"
+          ]));
 
-      allow delete: if isStaff();
+      allow delete: if
+        (isOwner() && resource.data.role in ["admin", "tenant"])
+        || (isAdmin() && resource.data.role == "tenant");
     }
 
     // ── stalls ─────────────────────────────────────────────────────────
@@ -75,6 +93,14 @@ service cloud.firestore {
             && request.resource.data.category is string
             && request.resource.data.category in
                  ["Wet Market", "Dry Market", "Home Essential"]);
+    }
+
+    // One sanitized cache document powers the public Guest map. The backend
+    // alone writes it; guests receive live availability without access to
+    // tenant identities, contact details, or payment records.
+    match /publicApiCache/stalls {
+      allow read: if true;
+      allow write: if false;
     }
 
     // ── payments ───────────────────────────────────────────────────────

@@ -4,7 +4,6 @@ import {
   inMemoryPersistence,
   createUserWithEmailAndPassword,
   deleteUser as deleteAuthUser,
-  sendEmailVerification,
 } from "firebase/auth";
 import type { User } from "firebase/auth";
 import {
@@ -32,6 +31,7 @@ export const DEFAULT_TENANT_PASSWORD = "@Tenant123";
 
 type CreateTenantParams = {
   firstName: string;
+  middleName?: string;
   lastName: string;
   contactNo: string;
   stallId: string;
@@ -47,12 +47,16 @@ export const createTenantAccount = async (
 ): Promise<{ uid: string }> => {
   const {
     firstName,
+    middleName = "",
     lastName,
     contactNo,
     stallId,
     personalEmail,
   } = params;
-  const email = personalEmail;
+  const email = personalEmail.trim().toLowerCase();
+  if (!/^[A-Z0-9._%+-]+@gmail\.com$/i.test(email)) {
+    throw new Error("Enter a valid @gmail.com email address.");
+  }
   // Tenant can log in immediately with the shared default (see the
   // mustChangePassword gate below) instead of being stuck until they
   // happen to check their email — the welcome email sent further down is
@@ -97,6 +101,7 @@ export const createTenantAccount = async (
       const stallData = stallSnap.data();
       tx.set(doc(db, "users", uid), {
         firstName,
+        middleName,
         lastName,
         email,
         personalEmail,
@@ -111,27 +116,15 @@ export const createTenantAccount = async (
         // password and must change it via the forced-change screen the
         // moment they first log in with @Tenant123.
         mustChangePassword: true,
-        // Real proof the personalEmail is a reachable inbox comes later,
-        // once the tenant clicks the verification link this triggers below
-        // -- see _layout.tsx, which syncs this from Firebase Auth's own
-        // emailVerified flag once it flips.
-        emailVerified: false,
         createdAt: serverTimestamp(),
       });
 
       tx.update(stallRef, {
         tenantId: uid,
-        tenantName: `${firstName} ${lastName}`,
+        tenantName: [firstName, middleName, lastName].filter(Boolean).join(" "),
         status: "occupied",
       });
     });
-
-    // Fire-and-forget, same tolerance as the stall-fetch/log-write below --
-    // the tenant account itself is already fully created at this point, so
-    // a failed verification-email send shouldn't fail the whole flow. Uses
-    // the still-live secondary-app session (torn down only in `finally`
-    // below), so this doesn't touch the admin's own signed-in session.
-    sendEmailVerification(createdUser).catch(() => {});
 
     // Fire-and-forget: fetch stall info for the log (non-blocking)
     getDoc(doc(db, "stalls", stallId)).then((snap) => {
@@ -140,7 +133,7 @@ export const createTenantAccount = async (
         module: "Register Tenant",
         type: "Tenant Registration",
         tenantId: uid,
-        tenantName: `${firstName} ${lastName}`,
+        tenantName: [firstName, middleName, lastName].filter(Boolean).join(" "),
         spaceNo,
         oldValue: "Unoccupied",
         newValue: "Active Tenant",
@@ -260,6 +253,7 @@ export const archiveTenant = async (uid: string): Promise<void> => {
   batch.set(doc(db, "archives", uid), {
     originalUid: uid,
     firstName: user.firstName ?? "",
+    middleName: user.middleName ?? "",
     lastName: user.lastName ?? "",
     // Legacy accounts still have `username`; new Gmail-based tenants don't
     // — fall back through whichever fields this particular tenant has.
@@ -285,7 +279,7 @@ export const archiveTenant = async (uid: string): Promise<void> => {
 
   await batch.commit();
 
-  const tenantName = `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim();
+  const tenantName = [user.firstName, user.middleName, user.lastName].filter(Boolean).join(" ");
   void logDetailedUpdate({
     module: "Manage Account",
     type: "Tenant Archived",
@@ -342,7 +336,7 @@ export const deleteArchivedTenant = async (uid: string): Promise<void> => {
   if (!archiveSnap.exists()) throw new Error("Archive record not found.");
 
   const archive = archiveSnap.data();
-  const tenantName = `${archive.firstName ?? ""} ${archive.lastName ?? ""}`.trim();
+  const tenantName = [archive.firstName, archive.middleName, archive.lastName].filter(Boolean).join(" ");
 
   // Deletes Firebase Auth account so the username can be reused
   if (!auth.currentUser?.uid) throw new Error("Admin not authenticated.");
@@ -375,7 +369,7 @@ export const restoreTenant = async (uid: string): Promise<void> => {
 
   const archive = archiveSnap.data();
   const stallId = (archive.stallId as string) ?? "";
-  const tenantName = `${archive.firstName ?? ""} ${archive.lastName ?? ""}`.trim();
+  const tenantName = [archive.firstName, archive.middleName, archive.lastName].filter(Boolean).join(" ");
 
   // The tenant's own price/paymentSchedule/category never left their doc
   // while archived -- fetched here just to sync the reassigned stall's
@@ -436,7 +430,7 @@ export const relocateActiveTenant = async (
   const userSnap = await getDoc(doc(db, "users", uid));
   if (!userSnap.exists()) throw new Error("User not found.");
   const user = userSnap.data();
-  const tenantName = `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim();
+  const tenantName = [user.firstName, user.middleName, user.lastName].filter(Boolean).join(" ");
 
   const newStallSnap = await getDoc(doc(db, "stalls", newStallId));
   if (!newStallSnap.exists()) throw new Error("Selected stall not found.");
@@ -526,7 +520,7 @@ export const restoreTenantToNewStall = async (
   if (!archiveSnap.exists()) throw new Error("Archive record not found.");
 
   const archive = archiveSnap.data();
-  const tenantName = `${archive.firstName ?? ""} ${archive.lastName ?? ""}`.trim();
+  const tenantName = [archive.firstName, archive.middleName, archive.lastName].filter(Boolean).join(" ");
 
   // Verify the new stall is still unoccupied before committing
   const stallSnap = await getDoc(doc(db, "stalls", newStallId));

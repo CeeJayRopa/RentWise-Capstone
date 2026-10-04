@@ -22,8 +22,11 @@ import {
   Poppins_800ExtraBold,
 } from "@expo-google-fonts/poppins";
 
+const GUEST_POLICY_ACCEPTANCE_KEY = "rentwise_guest_policy_acceptance_v1";
+
 export default function Layout() {
   const [guestAccessAccepted, setGuestAccessAccepted] = useState(false);
+  const [policyPreferenceLoaded, setPolicyPreferenceLoaded] = useState(false);
   const [policyTab, setPolicyTab] = useState<"terms" | "privacy">("terms");
   const [policiesRead, setPoliciesRead] = useState({ terms: false, privacy: false });
   const { isMobile } = useBreakpoints();
@@ -53,6 +56,20 @@ export default function Layout() {
     return () => style.remove();
   }, []);
 
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") {
+      setPolicyPreferenceLoaded(true);
+      return;
+    }
+    try {
+      setGuestAccessAccepted(window.localStorage.getItem(GUEST_POLICY_ACCEPTANCE_KEY) === "accepted");
+    } catch {
+      // If browser storage is unavailable, keep the consent session-only.
+    } finally {
+      setPolicyPreferenceLoaded(true);
+    }
+  }, []);
+
   // Renders a beat of blank screen rather than the browser's default
   // sans-serif for the numbering/headline serif — on a scroll-driven,
   // no-nav site a flash of the wrong typeface reads as more "broken"
@@ -60,6 +77,18 @@ export default function Layout() {
   if (!fontsLoaded) return null;
 
   const canAccept = policiesRead.terms && policiesRead.privacy;
+
+  const handleAcceptPolicies = () => {
+    if (!canAccept) return;
+    try {
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        window.localStorage.setItem(GUEST_POLICY_ACCEPTANCE_KEY, "accepted");
+      }
+    } catch {
+      // Acceptance still lasts for this page session when storage is blocked.
+    }
+    setGuestAccessAccepted(true);
+  };
 
   const handlePolicyScroll = ({ nativeEvent }: NativeSyntheticEvent<NativeScrollEvent>) => {
     const bottomThreshold = 16;
@@ -78,7 +107,7 @@ export default function Layout() {
     <View style={styles.appRoot}>
       <Stack screenOptions={{ headerShown: false }} />
       <Modal
-        visible={!guestAccessAccepted}
+        visible={policyPreferenceLoaded && !guestAccessAccepted}
         transparent
         animationType="fade"
         onRequestClose={() => {}}
@@ -180,7 +209,7 @@ export default function Layout() {
             </Text>
             <Pressable
               style={[styles.policyAcceptButton, !canAccept && styles.policyAcceptButtonDisabled]}
-              onPress={() => setGuestAccessAccepted(true)}
+              onPress={handleAcceptPolicies}
               disabled={!canAccept}
               accessibilityState={{ disabled: !canAccept }}
             >

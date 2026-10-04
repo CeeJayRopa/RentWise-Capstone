@@ -40,7 +40,6 @@ export async function registerForPushNotificationsAsync(
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: "#F5C518",
-        sound: "default",
       });
     }
 
@@ -64,7 +63,7 @@ export async function registerForPushNotificationsAsync(
     const token = tokenData.data;
 
     await updateDoc(doc(db, "users", userId), { expoPushToken: token });
-    console.log("[PUSH] Token registered:", token);
+    console.log("[PUSH] Token registered successfully");
   } catch (err) {
     console.log("[PUSH] Not available — use a development build:", err);
   }

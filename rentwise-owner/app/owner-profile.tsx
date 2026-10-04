@@ -30,6 +30,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, HelpCircle, Eye, EyeOff, ChevronDown, CheckCircle2, LogOut } from "lucide-react-native";
 
 import { auth, logoutUser } from "../shared/services/auth";
+import { clearLocalCache } from "../shared/services/localCache";
 import { setRememberMe } from "../shared/services/rememberMe";
 import { firebaseApp } from "../shared/firebaseConfig";
 import { getUserById, updateUserProfile, isUsernameTaken } from "../shared/services/userServices";
@@ -221,7 +222,7 @@ export default function OwnerProfile() {
     else setUsernameError("");
 
     if (!cn) { setContactNoError("Contact number is required."); valid = false; }
-    else if (cn.length !== 11) { setContactNoError("Enter a valid 11-digit contact number."); valid = false; }
+    else if (!/^9\d{9}$/.test(cn)) { setContactNoError("Enter a valid 10-digit number starting with 9."); valid = false; }
     else setContactNoError("");
 
     return valid;
@@ -422,6 +423,7 @@ export default function OwnerProfile() {
   const handleLogout = async () => {
     setLoggingOut(true);
     try {
+      await clearLocalCache().catch(() => {});
       await logoutUser();
       await setRememberMe(false);
       router.replace("/login");
@@ -558,11 +560,11 @@ export default function OwnerProfile() {
               <TextInput
                 style={[styles.rowInput, !isEditing && styles.rowInputReadOnly]}
                 value={contactNo}
-                onChangeText={(t) => { setContactNo(t.replace(/\D/g, "").slice(0, 11)); if (contactNoError) setContactNoError(""); }}
-                placeholder="09XXXXXXXXX"
+                onChangeText={(t) => { setContactNo(t.replace(/\D/g, "").slice(0, 10)); if (contactNoError) setContactNoError(""); }}
+                placeholder="9XXXXXXXXX"
                 placeholderTextColor={colors.textMuted}
                 keyboardType="phone-pad"
-                maxLength={11}
+                maxLength={10}
                 onFocus={() => { setFocusedField("contactNo"); scrollFieldIntoView(fieldsRef); }}
                 onBlur={() => setFocusedField(null)}
                 editable={isEditing}

@@ -37,6 +37,7 @@ export default function TenantRelocation() {
   const params = useLocalSearchParams<{
     uid: string;
     firstName: string;
+    middleName?: string;
     lastName: string;
     email: string;
     buildingNumber: string;
@@ -45,9 +46,9 @@ export default function TenantRelocation() {
     mode?: string;
   }>();
 
-  const { uid, firstName, lastName, email, buildingNumber, spaceId, stallId, mode } = params;
+  const { uid, firstName, middleName, lastName, email, buildingNumber, spaceId, stallId, mode } = params;
   const isMove = mode === "move";
-  const fullName = `${firstName} ${lastName}`.trim();
+  const fullName = [firstName, middleName, lastName].filter(Boolean).join(" ");
 
   const [stalls, setStalls] = useState<StallOption[]>([]);
   const [selectedStall, setSelectedStall] = useState<StallOption | null>(null);

@@ -22,6 +22,7 @@ import OwnerBellIcon from "../components/OwnerBellIcon";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { EmptyState } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
+import { readLocalCache, saveLocalCache } from "../../shared/services/localCache";
 
 type StallDoc = {
   id: string;
@@ -128,8 +129,14 @@ export default function Building() {
       });
 
       setTenantMap(map);
+      await saveLocalCache("owner:stalls", {stalls, tenants: Array.from(map.entries())});
     } catch (error) {
       console.log("OWNER BUILDING ERROR:", error);
+      const cached = await readLocalCache<{stalls: StallDoc[]; tenants: Array<[string, TenantInfo]>}>("owner:stalls");
+      if (cached) {
+        setAllStalls(cached.stalls);
+        setTenantMap(new Map(cached.tenants));
+      }
     } finally {
       setLoading(false);
     }
@@ -208,7 +215,7 @@ export default function Building() {
 
         {/* Sub-header */}
         <View style={styles.subHeader}>
-          <Text style={styles.subHeaderTitle}>Building Management</Text>
+          <Text style={styles.subHeaderTitle}>Stall Management</Text>
           <Text style={styles.viewOnly}>View only</Text>
         </View>
       </LinearGradient>
@@ -232,7 +239,7 @@ export default function Building() {
               }}
               activeOpacity={0.8}
             >
-              <Text style={styles.dropdownCaption}>Building</Text>
+              <Text style={styles.dropdownCaption}>Stalls</Text>
               <View style={styles.dropdownValueWrap}>
                 <Text style={styles.dropdownValue} numberOfLines={1}>
                   {selectedBuilding !== null ? selectedBuilding : "All"}

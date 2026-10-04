@@ -569,11 +569,11 @@ export default function TenantPreview() {
       >
         {/* PROFILE BANNER */}
         <View style={styles.banner}>
-          <Avatar name={`${tenant?.firstName ?? ""} ${tenant?.lastName ?? ""}`} size={54} />
+          <Avatar name={[tenant?.firstName, tenant?.middleName, tenant?.lastName].filter(Boolean).join(" ")} size={54} />
           <View style={styles.bannerTextWrap}>
             <Text style={styles.bannerWelcome}>Welcome, tenant!</Text>
             <Text style={styles.bannerName}>
-              {tenant?.firstName} {tenant?.lastName}
+              {[tenant?.firstName, tenant?.middleName, tenant?.lastName].filter(Boolean).join(" ")}
             </Text>
             <Text style={styles.bannerContact}>
               {tenant?.contactNo ? `+63 ${tenant.contactNo}` : ""}
@@ -583,10 +583,7 @@ export default function TenantPreview() {
                 <Text style={styles.bannerEmail} numberOfLines={1}>
                   {tenant.personalEmail || tenant.email}
                 </Text>
-                <Badge
-                  label={tenant?.emailVerified ? "Verified" : "Unverified"}
-                  tone={tenant?.emailVerified ? "success" : "warning"}
-                />
+                <Badge label="Registered Gmail" tone="success" />
               </View>
             )}
           </View>

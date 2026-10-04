@@ -14,8 +14,10 @@ import {
   Animated,
   Easing,
   RefreshControl,
+  Linking,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import * as WebBrowser from "expo-web-browser";
 
 import BellIcon from "../components/BellIcon";
 
@@ -51,6 +53,7 @@ import {
   CalendarClock,
   Wallet,
   HelpCircle,
+  Camera,
 } from "lucide-react-native";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import HelpTour, { HelpStep } from "../components/HelpTour";
@@ -78,12 +81,14 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
+  const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [toastMsg, setToastMsg] = useState("");
   const [showToast, setShowToast] = useState(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
 
   const [tourVisible, setTourVisible] = useState(false);
   const bellRef = useRef<View>(null);
+  const arShortcutRef = useRef<View>(null);
   const helpRef = useRef<View>(null);
   const paymentCardRef = useRef<View>(null);
   const scheduleRef = useRef<View>(null);
@@ -111,6 +116,7 @@ export default function Dashboard() {
 
   const tourSteps: HelpStep[] = [
     { key: "bell", ref: bellRef, title: "Notifications", description: "Updates from the admin, like payment confirmations and account changes.", edgeInset: "top", round: true },
+    { key: "ar", ref: arShortcutRef, title: "AR Stall Designer", description: "Preview and arrange market fixtures in your space using your phone's camera.", edgeInset: "top", round: true },
     { key: "payment", ref: paymentCardRef, title: "Rental payment", description: "Your remaining bill this month, how much you've paid, and what's currently due.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(paymentCardRef) },
     { key: "schedule", ref: scheduleRef, title: "Upcoming schedule", description: "Your next rent installments and when they're due.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(scheduleRef) },
     { key: "navhome", ref: bottomNavRefs.home, title: "Home", description: "Your dashboard — rental payment status and upcoming schedule.", edgeInset: "bottom" },
@@ -168,7 +174,16 @@ export default function Dashboard() {
           // Firestore serves its local cache while there is no connection.
           // Watching metadata changes lets this modal close as soon as the
           // server confirms the same data after internet access returns.
-          setIsOffline(snapshot.metadata.fromCache);
+          if (!snapshot.metadata.fromCache) {
+            if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+            offlineTimerRef.current = null;
+            setIsOffline(false);
+          } else if (!offlineTimerRef.current) {
+            offlineTimerRef.current = setTimeout(() => {
+              if (auth.currentUser) setIsOffline(true);
+              offlineTimerRef.current = null;
+            }, 5000);
+          }
           const newPayments = snapshot.docs.map((d) => ({
             id: d.id,
             ...d.data(),
@@ -182,7 +197,12 @@ export default function Dashboard() {
         },
       );
 
-      return unsubscribe;
+      return () => {
+        unsubscribe();
+        if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+        offlineTimerRef.current = null;
+        setIsOffline(false);
+      };
     }, [])
   );
 
@@ -216,6 +236,29 @@ export default function Dashboard() {
     const user = auth.currentUser;
     if (user) await loadTenantProfile(user.uid);
     setRefreshing(false);
+  }
+
+  async function openARDesigner() {
+    const url = "https://www.rentwise-kadomeng.site/?open=ar";
+
+    try {
+      const browsers = await WebBrowser.getCustomTabsSupportingBrowsersAsync();
+      const chromePackage = browsers.browserPackages.find(
+        (packageName) => packageName === "com.android.chrome",
+      );
+
+      await WebBrowser.openBrowserAsync(url, {
+        browserPackage: chromePackage ?? browsers.preferredBrowserPackage,
+        toolbarColor: colors.emerald,
+        secondaryToolbarColor: colors.ink,
+        showTitle: true,
+        enableBarCollapsing: false,
+        enableDefaultShareMenuItem: false,
+        showInRecents: false,
+      });
+    } catch {
+      await Linking.openURL(url);
+    }
   }
 
   function triggerToast(msg: string) {
@@ -410,6 +453,20 @@ export default function Dashboard() {
               {tenant?.firstName} {tenant?.lastName}
             </Text>
           </View>
+          <View ref={arShortcutRef} collapsable={false}>
+            <TouchableOpacity
+              activeOpacity={0.75}
+              style={styles.arShortcut}
+              onPress={openARDesigner}
+              accessibilityRole="button"
+              accessibilityLabel="Open AR Stall Designer"
+            >
+              <View style={styles.arShortcutIcon}>
+                <Camera size={23} color={colors.white} />
+              </View>
+              <Text style={styles.arShortcutText}>AR</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </LinearGradient>
 
@@ -522,7 +579,7 @@ export default function Dashboard() {
 
       {/* The dashboard can render Firestore's cached data offline. Make the
           stale state explicit so tenants do not mistake it for live data. */}
-      <Modal visible={isOffline} transparent animationType="fade" onRequestClose={() => {}}>
+      <Modal visible={isOffline && !!auth.currentUser} transparent animationType="fade" onRequestClose={() => {}}>
         <View style={styles.offlineOverlay}>
           <View style={styles.offlineCard}>
             <View style={styles.offlineIcon}>
@@ -752,6 +809,31 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xl,
     fontFamily: fontFamily.extrabold,
     marginTop: 2,
+  },
+  arShortcut: {
+    width: 68,
+    height: 68,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.3)",
+    backgroundColor: "rgba(255,255,255,0.13)",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+  },
+  arShortcutIcon: {
+    width: 36,
+    height: 30,
+    borderRadius: radius.sm,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  arShortcutText: {
+    color: colors.white,
+    fontSize: 11,
+    fontFamily: fontFamily.bold,
+    letterSpacing: 0.8,
   },
 
   // ── Body ────────────────────────────────────────

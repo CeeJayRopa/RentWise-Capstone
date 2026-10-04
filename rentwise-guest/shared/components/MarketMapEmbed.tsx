@@ -15,7 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import StallPopup from "./StallPopup";
-import { getStalls } from "../../services/stallService";
+import { subscribeToStalls } from "../../services/stallService";
 import { MARKET_LAYOUT, StallHotspot } from "../constants/marketLayout";
 import { matchMapStalls } from "../constants/stallLookup";
 
@@ -194,9 +194,16 @@ export default function MarketMapEmbed({
   };
 
   useEffect(() => {
-    getStalls()
-      .then((data) => setStalls(data as Stall[]))
-      .finally(() => setLoading(false));
+    return subscribeToStalls(
+      (data) => {
+        setStalls(data as Stall[]);
+        setLoading(false);
+      },
+      (error) => {
+        console.warn("EMBEDDED MAP STALL LISTENER WARNING:", error);
+        setLoading(false);
+      },
+    );
   }, []);
 
   const stallsByName = matchMapStalls(stalls, MARKET_LAYOUT);

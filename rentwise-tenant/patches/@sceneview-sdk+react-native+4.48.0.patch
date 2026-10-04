@@ -1,0 +1,239 @@
+diff --git a/node_modules/@sceneview-sdk/react-native/android/build.gradle.kts b/node_modules/@sceneview-sdk/react-native/android/build.gradle.kts
+index 25895a1..7fc9cea 100644
+--- a/node_modules/@sceneview-sdk/react-native/android/build.gradle.kts
++++ b/node_modules/@sceneview-sdk/react-native/android/build.gradle.kts
+@@ -12,7 +12,7 @@ plugins {
+ 
+ android {
+     namespace = "io.github.sceneview.reactnative"
+-    compileSdk = 37
++    compileSdk = 36
+ 
+     defaultConfig {
+         minSdk = 24
+diff --git a/node_modules/@sceneview-sdk/react-native/android/src/main/java/io/github/sceneview/reactnative/ARSceneViewManager.kt b/node_modules/@sceneview-sdk/react-native/android/src/main/java/io/github/sceneview/reactnative/ARSceneViewManager.kt
+index 602dba8..fe27bcd 100644
+--- a/node_modules/@sceneview-sdk/react-native/android/src/main/java/io/github/sceneview/reactnative/ARSceneViewManager.kt
++++ b/node_modules/@sceneview-sdk/react-native/android/src/main/java/io/github/sceneview/reactnative/ARSceneViewManager.kt
+@@ -17,7 +17,10 @@ import com.facebook.react.uimanager.ThemedReactContext
+ import com.facebook.react.uimanager.annotations.ReactProp
+ import com.google.android.filament.LightManager
+ import com.google.ar.core.Config
++import com.google.ar.core.Frame
+ import com.google.ar.core.Plane
++import com.google.ar.core.Pose
+ import com.google.ar.core.Session
++import io.github.sceneview.math.Scale
+ import io.github.sceneview.SurfaceType
+ import io.github.sceneview.ar.arcore.configure
+@@ -40,6 +42,9 @@ class ARSceneViewState {
+     val planeDetection = mutableStateOf(true)
+     val depthOcclusion = mutableStateOf(false)
+     val instantPlacement = mutableStateOf(false)
++    val latestFrame = AtomicReference<Frame?>(null)
++    val latestPlacementPose = AtomicReference<Pose?>(null)
++    var lastTrackingDispatchMs = 0L
+ 
+     /**
+      * ARCore [Plane] instances already reported to JS via `onPlaneDetected`.
+@@ -109,6 +114,10 @@ class ARSceneViewManager : SimpleViewManager<FrameLayout>() {
+                 PlaneDetectedEvent.NAME,
+                 MapBuilder.of("registrationName", "onPlaneDetected"),
+             )
++            .put(
++                TrackingUpdatedEvent.NAME,
++                MapBuilder.of("registrationName", "onTrackingUpdated"),
++            )
+             .build()
+ 
+     override fun createViewInstance(reactContext: ThemedReactContext): FrameLayout {
+@@ -122,7 +131,16 @@ class ARSceneViewManager : SimpleViewManager<FrameLayout>() {
+                 e: android.view.MotionEvent,
+                 node: io.github.sceneview.node.Node?,
+             ) {
+-                dispatchTapEvent(reactContext, container, node)
++                if (node?.name != null) {
++                    dispatchTapEvent(reactContext, container, node)
++                    return
++                }
++                val pose = state.latestPlacementPose.get()
++                if (pose != null) {
++                    dispatchTapEventAt(reactContext, container, pose.tx(), pose.ty(), pose.tz())
++                } else {
++                    dispatchTapEvent(reactContext, container, null)
++                }
+             }
+         }
+ 
+@@ -172,6 +190,40 @@ class ARSceneViewManager : SimpleViewManager<FrameLayout>() {
+                     // Per-frame plane diff → JS `onPlaneDetected`. Fires once
+                     // per newly-tracked ARCore plane (issue #2053).
+                     onSessionUpdated = { _, frame ->
++                        state.latestFrame.set(frame)
++                        val centerHit =
++                            if (container.width > 0 && container.height > 0) {
++                                frame.hitTest(container.width / 2f, container.height / 2f)
++                                    .firstOrNull { result ->
++                                        val trackable = result.trackable
++                                        trackable is Plane && trackable.isPoseInPolygon(result.hitPose)
++                                    }
++                            } else {
++                                null
++                            }
++                        state.latestPlacementPose.set(centerHit?.hitPose)
++
++                        val now = android.os.SystemClock.elapsedRealtime()
++                        if (now - state.lastTrackingDispatchMs >= 100L) {
++                            state.lastTrackingDispatchMs = now
++                            val pose = centerHit?.hitPose
++                            val lightEstimate = frame.lightEstimate
++                            val lightingGood =
++                                lightEstimate.state == com.google.ar.core.LightEstimate.State.VALID &&
++                                    lightEstimate.pixelIntensity >= 0.35f
++                            val cameraAngleGood = frame.camera.pose.zAxis[1] > 0.1f
++                            dispatchTrackingUpdatedEvent(
++                                reactContext,
++                                container,
++                                pose?.tx() ?: 0f,
++                                pose?.ty() ?: 0f,
++                                pose?.tz() ?: 0f,
++                                pose != null,
++                                frame.camera.trackingState.name,
++                                lightingGood,
++                                cameraAngleGood,
++                            )
++                        }
+                         for (plane in frame.getUpdatedPlanes()) {
+                             if (plane.trackingState != com.google.ar.core.TrackingState.TRACKING) {
+                                 continue
+@@ -192,6 +244,12 @@ class ARSceneViewManager : SimpleViewManager<FrameLayout>() {
+                                 position = model.position,
+                                 rotation = model.rotation,
+                                 apply = {
++                                    val normalizedScale = scale
++                                    scale = Scale(
++                                        x = normalizedScale.x * model.axisScale.x,
++                                        y = normalizedScale.y * model.axisScale.y,
++                                        z = normalizedScale.z * model.axisScale.z,
++                                    )
+                                     // The tap payload's `nodeName` — see
+                                     // [ModelNodeData.nodeName] (PR #3037).
+                                     name = model.nodeName()
+@@ -347,6 +405,7 @@ class ARSceneViewManager : SimpleViewManager<FrameLayout>() {
+                 }
+                 val position = readPosition(map, "position")
+                 val rotation = readRotation(map, "rotation")
++                val axisScale = readScale(map, "axisScale")
+                 state.modelPaths.add(
+                     ModelNodeData(
+                         src = src,
+@@ -354,6 +413,7 @@ class ARSceneViewManager : SimpleViewManager<FrameLayout>() {
+                         animate = animate,
+                         position = position,
+                         rotation = rotation,
++                        axisScale = axisScale,
+                     )
+                 )
+             }
+diff --git a/node_modules/@sceneview-sdk/react-native/android/src/main/java/io/github/sceneview/reactnative/SceneViewEvents.kt b/node_modules/@sceneview-sdk/react-native/android/src/main/java/io/github/sceneview/reactnative/SceneViewEvents.kt
+index 1d2dfef..872a1a7 100644
+--- a/node_modules/@sceneview-sdk/react-native/android/src/main/java/io/github/sceneview/reactnative/SceneViewEvents.kt
++++ b/node_modules/@sceneview-sdk/react-native/android/src/main/java/io/github/sceneview/reactnative/SceneViewEvents.kt
+@@ -75,6 +75,34 @@ class PlaneDetectedEvent(
+     }
+ }
+ 
++class TrackingUpdatedEvent(
++    surfaceId: Int,
++    viewId: Int,
++    private val x: Float,
++    private val y: Float,
++    private val z: Float,
++    private val placementValid: Boolean,
++    private val trackingState: String,
++    private val lightingGood: Boolean,
++    private val cameraAngleGood: Boolean,
++) : Event<TrackingUpdatedEvent>(surfaceId, viewId) {
++    override fun getEventName(): String = NAME
++
++    override fun getEventData(): WritableMap = Arguments.createMap().apply {
++        putDouble("x", x.toDouble())
++        putDouble("y", y.toDouble())
++        putDouble("z", z.toDouble())
++        putBoolean("placementValid", placementValid)
++        putString("trackingState", trackingState)
++        putBoolean("lightingGood", lightingGood)
++        putBoolean("cameraAngleGood", cameraAngleGood)
++    }
++
++    companion object {
++        const val NAME = "topTrackingUpdated"
++    }
++}
++
+ /**
+  * Dispatches a [TapEvent] for [view] through React Native's [EventDispatcher],
+  * carrying the tapped [node]'s name and world-space position (issue #2053).
+@@ -100,6 +128,50 @@ internal fun dispatchTapEvent(
+     )
+ }
+ 
++internal fun dispatchTapEventAt(
++    reactContext: ReactContext,
++    view: View,
++    x: Float,
++    y: Float,
++    z: Float,
++) {
++    val surfaceId = UIManagerHelper.getSurfaceId(view)
++    val dispatcher =
++        UIManagerHelper.getEventDispatcherForReactTag(reactContext, view.id) ?: return
++    dispatcher.dispatchEvent(
++        TapEvent(surfaceId, view.id, x, y, z, null)
++    )
++}
++
++internal fun dispatchTrackingUpdatedEvent(
++    reactContext: ReactContext,
++    view: View,
++    x: Float,
++    y: Float,
++    z: Float,
++    placementValid: Boolean,
++    trackingState: String,
++    lightingGood: Boolean,
++    cameraAngleGood: Boolean,
++) {
++    val surfaceId = UIManagerHelper.getSurfaceId(view)
++    val dispatcher =
++        UIManagerHelper.getEventDispatcherForReactTag(reactContext, view.id) ?: return
++    dispatcher.dispatchEvent(
++        TrackingUpdatedEvent(
++            surfaceId,
++            view.id,
++            x,
++            y,
++            z,
++            placementValid,
++            trackingState,
++            lightingGood,
++            cameraAngleGood,
++        )
++    )
++}
++
+ /**
+  * Maps an ARCore [Plane] to a [PlaneDetectedEvent] and dispatches it for [view]
+  * through React Native's [EventDispatcher] (issue #2053).
+diff --git a/node_modules/@sceneview-sdk/react-native/android/src/main/java/io/github/sceneview/reactnative/SceneViewManager.kt b/node_modules/@sceneview-sdk/react-native/android/src/main/java/io/github/sceneview/reactnative/SceneViewManager.kt
+index a8384cb..d9fed62 100644
+--- a/node_modules/@sceneview-sdk/react-native/android/src/main/java/io/github/sceneview/reactnative/SceneViewManager.kt
++++ b/node_modules/@sceneview-sdk/react-native/android/src/main/java/io/github/sceneview/reactnative/SceneViewManager.kt
+@@ -390,6 +390,7 @@ data class ModelNodeData(
+     val animate: Boolean = true,
+     val position: Position = Position(x = 0f),
+     val rotation: Rotation = Rotation(x = 0f),
++    val axisScale: Scale = Scale(1f),
+ ) {
+     /**
+      * The name reported as the tap payload's `nodeName`: the model file's base

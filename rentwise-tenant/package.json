@@ -6,8 +6,10 @@
     "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",
     "@expo/vector-icons": "^14.1.0",
     "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-community/netinfo": "12.0.1",
     "@react-native-firebase/app": "^25.1.0",
     "@react-native-firebase/app-check": "^25.1.0",
+    "@sceneview-sdk/react-native": "4.48.0",
     "expo": "~56.0.12",
     "expo-constants": "~56.0.18",
     "expo-dev-client": "~56.0.20",
@@ -23,7 +25,9 @@
     "expo-router": "^56.2.11",
     "expo-sharing": "~56.0.18",
     "expo-splash-screen": "~56.0.12",
+    "expo-sqlite": "~56.0.6",
     "expo-status-bar": "~56.0.4",
+    "expo-web-browser": "~56.0.6",
     "firebase": "^12.15.0",
     "lucide-react-native": "^1.24.0",
     "react": "19.2.3",
@@ -35,9 +39,11 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "patch-package": "^8.0.1",
     "typescript": "~6.0.3"
   },
   "scripts": {
+    "postinstall": "cd .. && patch-package --patch-dir rentwise-tenant/patches",
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",

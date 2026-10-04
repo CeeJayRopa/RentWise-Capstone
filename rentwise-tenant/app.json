@@ -32,24 +32,33 @@
         }
       ],
       "@react-native-firebase/app",
-      "@react-native-firebase/app-check"
+      "@react-native-firebase/app-check",
+      "./plugins/with-arcore",
+      "expo-web-browser",
+      "expo-sqlite"
     ],
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/tenant-icon.png",
     "userInterfaceStyle": "light",
+    "androidNavigationBar": {
+      "backgroundColor": "#FFFFFF",
+      "barStyle": "dark-content",
+      "enforceContrast": false
+    },
     "ios": {
       "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#0E6B54",
-        "foregroundImage": "./assets/android-icon-foreground.png",
+        "foregroundImage": "./assets/tenant-icon.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
+        "android.permission.CAMERA",
         "android.permission.POST_NOTIFICATIONS"
       ],
       "package": "com.anonymous.rentwisetenant",
@@ -65,9 +74,9 @@
         "style": "dark"
       },
       "eas": {
-        "projectId": "90fcc1e4-f74e-4b11-ab27-d25ac5f38f45"
+        "projectId": "38345b58-5832-43c6-b509-5eb55c94c6c2"
       }
     },
-    "owner": "rentwiseeeee"
+    "owner": "cj27"
   }
 }

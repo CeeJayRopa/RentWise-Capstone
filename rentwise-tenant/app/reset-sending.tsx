@@ -85,7 +85,7 @@ export default function ResetSending() {
       <Text style={styles.caption}>{phase === "manual" ? "Request received" : "We hit a snag"}</Text>
       <Text style={styles.subcaption}>
         {phase === "manual"
-          ? "Your reset request has been sent to the admin, who'll help you reset your password. Tip: verify your email in your profile to reset instantly next time."
+          ? "Your reset request has been sent to the admin, who'll help you reset your password."
           : errorMsg}
       </Text>
       <Pressable

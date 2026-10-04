@@ -1,6 +1,7 @@
 import { httpsCallable } from "firebase/functions";
+import { doc, onSnapshot, type Unsubscribe } from "firebase/firestore";
 
-import { functions } from "../shared/firebaseConfig";
+import { db, functions } from "../shared/firebaseConfig";
 
 
 type PublicStall = {
@@ -10,6 +11,18 @@ type PublicStall = {
 };
 
 const fetchPublicStalls = httpsCallable<void, PublicStall[]>(functions, "getPublicStalls");
+const publicStallsCacheRef = doc(db, "publicApiCache", "stalls");
+
+type StallSubscriber = {
+  onData: (stalls: PublicStall[]) => void;
+  onError?: (error: Error) => void;
+};
+
+const subscribers = new Set<StallSubscriber>();
+let cachedStalls: PublicStall[] | null = null;
+let realtimeUnsubscribe: Unsubscribe | null = null;
+let visibilityListenerAttached = false;
+let seedingCache = false;
 
 export async function getStalls(){
   const response = await fetchPublicStalls();
@@ -17,45 +30,85 @@ export async function getStalls(){
 
 }
 
+function publish(stalls: PublicStall[]) {
+  cachedStalls = stalls;
+  subscribers.forEach(({onData}) => onData(stalls));
+}
+
+function publishError(error: unknown) {
+  const normalized = error instanceof Error ? error : new Error("Unable to load stalls.");
+  subscribers.forEach(({onError}) => onError?.(normalized));
+}
+
+async function seedPublicCache() {
+  if (seedingCache) return;
+  seedingCache = true;
+  try {
+    publish(await getStalls());
+  } catch (error) {
+    publishError(error);
+  } finally {
+    seedingCache = false;
+  }
+}
+
+function startRealtimeListener() {
+  if (realtimeUnsubscribe || subscribers.size === 0) return;
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+
+  realtimeUnsubscribe = onSnapshot(
+    publicStallsCacheRef,
+    (snapshot) => {
+      const stalls = snapshot.data()?.stalls;
+      if (Array.isArray(stalls)) {
+        publish(stalls as PublicStall[]);
+      } else {
+        void seedPublicCache();
+      }
+    },
+    (error) => {
+      realtimeUnsubscribe = null;
+      publishError(error);
+      if (!cachedStalls) void seedPublicCache();
+    },
+  );
+}
+
+function stopRealtimeListener() {
+  realtimeUnsubscribe?.();
+  realtimeUnsubscribe = null;
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === "visible") {
+    startRealtimeListener();
+  } else {
+    stopRealtimeListener();
+  }
+}
+
 export function subscribeToStalls(
   onData: (stalls: PublicStall[]) => void,
   onError?: (error: Error) => void,
 ) {
-  let active = true;
-  let refreshing = false;
+  const subscriber = {onData, onError};
+  subscribers.add(subscriber);
+  if (cachedStalls) onData(cachedStalls);
 
-  const refresh = async () => {
-    if (!active || refreshing) return;
-    refreshing = true;
-    try {
-      const stalls = await getStalls();
-      if (active) onData(stalls);
-    } catch (error) {
-      if (active && onError) onError(error instanceof Error ? error : new Error("Unable to load stalls."));
-    } finally {
-      refreshing = false;
-    }
-  };
-
-  void refresh();
-  const timer = setInterval(() => {
-    if (typeof document === "undefined" || document.visibilityState === "visible") {
-      void refresh();
-    }
-  }, 5 * 60 * 1000);
-
-  const handleVisibilityChange = () => {
-    if (document.visibilityState === "visible") void refresh();
-  };
-  if (typeof document !== "undefined") {
+  if (typeof document !== "undefined" && !visibilityListenerAttached) {
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    visibilityListenerAttached = true;
   }
+  startRealtimeListener();
 
   return () => {
-    active = false;
-    clearInterval(timer);
-    if (typeof document !== "undefined") {
+    subscribers.delete(subscriber);
+    if (subscribers.size === 0) {
+      stopRealtimeListener();
+    }
+    if (subscribers.size === 0 && typeof document !== "undefined" && visibilityListenerAttached) {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      visibilityListenerAttached = false;
     }
   };
 }

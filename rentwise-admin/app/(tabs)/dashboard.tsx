@@ -17,9 +17,11 @@ import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
+  DocumentData,
   getDocs,
   onSnapshot,
   query,
+  QueryDocumentSnapshot,
   where,
   Timestamp,
 } from "firebase/firestore";
@@ -41,13 +43,12 @@ import { isTenantPaidThisMonth } from "../../shared/services/financeServices";
 import { hasSeenAdminDashboardTour, markAdminDashboardTourSeen } from "../../shared/services/onboardingTour";
 import NotificationBell from "../components/NotificationBell";
 import HelpTour, { HelpStep } from "../components/HelpTour";
-import { bottomNavRefs } from "../components/bottomNavRefs";
+import { bottomNavRefs } from "../../shared/services/bottomNavRefs";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 type Stats = {
-  tenantCount: number;
   occupiedCount: number;
   unoccupiedCount: number;
   paidCount: number;
@@ -59,7 +60,6 @@ type Stats = {
 };
 
 const ZERO_STATS: Stats = {
-  tenantCount: 0,
   occupiedCount: 0,
   unoccupiedCount: 0,
   paidCount: 0,
@@ -69,6 +69,70 @@ const ZERO_STATS: Stats = {
   collectedThisMonth: 0,
   collectedLastMonth: 0,
 };
+
+type FirestoreDoc = QueryDocumentSnapshot<DocumentData, DocumentData>;
+
+function calculateDashboardStats(
+  userDocs: FirestoreDoc[],
+  stallDocs: FirestoreDoc[],
+  paymentDocs: FirestoreDoc[],
+  now = new Date(),
+): Stats {
+  const activeTenants = userDocs.filter((d) => d.data().status === "active");
+  const occupiedCount = stallDocs.filter((d) => d.data().status === "occupied").length;
+  const unoccupiedCount = stallDocs.filter((d) => d.data().status === "unoccupied").length;
+  const approvedPayments = paymentDocs.filter((d) => d.data().status === "approved");
+
+  const inRange = (d: FirestoreDoc, startMs: number, endMs: number) => {
+    const date = d.data().date as Timestamp | undefined;
+    if (!date?.toMillis) return false;
+    const ms = date.toMillis();
+    return ms >= startMs && ms <= endMs;
+  };
+
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
+  const yesterdayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
+  const yesterdayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59, 59, 999).getTime();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999).getTime();
+  const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime();
+  const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999).getTime();
+
+  const todayPayments = approvedPayments.filter((d) => inRange(d, todayStart, todayEnd));
+  const yesterdayPayments = approvedPayments.filter((d) => inRange(d, yesterdayStart, yesterdayEnd));
+  const monthPayments = approvedPayments.filter((d) => inRange(d, monthStart, monthEnd));
+  const lastMonthPayments = approvedPayments.filter((d) => inRange(d, lastMonthStart, lastMonthEnd));
+  const sumAmounts = (docs: FirestoreDoc[]) =>
+    docs.reduce((sum, d) => sum + Number(d.data().amount ?? d.data().paymentAmount ?? 0), 0);
+
+  const paidCount = activeTenants.filter((d) => {
+    const tenant = d.data();
+    const paidThisMonth = monthPayments
+      .filter((payment) => payment.data().userId === d.id)
+      .reduce(
+        (sum, payment) => sum + Number(payment.data().amount ?? payment.data().paymentAmount ?? 0),
+        0,
+      );
+    return isTenantPaidThisMonth(
+      tenant.price ?? 0,
+      tenant.paymentSchedule ?? "monthly",
+      paidThisMonth,
+      now,
+    );
+  }).length;
+
+  return {
+    occupiedCount,
+    unoccupiedCount,
+    paidCount,
+    unpaidCount: activeTenants.length - paidCount,
+    collectedToday: sumAmounts(todayPayments),
+    collectedYesterday: sumAmounts(yesterdayPayments),
+    collectedThisMonth: sumAmounts(monthPayments),
+    collectedLastMonth: sumAmounts(lastMonthPayments),
+  };
+}
 
 function pctChange(current: number, previous: number): number {
   if (previous <= 0) return current > 0 ? 100 : 0;
@@ -86,6 +150,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
+  const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [stats, setStats] = useState<Stats>(ZERO_STATS);
   const [focusTick, setFocusTick] = useState(0);
   const donutAnim = useRef(new Animated.Value(0)).current;
@@ -106,16 +171,22 @@ export default function Dashboard() {
     { key: "finance", ref: financeChartRef, title: "Financial performance", description: "Amount collected today and this month, compared against the prior period.", edgeInset: "top" },
     { key: "payment", ref: paymentStatusRef, title: "Payment status", description: "How many active tenants have paid this month vs. are still unpaid.", edgeInset: "top" },
     { key: "navfinancials", ref: bottomNavRefs.financials, title: "Financials", description: "Track tenant payments, view receipts, and see who's paid or unpaid.", edgeInset: "bottom" },
-    { key: "navbuilding", ref: bottomNavRefs.building, title: "Building", description: "Browse every stall across all buildings, register tenants, and manage rentals.", edgeInset: "bottom" },
+    { key: "navbuilding", ref: bottomNavRefs.building, title: "Stall Management", description: "Browse every stall across all buildings, register tenants, and manage rentals.", edgeInset: "bottom" },
     { key: "navtenants", ref: bottomNavRefs.tenants, title: "Tenants", description: "View active tenants and archive their accounts.", edgeInset: "bottom" },
-    { key: "navarchives", ref: bottomNavRefs.archives, title: "Archives", description: "View archived tenant accounts, and restore or permanently delete them.", edgeInset: "bottom" },
+    { key: "navarchives", ref: bottomNavRefs.archives, title: "Archives", description: "View deactivated tenant accounts and restore them when needed.", edgeInset: "bottom" },
     { key: "navreports", ref: bottomNavRefs.reports, title: "Reports", description: "See the history of update reports you've submitted to the owner.", edgeInset: "bottom" },
     { key: "help", ref: helpRef, title: "Help", description: "Come back here anytime for a guided tour of this page.", edgeInset: "top", round: true },
   ];
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
-      if (!user) { router.replace("/"); return; }
+      if (!user) {
+        if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+        offlineTimerRef.current = null;
+        setIsOffline(false);
+        router.replace("/");
+        return;
+      }
       setChecking(false);
       fetchData();
     });
@@ -142,11 +213,53 @@ export default function Dashboard() {
     if (checking || !auth.currentUser) return;
 
     const tenantsQuery = query(collection(db, "users"), where("role", "==", "tenant"));
-    return onSnapshot(
+    let users: FirestoreDoc[] | null = null;
+    let stalls: FirestoreDoc[] | null = null;
+    let payments: FirestoreDoc[] | null = null;
+
+    const updateDashboard = () => {
+      if (!users || !stalls || !payments) return;
+      setStats(calculateDashboardStats(users, stalls, payments));
+      setLoading(false);
+    };
+
+    const unsubscribeUsers = onSnapshot(
       tenantsQuery,
       { includeMetadataChanges: true },
-      (snapshot) => setIsOffline(snapshot.metadata.fromCache),
+      (snapshot) => {
+        users = snapshot.docs;
+        updateDashboard();
+        if (!snapshot.metadata.fromCache) {
+          if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+          offlineTimerRef.current = null;
+          setIsOffline(false);
+          return;
+        }
+        if (!offlineTimerRef.current) {
+          offlineTimerRef.current = setTimeout(() => {
+            if (auth.currentUser) setIsOffline(true);
+            offlineTimerRef.current = null;
+          }, 5000);
+        }
+      },
     );
+    const unsubscribeStalls = onSnapshot(collection(db, "stalls"), (snapshot) => {
+      stalls = snapshot.docs;
+      updateDashboard();
+    });
+    const unsubscribePayments = onSnapshot(collection(db, "payments"), (snapshot) => {
+      payments = snapshot.docs;
+      updateDashboard();
+    });
+
+    return () => {
+      unsubscribeUsers();
+      unsubscribeStalls();
+      unsubscribePayments();
+      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+      offlineTimerRef.current = null;
+      setIsOffline(false);
+    };
   }, [checking]);
 
   const onRefresh = async () => {
@@ -194,7 +307,7 @@ export default function Dashboard() {
       const lastMonthPayments = paymentsSnap.docs.filter((d) => inRange(d, lastMonthStartTS.toMillis(), lastMonthEndTS.toMillis()));
 
       const sumAmounts = (docs: typeof paymentsSnap.docs) =>
-        docs.reduce((sum, d) => sum + ((d.data().amount ?? d.data().paymentAmount ?? 0) as number), 0);
+        docs.reduce((sum, d) => sum + Number(d.data().amount ?? d.data().paymentAmount ?? 0), 0);
       const collectedToday = sumAmounts(todayPayments);
       const collectedYesterday = sumAmounts(yesterdayPayments);
       const collectedThisMonth = sumAmounts(monthPayments);
@@ -205,17 +318,13 @@ export default function Dashboard() {
       // overcounted tenants who'd only partially paid what's due.
       const paidCount = activeTenants.filter((d) => {
         const u = d.data();
-        // Billing terms live on the tenant, not the stall -- travels with
-        // them if relocated, instead of reflecting whoever's stall this is.
-        if (!u.stallId) return false;
         const paidThisMonth = monthPayments
           .filter((p) => p.data().userId === d.id)
-          .reduce((sum, p) => sum + ((p.data().amount ?? p.data().paymentAmount ?? 0) as number), 0);
+          .reduce((sum, p) => sum + Number(p.data().amount ?? p.data().paymentAmount ?? 0), 0);
         return isTenantPaidThisMonth(u.price ?? 0, u.paymentSchedule ?? "monthly", paidThisMonth, now);
       }).length;
 
       setStats({
-        tenantCount: activeTenants.length,
         occupiedCount,
         unoccupiedCount,
         paidCount,
@@ -344,9 +453,6 @@ export default function Dashboard() {
               <View style={styles.overviewDivider} />
 
               <View style={styles.overviewRight}>
-                <Text style={styles.overviewTotalLabel}>Total tenants</Text>
-                <Text style={styles.overviewTotalValue}>{stats.tenantCount}</Text>
-
                 <View style={styles.overviewSplitRow}>
                   <View style={styles.overviewSplitItem}>
                     <Text style={styles.overviewSplitLabelGreen}>Occupied</Text>
@@ -451,7 +557,7 @@ export default function Dashboard() {
 
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
 
-      <Modal visible={isOffline} transparent animationType="fade" onRequestClose={() => {}}>
+      <Modal visible={isOffline && !!auth.currentUser} transparent animationType="fade" onRequestClose={() => {}}>
         <View style={styles.offlineOverlay}>
           <View style={styles.offlineCard}>
             <View style={styles.offlineIcon}>
@@ -620,18 +726,7 @@ const styles = StyleSheet.create({
   },
   overviewRight: {
     flex: 1,
-  },
-  overviewTotalLabel: {
-    fontSize: fontSize.xs,
-    fontFamily: fontFamily.medium,
-    color: colors.textSecondary,
-  },
-  overviewTotalValue: {
-    fontSize: fontSize.xl,
-    fontFamily: fontFamily.extrabold,
-    color: colors.textPrimary,
-    marginTop: 2,
-    marginBottom: spacing.sm + 2,
+    justifyContent: "center",
   },
   overviewSplitRow: {
     flexDirection: "row",

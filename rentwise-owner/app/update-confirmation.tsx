@@ -82,7 +82,7 @@ function periodUnitLabel(schedule: string, count: number): string {
 }
 
 function categoryLabel(cat: string): string {
-  if (cat === "building") return "Building Management Update";
+  if (cat === "building") return "Stall Management Update";
   if (cat === "finance") return "Finance Update";
   return "Account Archive Update";
 }

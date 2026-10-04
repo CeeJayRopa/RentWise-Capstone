@@ -2,6 +2,7 @@ import { Timestamp } from "firebase/firestore";
 
 export type User = {
   firstName: string;
+  middleName?: string;
   lastName: string;
   userName: string;
   email: string;

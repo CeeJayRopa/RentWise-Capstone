@@ -14,25 +14,25 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, getDocs, onSnapshot, query, where } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { House, HelpCircle, Users, Archive, AlertCircle } from "lucide-react-native";
 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
 import { archiveTenant, checkTenantArchiveEligibility } from "../../shared/services/accountServices";
-import UpdatesReportFAB, { FAB_CLEARANCE } from "../components/UpdatesReportFAB";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { Badge, EmptyState } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
+import { readLocalCache, saveLocalCache } from "../../shared/services/localCache";
 
 type Tenant = {
   uid: string;
   firstName: string;
+  middleName: string;
   lastName: string;
   email: string;
-  emailVerified: boolean;
   contactNo: string;
   stallId: string;
   buildingNumber: string;
@@ -57,12 +57,10 @@ export default function TenantManagement() {
   const helpRef = useRef<View>(null);
   const listRef = useRef<View>(null);
   const archiveBtnRef = useRef<View>(null);
-  const fabRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
     // Moved right after "home" (was last) -- see financials.tsx for why.
-    { key: "fab", ref: fabRef, title: "Updates report", description: "Shows recent changes awaiting your review, organized by building, financials, and accounts.", edgeInset: "bottom", round: true, nudgeY: 0 },
     { key: "list", ref: listRef, title: "Active tenants", description: "Every tenant currently renting a stall.", edgeInset: "top" },
     { key: "archive", ref: archiveBtnRef, title: "Archive", description: "Archives this tenant, freeing up their stall. You'll be asked to confirm before it happens.", edgeInset: "top" },
   ];
@@ -99,13 +97,13 @@ export default function TenantManagement() {
         return {
           uid: d.id,
           firstName: (data.firstName as string) ?? "",
+          middleName: (data.middleName as string) ?? "",
           lastName: (data.lastName as string) ?? "",
           email:
             (data.personalEmail as string) ||
             (data.email as string) ||
             (data.username ? `${data.username}@rentwise.app` : "") ||
             "",
-          emailVerified: data.emailVerified === true,
           contactNo: (data.contactNo as string) ?? "",
           stallId: (data.stallId as string) ?? "",
           buildingNumber: stall.buildingNumber,
@@ -114,12 +112,17 @@ export default function TenantManagement() {
       });
 
       list.sort((a, b) =>
-        `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`),
+        [a.firstName, a.middleName, a.lastName].filter(Boolean).join(" ").localeCompare(
+          [b.firstName, b.middleName, b.lastName].filter(Boolean).join(" "),
+        ),
       );
 
       setTenants(list);
+      await saveLocalCache("admin:tenants", list);
     } catch (err) {
       console.error("TENANT MANAGEMENT FETCH ERROR:", err);
+      const cached = await readLocalCache<Tenant[]>("admin:tenants");
+      if (cached) setTenants(cached);
     } finally {
       setLoading(false);
     }
@@ -135,10 +138,65 @@ export default function TenantManagement() {
     const unsub = onAuthStateChanged(auth, (user) => {
       if (!user) { router.replace("/"); return; }
       setChecking(false);
-      fetchData();
     });
     return unsub;
-  }, [fetchData]);
+  }, []);
+
+  useEffect(() => {
+    if (checking || !auth.currentUser) return;
+    let userDocs: any[] | null = null;
+    let stallDocs: any[] | null = null;
+
+    const updateTenants = () => {
+      if (!userDocs || !stallDocs) return;
+      const stallMap = new Map<string, { buildingNumber: string; spaceId: string }>();
+      stallDocs.forEach((d) => {
+        const data = d.data();
+        stallMap.set(d.id, {
+          buildingNumber: String(data.buildingNumber ?? ""),
+          spaceId: data.spaceId ?? "",
+        });
+      });
+      const list: Tenant[] = userDocs.map((d) => {
+        const data = d.data();
+        const stall = stallMap.get(data.stallId as string) ?? { buildingNumber: "", spaceId: "" };
+        return {
+          uid: d.id,
+          firstName: data.firstName ?? "",
+          middleName: data.middleName ?? "",
+          lastName: data.lastName ?? "",
+          email: data.personalEmail || data.email || (data.username ? `${data.username}@rentwise.app` : ""),
+          contactNo: data.contactNo ?? "",
+          stallId: data.stallId ?? "",
+          buildingNumber: stall.buildingNumber,
+          spaceId: stall.spaceId,
+        };
+      });
+      list.sort((a, b) =>
+        [a.firstName, a.middleName, a.lastName].filter(Boolean).join(" ").localeCompare(
+          [b.firstName, b.middleName, b.lastName].filter(Boolean).join(" "),
+        ),
+      );
+      setTenants(list);
+      setLoading(false);
+    };
+
+    const unsubscribeUsers = onSnapshot(
+      query(collection(db, "users"), where("role", "==", "tenant"), where("status", "==", "active")),
+      (snapshot) => { userDocs = snapshot.docs; updateTenants(); },
+      (error) => { console.error("TENANT LISTENER ERROR:", error); setLoading(false); },
+    );
+    const unsubscribeStalls = onSnapshot(
+      collection(db, "stalls"),
+      (snapshot) => { stallDocs = snapshot.docs; updateTenants(); },
+      (error) => { console.error("TENANT STALLS LISTENER ERROR:", error); setLoading(false); },
+    );
+
+    return () => {
+      unsubscribeUsers();
+      unsubscribeStalls();
+    };
+  }, [checking]);
 
   // Auto-opens the guided tour the first time the admin ever lands on this
   // page — never again after that, since it flips a persisted per-device
@@ -237,7 +295,7 @@ export default function TenantManagement() {
         ) : (
           <ScrollView
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + FAB_CLEARANCE }]}
+            contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + spacing.xl }]}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.emerald} />
             }
@@ -246,15 +304,13 @@ export default function TenantManagement() {
               <View key={item.uid} style={styles.card}>
                 {/* LEFT INFO */}
                 <View style={styles.cardInfo}>
-                  <Text style={styles.cardName}>
-                    {item.firstName} {item.lastName}
+                  <Text style={styles.cardName} numberOfLines={1} ellipsizeMode="tail">
+                    {[item.firstName, item.middleName, item.lastName].filter(Boolean).join(" ")}
                   </Text>
                   <View style={styles.cardEmailRow}>
-                    <Text style={styles.cardEmail}>{item.email}</Text>
-                    <Badge
-                      label={item.emailVerified ? "Verified" : "Unverified"}
-                      tone={item.emailVerified ? "success" : "warning"}
-                    />
+                    <Text style={styles.cardEmail} numberOfLines={1} ellipsizeMode="middle">
+                      {item.email}
+                    </Text>
                   </View>
                   {item.buildingNumber ? (
                     <Text style={styles.cardStall}>
@@ -268,6 +324,9 @@ export default function TenantManagement() {
 
                 {/* RIGHT ACTIONS */}
                 <View style={styles.cardActions}>
+                  <View style={styles.floatingStatus} pointerEvents="none">
+                    <Badge label="Active" tone="success" />
+                  </View>
                   <View ref={index === 0 ? archiveBtnRef : undefined} collapsable={false}>
                     <Pressable
                       style={({ pressed }) => [
@@ -294,7 +353,6 @@ export default function TenantManagement() {
         )}
       </View>
 
-      <UpdatesReportFAB fabRef={fabRef} />
 
       {/* ARCHIVE CONFIRMATION MODAL */}
       <Modal
@@ -436,7 +494,7 @@ const styles = StyleSheet.create({
   },
 
   listContent: {
-    gap: spacing.md,
+    gap: spacing.md + 2,
   },
 
   // ── Empty state ───────────────────────────────────────────────────────────────
@@ -454,54 +512,72 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg - 1,
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md + 2,
+    gap: spacing.md,
+    minHeight: 166,
+    ...shadow.card,
   },
 
   cardInfo: {
     flex: 1,
+    minWidth: 0,
   },
 
   cardName: {
+    minWidth: 0,
     fontSize: fontSize.md,
-    fontFamily: fontFamily.semibold,
+    fontFamily: fontFamily.bold,
     color: colors.ink,
+    lineHeight: 24,
   },
 
   cardEmailRow: {
     flexDirection: "row",
     alignItems: "center",
-    flexWrap: "wrap",
-    gap: spacing.xs + 2,
-    marginTop: 2,
+    marginTop: spacing.xs + 1,
+    minWidth: 0,
   },
 
   cardEmail: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.medium,
-    color: colors.emeraldBright,
-    flexShrink: 1,
+    color: colors.emerald,
+    flex: 1,
+    minWidth: 0,
+    lineHeight: 19,
   },
 
   cardStall: {
     fontSize: fontSize.sm,
-    fontFamily: fontFamily.regular,
+    fontFamily: fontFamily.medium,
     color: colors.textSecondary,
-    marginTop: 2,
+    marginTop: spacing.sm + 2,
+    lineHeight: 19,
   },
 
   cardContact: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.regular,
     color: colors.textMuted,
-    marginTop: spacing.xs,
+    marginTop: spacing.xs + 1,
+    lineHeight: 19,
   },
 
   cardActions: {
     gap: spacing.sm,
     alignItems: "stretch",
+    width: 112,
+    flexShrink: 0,
+    position: "relative",
+  },
+
+  floatingStatus: {
+    position: "absolute",
+    bottom: 64,
+    right: -5,
   },
 
   // ── Archive button ────────────────────────────────────────────────────────────
@@ -513,10 +589,11 @@ const styles = StyleSheet.create({
     gap: 6,
     backgroundColor: colors.errorSoft,
     borderRadius: radius.sm,
-    paddingHorizontal: spacing.md + 2,
-    paddingVertical: spacing.sm + 1,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
     borderWidth: 1,
     borderColor: colors.error,
+    minHeight: 44,
   },
 
   archiveBtnPressed: {

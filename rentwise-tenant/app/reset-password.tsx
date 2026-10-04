@@ -11,12 +11,13 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useLocalSearchParams } from "expo-router";
 import { X, AlertCircle, CheckCircle2, Eye, EyeOff } from "lucide-react-native";
-import { verifyPasswordResetCode, confirmPasswordReset } from "firebase/auth";
+import { getFunctions, httpsCallable } from "firebase/functions";
 
-import { auth } from "../shared/firebaseConfig";
+import { firebaseApp } from "../shared/firebaseConfig";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 type Step = "checking" | "invalid" | "form" | "done";
+const cloudFunctions = getFunctions(firebaseApp);
 
 // Reached from login.tsx's Forgot Password flow, which generates the reset
 // code server-side and navigates straight here with it — no email, no
@@ -24,7 +25,7 @@ type Step = "checking" | "invalid" | "form" | "done";
 // outside the app itself.
 export default function ResetPassword() {
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ oobCode?: string }>();
+  const params = useLocalSearchParams<{ resetToken?: string; email?: string }>();
   const [step, setStep] = useState<Step>("checking");
   const [email, setEmail] = useState("");
 
@@ -37,17 +38,13 @@ export default function ResetPassword() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!params.oobCode) {
+    if (!params.resetToken) {
       setStep("invalid");
       return;
     }
-    verifyPasswordResetCode(auth, params.oobCode)
-      .then((resolvedEmail) => {
-        setEmail(resolvedEmail);
-        setStep("form");
-      })
-      .catch(() => setStep("invalid"));
-  }, [params.oobCode]);
+    setEmail(params.email ?? "your tenant account");
+    setStep("form");
+  }, [params.email, params.resetToken]);
 
   function goToLogin() {
     router.replace("/login");
@@ -74,11 +71,12 @@ export default function ResetPassword() {
       setConfirmError("");
     }
 
-    if (!valid || !params.oobCode) return;
+    if (!valid || !params.resetToken) return;
 
     setSubmitting(true);
     try {
-      await confirmPasswordReset(auth, params.oobCode, newPassword);
+      const completeReset = httpsCallable(cloudFunctions, "completeTenantPasswordReset");
+      await completeReset({resetToken: params.resetToken, newPassword});
       setStep("done");
     } catch {
       setPwError("This link has expired or was already used. Please request a new one.");

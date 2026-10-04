@@ -31,11 +31,11 @@ import {
   where,
 } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { House, HelpCircle, Users, Wallet, Receipt as ReceiptIcon, CheckCircle2, Eye, Clock, ArrowRight } from "lucide-react-native";
+import { House, HelpCircle, Users, Wallet, Receipt as ReceiptIcon, CheckCircle2, Eye, Clock, ArrowRight, Building2, AlertCircle } from "lucide-react-native";
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
+import { readLocalCache, saveLocalCache } from "../../shared/services/localCache";
 import { logDetailedUpdate } from "../../shared/services/updatesService";
-import UpdatesReportFAB, { FAB_CLEARANCE } from "../components/UpdatesReportFAB";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import {
@@ -141,6 +141,27 @@ function periodUnitLabel(schedule: string, count: number): string {
   return plural ? "months" : "month";
 }
 
+function normalizePaymentSchedule(value: unknown): string {
+  const schedule = String(value ?? "").trim().toLowerCase();
+  return ["daily", "weekly", "semi-monthly", "monthly"].includes(schedule)
+    ? schedule
+    : "monthly";
+}
+
+function paymentScheduleLabel(schedule: string): string {
+  return schedule
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("-");
+}
+
+function formatPeso(amount: number): string {
+  return `₱${Math.max(0, amount).toLocaleString("en-PH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 // Matches ampmTrack/ampmPill below: track is 68 tall with 3px padding on
 // each side, so each half (and the pill sliding between them) is 31 tall.
 const AMPM_PILL_HEIGHT = 31;
@@ -170,6 +191,10 @@ export default function Financials() {
   const [reminderHour, setReminderHour] = useState(DEFAULT_REMINDER_HOUR);
   const [reminderMinute, setReminderMinute] = useState(DEFAULT_REMINDER_MINUTE);
   const [showReminderModal, setShowReminderModal] = useState(false);
+
+  const handleCashReceivedChange = (value: string) => {
+    setCashReceived(value.replace(/\D/g, "").slice(0, 6));
+  };
   const [savingReminder, setSavingReminder] = useState(false);
   // Draft values edited inside the modal -- only committed to
   // reminderHour/reminderMinute (and Firestore) on Save, so Cancel discards
@@ -196,13 +221,11 @@ export default function Financials() {
   const reminderTimeRef = useRef<View>(null);
   const listRef = useRef<View>(null);
   const viewBtnRef = useRef<View>(null);
-  const fabRef = useRef<View>(null);
   const listScrollRef = useRef<ScrollView>(null);
 
   // Scrolls a given section into view and gives the ScrollView time to
   // settle before HelpTour measures it — otherwise a row near the bottom of
-  // the list would stay hidden behind the fixed UpdatesReportFAB, since that
-  // FAB floats at a fixed screen position rather than scrolling with content.
+  // it can still be outside the viewport when its spotlight is measured.
   const scrollSectionIntoView = (targetRef: React.RefObject<View | null>) =>
     new Promise<void>((resolve) => {
       const scrollNode = listScrollRef.current?.getNativeScrollRef?.();
@@ -366,14 +389,14 @@ export default function Financials() {
       const tenantPayments = allPayments.filter((p) => p.userId === d.id);
       // Billing terms live on the tenant, not the stall -- travels with
       // them if relocated, instead of reflecting whoever's stall this is.
-      const schedule = u.paymentSchedule ?? "monthly";
+      const schedule = normalizePaymentSchedule(u.paymentSchedule);
       const dailyRate = u.price ?? 0;
 
       const paidThisMonth = tenantPayments.reduce((sum, p) => {
         if (p.status !== "approved") return sum;
         const pd = p.date?.toDate?.();
         if (!pd || pd.getFullYear() !== year || pd.getMonth() !== month) return sum;
-        return sum + Number(p.amount || 0);
+        return sum + Number(p.amount ?? p.paymentAmount ?? 0);
       }, 0);
 
       const chargedToDate = chargedSinceMonthStart(dailyRate, schedule, today);
@@ -400,12 +423,12 @@ export default function Financials() {
 
       return {
         id: d.id,
-        name: `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim(),
+        name: [u.firstName, u.middleName, u.lastName].filter(Boolean).join(" "),
         buildingNumber: stall?.buildingNumber ?? "",
         spaceId: stall?.spaceId ?? "",
         stallId: u.stallId ?? "",
         rent: u.price ?? 0,
-        paymentSchedule: u.paymentSchedule ?? "monthly",
+        paymentSchedule: schedule,
         status: tenantStatus,
         paymentId,
         paymentDue,
@@ -419,6 +442,7 @@ export default function Financials() {
     });
 
     setRows(tenantList);
+    void saveLocalCache("admin:financials", tenantList);
   };
 
   // Re-fetches users+stalls (not live) and recomputes rows against the
@@ -442,7 +466,7 @@ export default function Financials() {
         buildingNumber: String(s.buildingNumber ?? ""),
         spaceId: s.spaceId ?? "",
         price: Number(s.price ?? 0),
-        paymentSchedule: s.paymentSchedule ?? "monthly",
+        paymentSchedule: normalizePaymentSchedule(s.paymentSchedule),
       });
     });
 
@@ -467,10 +491,39 @@ export default function Financials() {
     useCallback(() => {
       setLoading(true);
       let unsubPayments: (() => void) | undefined;
+      let unsubUsers: (() => void) | undefined;
+      let unsubStalls: (() => void) | undefined;
 
       const setup = async () => {
         try {
           await refreshUsersAndStalls();
+
+          unsubUsers = onSnapshot(
+            query(
+              collection(db, "users"),
+              where("role", "==", "tenant"),
+              where("status", "==", "active"),
+            ),
+            (usersSnap) => {
+              userDocsRef.current = usersSnap.docs;
+              computeRows(paymentsRef.current);
+            },
+          );
+
+          unsubStalls = onSnapshot(collection(db, "stalls"), (stallsSnap) => {
+            const stallMap = new Map<string, StallInfo>();
+            stallsSnap.docs.forEach((d) => {
+              const stall = d.data();
+              stallMap.set(d.id, {
+                buildingNumber: String(stall.buildingNumber ?? ""),
+                spaceId: stall.spaceId ?? "",
+                price: Number(stall.price ?? 0),
+                paymentSchedule: normalizePaymentSchedule(stall.paymentSchedule),
+              });
+            });
+            stallMapRef.current = stallMap;
+            computeRows(paymentsRef.current);
+          });
 
           // Real-time payments listener — fires immediately then on every change
           unsubPayments = onSnapshot(
@@ -491,6 +544,8 @@ export default function Financials() {
           );
         } catch (e) {
           console.log("FINANCIALS FETCH ERROR:", e);
+          const cached = await readLocalCache<TenantRow[]>("admin:financials");
+          if (cached) setRows(cached);
           setLoading(false);
         }
       };
@@ -498,6 +553,8 @@ export default function Financials() {
       setup();
 
       return () => {
+        if (unsubUsers) unsubUsers();
+        if (unsubStalls) unsubStalls();
         if (unsubPayments) unsubPayments();
       };
     }, []),
@@ -700,7 +757,8 @@ export default function Financials() {
 
   const spacesCount = rows.length;
   const paidCount = rows.filter((r) => r.status === "paid").length;
-  const unpaidCount = rows.filter((r) => r.status === "unpaid" || r.status === "online").length;
+  const unpaidCount = rows.filter((r) => r.status === "unpaid").length;
+  const pendingCount = rows.filter((r) => r.status === "online").length;
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
@@ -709,11 +767,10 @@ export default function Financials() {
     // stray highlight briefly appearing over the previous target) that
     // reordering sidesteps entirely, since nothing transitions INTO fab
     // from a scrolled list row anymore.
-    { key: "fab", ref: fabRef, title: "Updates report", description: "Shows recent changes awaiting your review, organized by building, financials, and accounts.", edgeInset: "bottom", round: true, nudgeY: 0 },
-    { key: "summary", ref: summaryRef, title: "Spaces / Paid / Unpaid", description: "Total stalls tracked here, and how many tenants have paid vs. are still unpaid this period.", edgeInset: "top" },
+    { key: "summary", ref: summaryRef, title: "Payment summary", description: "Tracks all active spaces and separates paid, unpaid, and pending online payments waiting for confirmation.", edgeInset: "top" },
     { key: "filter", ref: filterRef, title: "Status filter", description: "Narrow the list to only paid or only unpaid tenants.", edgeInset: "top" },
     { key: "reminderTime", ref: reminderTimeRef, title: "Reminder time", description: "Set what time tenants get their daily payment reminder.", edgeInset: "top" },
-    { key: "list", ref: listRef, title: "Tenant list", description: "Paid/Unpaid badges show status at a glance. Unpaid tenants show a Set Paid button to record their payment; pending online payments show Confirm instead.", edgeInset: "top" },
+    { key: "list", ref: listRef, title: "Tenant list", description: "Shows each tenant's payment schedule, current due amount, and payment status. Unpaid tenants show Set Paid, while pending online payments show Confirm.", edgeInset: "top" },
   ];
   if (filteredRows.length > 0) {
     tourSteps.push({ key: "view", ref: viewBtnRef, title: "View", description: "Opens this tenant's full payment details and history.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(viewBtnRef) });
@@ -770,16 +827,32 @@ export default function Financials() {
         {/* SUMMARY STATS */}
         <View style={styles.summaryRow} ref={summaryRef} collapsable={false}>
           <View style={[styles.summaryCard, styles.summaryCardSpaces]}>
-            <Text style={styles.summaryLabelSpaces}>Spaces</Text>
+            <View style={styles.summaryCardHeader}>
+              <Text style={styles.summaryLabelSpaces} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Spaces</Text>
+              <Building2 size={12} color={colors.emeraldSoft} />
+            </View>
             <Text style={styles.summaryValueSpaces}>{spacesCount}</Text>
           </View>
           <View style={[styles.summaryCard, styles.summaryCardPaid]}>
-            <Text style={styles.summaryLabelPaid}>Paid</Text>
+            <View style={styles.summaryCardHeader}>
+              <Text style={styles.summaryLabelPaid} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Paid</Text>
+              <CheckCircle2 size={12} color={colors.emerald} />
+            </View>
             <Text style={styles.summaryValuePaid}>{paidCount}</Text>
           </View>
           <View style={[styles.summaryCard, styles.summaryCardUnpaid]}>
-            <Text style={styles.summaryLabelUnpaid}>Unpaid</Text>
+            <View style={styles.summaryCardHeader}>
+              <Text style={styles.summaryLabelUnpaid} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Unpaid</Text>
+              <AlertCircle size={12} color={colors.error} />
+            </View>
             <Text style={styles.summaryValueUnpaid}>{unpaidCount}</Text>
+          </View>
+          <View style={[styles.summaryCard, styles.summaryCardPending]}>
+            <View style={styles.summaryCardHeader}>
+              <Text style={styles.summaryLabelPending} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>Pending</Text>
+              <Clock size={12} color={colors.warning} />
+            </View>
+            <Text style={styles.summaryValuePending}>{pendingCount}</Text>
           </View>
         </View>
 
@@ -837,7 +910,7 @@ export default function Financials() {
               <ScrollView
                 ref={listScrollRef}
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingBottom: insets.bottom + FAB_CLEARANCE }}
+                contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xl }}
                 refreshControl={
                   <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.emerald} />
                 }
@@ -857,6 +930,20 @@ export default function Financials() {
                       </View>
 
                       <Text style={styles.rowName}>{item.name}</Text>
+                      <Text
+                        style={styles.rowSchedule}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.8}
+                      >
+                        Payment schedule: {paymentScheduleLabel(item.paymentSchedule)}
+                      </Text>
+                      <View style={styles.rowDueWrap}>
+                        <Text style={styles.rowDueLabel}>Due amount</Text>
+                        <Text style={[styles.rowDueValue, item.paymentDue <= 0 && styles.rowDueValuePaid]}>
+                          {formatPeso(item.paymentDue)}
+                        </Text>
+                      </View>
                     </View>
 
                     {/* ACTION BUTTONS — Set Paid on top, View below */}
@@ -930,7 +1017,6 @@ export default function Financials() {
           </View>
         )}
       </View>
-      <UpdatesReportFAB fabRef={fabRef} />
 
       {/* CASH PAYMENT MODAL */}
       <Modal visible={paymentModal} transparent animationType="fade">
@@ -982,8 +1068,10 @@ export default function Financials() {
 
               <TextInput
                 value={cashReceived}
-                onChangeText={setCashReceived}
+                onChangeText={handleCashReceivedChange}
                 keyboardType="numeric"
+                inputMode="numeric"
+                maxLength={6}
                 placeholder="Enter amount"
                 placeholderTextColor={colors.textMuted}
                 style={styles.cashInput}
@@ -1152,8 +1240,10 @@ export default function Financials() {
 
               <TextInput
                 value={cashReceived}
-                onChangeText={setCashReceived}
+                onChangeText={handleCashReceivedChange}
                 keyboardType="numeric"
+                inputMode="numeric"
+                maxLength={6}
                 style={styles.cashInput}
                 placeholder="Enter cash amount"
                 placeholderTextColor={colors.textMuted}
@@ -1684,24 +1774,48 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.parchment,
     paddingHorizontal: spacing.md,
-    paddingTop: spacing.xl - 2,
+    paddingTop: spacing.md,
   },
 
   summaryRow: {
     flexDirection: "row",
-    gap: spacing.sm + 2,
-    marginBottom: spacing.lg,
+    width: "100%",
+    gap: 5,
+    marginBottom: spacing.sm,
+    overflow: "hidden",
   },
   summaryCard: {
-    flex: 1,
-    borderRadius: radius.lg,
-    paddingVertical: spacing.md + 2,
-    paddingHorizontal: spacing.lg - 2,
+    width: 0,
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: 0,
+    minHeight: 58,
+    borderRadius: radius.md,
+    paddingVertical: 6,
+    paddingHorizontal: 7,
+    borderWidth: 1,
+    borderColor: "transparent",
+    overflow: "hidden",
   },
   summaryCardSpaces: { backgroundColor: colors.emerald },
-  summaryCardPaid: { backgroundColor: colors.emeraldSoft },
-  summaryCardUnpaid: { backgroundColor: colors.warningSoft },
+  summaryCardPaid: { backgroundColor: colors.emeraldSoft, borderColor: colors.success },
+  summaryCardUnpaid: { backgroundColor: colors.errorSoft, borderColor: colors.error },
+  summaryCardPending: {
+    backgroundColor: colors.warningSoft,
+    borderColor: colors.warning,
+    borderRadius: radius.md,
+    overflow: "hidden",
+  },
+  summaryCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 2,
+    minWidth: 0,
+  },
   summaryLabelSpaces: {
+    flexShrink: 1,
     fontSize: fontSize.xs - 1,
     fontFamily: fontFamily.semibold,
     color: colors.emeraldSoft,
@@ -1709,6 +1823,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   summaryLabelPaid: {
+    flexShrink: 1,
     fontSize: fontSize.xs - 1,
     fontFamily: fontFamily.semibold,
     color: colors.emerald,
@@ -1716,6 +1831,15 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   summaryLabelUnpaid: {
+    flexShrink: 1,
+    fontSize: fontSize.xs - 1,
+    fontFamily: fontFamily.semibold,
+    color: colors.error,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  summaryLabelPending: {
+    flexShrink: 1,
     fontSize: fontSize.xs - 1,
     fontFamily: fontFamily.semibold,
     color: colors.warning,
@@ -1723,19 +1847,25 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   summaryValueSpaces: {
-    fontSize: fontSize.xl,
+    fontSize: fontSize.md,
     fontFamily: fontFamily.extrabold,
     color: colors.white,
     marginTop: 2,
   },
   summaryValuePaid: {
-    fontSize: fontSize.xl,
+    fontSize: fontSize.md,
     fontFamily: fontFamily.extrabold,
     color: colors.emerald,
     marginTop: 2,
   },
   summaryValueUnpaid: {
-    fontSize: fontSize.xl,
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.extrabold,
+    color: colors.error,
+    marginTop: 2,
+  },
+  summaryValuePending: {
+    fontSize: fontSize.md,
     fontFamily: fontFamily.extrabold,
     color: colors.warning,
     marginTop: 2,
@@ -1807,6 +1937,11 @@ const styles = StyleSheet.create({
   rowMetaWrap: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   rowMeta: { fontSize: fontSize.xs, fontFamily: fontFamily.medium, color: colors.textMuted },
   rowName: { fontSize: fontSize.base, fontFamily: fontFamily.bold, color: colors.textPrimary, marginTop: spacing.xs + 2 },
+  rowSchedule: { fontSize: fontSize.xs, fontFamily: fontFamily.medium, color: colors.textSecondary, marginTop: 3 },
+  rowDueWrap: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.xs },
+  rowDueLabel: { fontSize: fontSize.xs, fontFamily: fontFamily.medium, color: colors.textMuted },
+  rowDueValue: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.error },
+  rowDueValuePaid: { color: colors.emerald },
 
   setPaidBtn: {
     flexDirection: "row",

@@ -263,7 +263,7 @@ export default function EditRentalInfo() {
         const tenantSnap = await getDoc(doc(db, "users", currentTenantId));
         if (tenantSnap.exists()) {
           const td = tenantSnap.data();
-          setTenantName(`${td.firstName ?? ""} ${td.lastName ?? ""}`.trim());
+          setTenantName([td.firstName, td.middleName, td.lastName].filter(Boolean).join(" "));
           // The tenant's OWN price/paymentSchedule/category are the source
           // of truth once occupied -- the stall's copy (just read above)
           // is only a denormalized display value that can lag behind if
@@ -396,7 +396,7 @@ export default function EditRentalInfo() {
         }
         for (const c of changes) {
           void logDetailedUpdate({
-            module: "Building Management",
+            module: "Stall Management",
             type: "Rental Information Update",
             targetId: stallId!,
             spaceNo: spaceId,

@@ -32,12 +32,14 @@ import OwnerBellIcon from "../components/OwnerBellIcon";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { Avatar, Card } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
+import { readLocalCache, saveLocalCache } from "../../shared/services/localCache";
 
 const cloudFunctions = getFunctions(firebaseApp);
 
 type AdminDoc = {
   uid: string;
   firstName: string;
+  middleName?: string;
   lastName: string;
   username: string;
   contactNo: string;
@@ -52,10 +54,11 @@ export default function ManageAdmin() {
   const [isEditing, setIsEditing] = useState(false);
   const [admin, setAdmin] = useState<AdminDoc | null>(null);
   const [firstName, setFirstName] = useState("");
+  const [middleName, setMiddleName] = useState("");
   const [lastName, setLastName] = useState("");
   const [username, setUsername] = useState("");
   const [contactNo, setContactNo] = useState("");
-  const [original, setOriginal] = useState({ firstName: "", lastName: "", username: "", contactNo: "" });
+  const [original, setOriginal] = useState({ firstName: "", middleName: "", lastName: "", username: "", contactNo: "" });
   const originalRef = useRef(original);
   const [firstNameError, setFirstNameError] = useState("");
   const [lastNameError, setLastNameError] = useState("");
@@ -137,10 +140,10 @@ export default function ManageAdmin() {
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
     { key: "bell", ref: bellRef, title: "Notifications", description: "Shows admin updates waiting for your review, like payments and building changes.", edgeInset: "top", round: true },
-    { key: "profile", ref: profileFieldsRef, title: "Admin profile", description: "The market admin's name, login username, and contact number. This is the account that manages tenants day-to-day.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(profileFieldsRef) },
+    { key: "profile", ref: profileFieldsRef, title: "Admin profile", description: "The market admin's first, middle, and last name, login username, and contact number.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(profileFieldsRef) },
     { key: "save", ref: saveBtnRef, title: "Save", description: "Saves any changes to the admin's profile details.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(saveBtnRef) },
     { key: "password", ref: pwFieldsRef, title: "Change password", description: "Set a new login password for the admin account. Must be 8-12 characters with an uppercase letter, a number, and a special character.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(pwFieldsRef) },
-    { key: "updatepw", ref: updatePwBtnRef, title: "Update Password", description: "Applies the new password. The admin will need to use it the next time they log in.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(updatePwBtnRef) },
+    { key: "updatepw", ref: updatePwBtnRef, title: "Update Password", description: "Applies the new password and signs the admin out of active sessions so they must log in again.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(updatePwBtnRef) },
   ];
 
   useEffect(() => {
@@ -174,19 +177,40 @@ export default function ManageAdmin() {
         const data = { uid: d.id, ...d.data() } as AdminDoc;
         setAdmin(data);
         const fn = data.firstName ?? "";
+        const mn = data.middleName ?? "";
         const ln = data.lastName ?? "";
         const un = data.username ?? "";
         const cn = data.contactNo ?? "";
         setFirstName(fn);
+        setMiddleName(mn);
         setLastName(ln);
         setUsername(un);
         setContactNo(cn);
-        const loadedProfile = { firstName: fn, lastName: ln, username: un, contactNo: cn };
+        const loadedProfile = { firstName: fn, middleName: mn, lastName: ln, username: un, contactNo: cn };
         originalRef.current = loadedProfile;
         setOriginal(loadedProfile);
+        await saveLocalCache("owner:managed-admin", data);
       }
     } catch (err) {
       console.error(err);
+      const data = await readLocalCache<AdminDoc>("owner:managed-admin");
+      if (data) {
+        setAdmin(data);
+        const loadedProfile = {
+          firstName: data.firstName ?? "",
+          middleName: data.middleName ?? "",
+          lastName: data.lastName ?? "",
+          username: data.username ?? "",
+          contactNo: data.contactNo ?? "",
+        };
+        setFirstName(loadedProfile.firstName);
+        setMiddleName(loadedProfile.middleName);
+        setLastName(loadedProfile.lastName);
+        setUsername(loadedProfile.username);
+        setContactNo(loadedProfile.contactNo);
+        originalRef.current = loadedProfile;
+        setOriginal(loadedProfile);
+      }
     } finally {
       setLoading(false);
     }
@@ -223,7 +247,7 @@ export default function ManageAdmin() {
     else setUsernameError("");
 
     if (!cn) { setContactNoError("Contact number is required."); valid = false; }
-    else if (cn.length !== 11) { setContactNoError("Enter a valid 11-digit contact number."); valid = false; }
+    else if (!/^9\d{9}$/.test(cn)) { setContactNoError("Enter a valid 10-digit number starting with 9."); valid = false; }
     else setContactNoError("");
 
     return valid;
@@ -232,6 +256,7 @@ export default function ManageAdmin() {
   function handleCancelEditProfile() {
     const savedProfile = originalRef.current;
     setFirstName(savedProfile.firstName);
+    setMiddleName(savedProfile.middleName);
     setLastName(savedProfile.lastName);
     setUsername(savedProfile.username);
     setContactNo(savedProfile.contactNo);
@@ -283,6 +308,7 @@ export default function ManageAdmin() {
     if (!admin) return;
     if (!auth.currentUser?.uid) return;
     const fn = firstName.trim();
+    const mn = middleName.trim();
     const ln = lastName.trim();
     const un = username.trim();
     const cn = contactNo.trim();
@@ -290,8 +316,8 @@ export default function ManageAdmin() {
     setSaving(true);
     try {
       const updateFn = httpsCallable(cloudFunctions, "ownerUpdateAdminProfile");
-      await updateFn({ uid: admin.uid, firstName: fn, lastName: ln, username: un, contactNo: cn });
-      const savedProfile = { firstName: fn, lastName: ln, username: un, contactNo: cn };
+      await updateFn({ uid: admin.uid, firstName: fn, middleName: mn, lastName: ln, username: un, contactNo: cn });
+      const savedProfile = { firstName: fn, middleName: mn, lastName: ln, username: un, contactNo: cn };
       originalRef.current = savedProfile;
       setOriginal(savedProfile);
       setIsEditing(false);
@@ -352,12 +378,16 @@ export default function ManageAdmin() {
 
   const profileChanged =
     firstName !== original.firstName ||
+    middleName !== original.middleName ||
     lastName !== original.lastName ||
     username !== original.username ||
     contactNo !== original.contactNo;
 
   const hasEmptyField =
     !firstName.trim() || !lastName.trim() || !username.trim() || !contactNo.trim();
+
+  const passwordMeetsRequirements = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/.test(newPassword);
+  const canUpdatePassword = passwordMeetsRequirements && confirmPassword.length > 0 && newPassword === confirmPassword;
 
   if (checking || loading) {
     return (
@@ -413,8 +443,8 @@ export default function ManageAdmin() {
           {/* IDENTITY CARD */}
           <Card style={styles.identityCard}>
             <View style={styles.identityInner}>
-              <Avatar name={`${firstName} ${lastName}`} size={90} />
-              <Text style={styles.identityName}>{firstName} {lastName}</Text>
+              <Avatar name={`${firstName} ${middleName} ${lastName}`} size={90} />
+              <Text style={styles.identityName}>{[firstName, middleName, lastName].filter(Boolean).join(" ")}</Text>
               <Text style={styles.identityRole}>Market Admin</Text>
             </View>
           </Card>
@@ -458,6 +488,22 @@ export default function ManageAdmin() {
             />
             {!!firstNameError && <Text style={styles.fieldError}>{firstNameError}</Text>}
 
+            <Text style={styles.fieldLabel}>Middle name</Text>
+            <TextInput
+              style={[
+                styles.input,
+                focusedField === "middleName" && isEditing && styles.inputFocused,
+                !isEditing && styles.inputReadOnly,
+              ]}
+              value={middleName}
+              onChangeText={setMiddleName}
+              placeholder="Middle name (optional)"
+              placeholderTextColor={colors.textMuted}
+              onFocus={() => { setFocusedField("middleName"); scrollFieldIntoView(profileFieldsRef); }}
+              onBlur={() => setFocusedField(null)}
+              editable={isEditing}
+            />
+
             <Text style={styles.fieldLabel}>Username</Text>
             <View
               style={[
@@ -498,11 +544,11 @@ export default function ManageAdmin() {
                 <TextInput
                   style={[styles.rowInput, !isEditing && styles.rowInputReadOnly]}
                   value={contactNo}
-                  onChangeText={(t) => { setContactNo(t.replace(/\D/g, "").slice(0, 11)); if (contactNoError) setContactNoError(""); }}
-                  placeholder="09XXXXXXXXX"
+                  onChangeText={(t) => { setContactNo(t.replace(/\D/g, "").slice(0, 10)); if (contactNoError) setContactNoError(""); }}
+                  placeholder="9XXXXXXXXX"
                   placeholderTextColor={colors.textMuted}
                   keyboardType="phone-pad"
-                  maxLength={11}
+                  maxLength={10}
                   onFocus={() => { setFocusedField("contactNo"); scrollFieldIntoView(profileFieldsRef); }}
                   onBlur={() => setFocusedField(null)}
                   editable={isEditing}
@@ -625,14 +671,14 @@ export default function ManageAdmin() {
                     style={({ pressed }) => [
                       styles.updatePwBtn,
                       styles.pwUpdateBtn,
-                      (changingPw || newPassword.length < 8 || confirmPassword.length < 8) &&
+                      (changingPw || !canUpdatePassword) &&
                         styles.btnDisabled,
                       pressed &&
-                        !(changingPw || newPassword.length < 8 || confirmPassword.length < 8) &&
+                        !(changingPw || !canUpdatePassword) &&
                         styles.saveBtnPressed,
                     ]}
                     onPress={() => setShowPwConfirm(true)}
-                    disabled={changingPw || newPassword.length < 8 || confirmPassword.length < 8}
+                    disabled={changingPw || !canUpdatePassword}
                   >
                     {({ pressed }) =>
                       changingPw
@@ -698,7 +744,7 @@ export default function ManageAdmin() {
             <View style={styles.alertBody}>
               <Text style={styles.alertTitleNeutral}>Update password?</Text>
               <Text style={styles.alertMessage}>
-                Are you sure you want to change this admin's password? They'll need to use the new password the next time they log in.
+                Are you sure you want to change this admin's password? Their active sessions will end and they must log in again using the new password.
               </Text>
             </View>
             <View style={styles.alertDivider} />
