@@ -16,7 +16,6 @@ import {
   Linking,
   RefreshControl,
 } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
 import { WebView } from "react-native-webview";
 import { captureRef } from "react-native-view-shot";
 
@@ -27,6 +26,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { auth } from "../../shared/firebaseConfig";
+import { requireOnlineAction } from "../../shared/services/networkStatus";
 import { getTenantData } from "../../services/tenantService";
 import { createOnlinePayment, createPayment } from "../../services/paymentService";
 import { uploadReceiptImage } from "../../services/storageService";
@@ -54,10 +54,9 @@ import {
   CheckCircle2,
   ShieldCheck,
   Info,
-  Zap,
   Lock,
-  Check,
   HelpCircle,
+  Pencil,
 } from "lucide-react-native";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 
@@ -91,6 +90,7 @@ export default function PaymentsScreen() {
   const [toastMsg, setToastMsg] = useState("");
   const [showToast, setShowToast] = useState(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
+  const [paymentSuccess, setPaymentSuccess] = useState<{ amount: number; method: string } | null>(null);
 
   const [captureReceipt, setCaptureReceipt] = useState<{ paymentId: string; data: any } | null>(null);
   const receiptShotRef = useRef<View>(null);
@@ -250,8 +250,7 @@ export default function PaymentsScreen() {
     return unsubscribe;
   }, []);
 
-  // The page isn't scrollable, so there's no pull-to-refresh gesture —
-  // this button re-fetches tenant/stall data the same way that used to.
+  // Uses the same native pull-to-refresh behavior as the dashboard.
   async function handleRefresh() {
     if (refreshing) return;
     setRefreshing(true);
@@ -288,6 +287,9 @@ export default function PaymentsScreen() {
   }, 0);
 
   const remainingBill = monthTotalCharge - paidThisMonth;
+  const [balanceWhole, balanceCents] = Math.max(0, remainingBill)
+    .toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    .split(".");
 
   const chargedToDate = chargedSinceMonthStart(periodRate, paymentSchedule, today);
   const paymentDue = chargedToDate - paidThisMonth;
@@ -321,6 +323,7 @@ export default function PaymentsScreen() {
   ];
 
   async function handlePayNow() {
+    if (!(await requireOnlineAction("Starting an online payment"))) return;
     // The amount field falls back to displaying the computed `paymentDue`
     // whenever the tenant hasn't typed their own value — so the amount
     // actually being paid must fall back the same way, or a tenant who
@@ -450,7 +453,7 @@ export default function PaymentsScreen() {
       // Function trigger (functions/src/paymentNotifier.ts), which fires
       // reliably on payment-doc creation regardless of client path.
       setCaptureReceipt({ paymentId, data: receiptData });
-      triggerToast("Payment submitted successfully!");
+      setPaymentSuccess({ amount: paymentAmount, method: paymentMethodLabel });
     } catch (err) {
       console.log("[handlePaymentSuccess] error:", err);
       Alert.alert("Error", "Payment received but could not be recorded. Contact support.");
@@ -472,17 +475,14 @@ export default function PaymentsScreen() {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
 
-      <LinearGradient
-        colors={[colors.emerald, colors.ink]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.headerGradient}
-      >
+      <View style={styles.headerGradient}>
         <View style={[styles.header, { paddingTop: topInset + 14 }]}>
-          <View style={{ width: 86 }} />
-          <Text style={styles.headerTitle}>Payment Center</Text>
+          <View style={styles.headerTitleGroup}>
+            <Text style={styles.headerEyebrow}>Tenant Hub</Text>
+            <Text style={styles.headerTitle}>Payment Center</Text>
+          </View>
           <View style={styles.headerActions}>
             <View ref={historyRef} collapsable={false}>
               <TouchableOpacity
@@ -490,7 +490,7 @@ export default function PaymentsScreen() {
                 onPress={() => router.push("/payment-history")}
                 activeOpacity={0.7}
               >
-                <History size={18} color={colors.white} />
+                <History size={18} color={colors.ink} />
               </TouchableOpacity>
             </View>
             <View ref={helpRef} collapsable={false}>
@@ -499,27 +499,43 @@ export default function PaymentsScreen() {
                 onPress={() => setTourVisible(true)}
                 activeOpacity={0.7}
               >
-                <HelpCircle size={18} color={colors.white} />
+                <HelpCircle size={18} color={colors.ink} />
               </TouchableOpacity>
             </View>
           </View>
         </View>
 
         <View style={styles.balanceCard} ref={balanceRef} collapsable={false}>
-          <Text style={styles.balanceLabel}>Total Balance Due</Text>
-          <Text style={styles.balanceAmount}>₱{remainingBill.toLocaleString()}.00</Text>
+          <View style={styles.balanceHeaderRow}>
+            <Text style={styles.balanceLabel}>Total Balance Due</Text>
+            <View style={styles.leaseBadge}>
+              <Text style={styles.leaseBadgeText}>
+                {tenant?.status === "active" ? "Active Lease" : "Lease Inactive"}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.balanceAmountRow}>
+            <Text style={styles.balanceAmount}>₱{balanceWhole}</Text>
+            <Text style={styles.balanceCents}>.{balanceCents}</Text>
+          </View>
         </View>
-      </LinearGradient>
+      </View>
 
-      <ScrollView
-        ref={scrollRef}
-        style={styles.body}
-        contentContainerStyle={[styles.bodyContent, { paddingBottom: insets.bottom + 20 }]}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.emerald} />
-        }
-      >
+      <View style={styles.body}>
+        <ScrollView
+          ref={scrollRef}
+          style={styles.bodyScroll}
+          contentContainerStyle={[styles.bodyContent, { paddingBottom: Math.max(insets.bottom, 8) }]}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor="#000000"
+              colors={["#000000"]}
+            />
+          }
+        >
         {hasPaidCurrentPeriod ? (
           <View style={styles.caughtUpCard}>
             <CheckCircle2 size={28} color={colors.emerald} />
@@ -553,6 +569,7 @@ export default function PaymentsScreen() {
                     setPayAmount(text);
                   }}
                 />
+                <Pencil size={14} color={colors.textMuted} />
               </View>
             </View>
 
@@ -577,7 +594,7 @@ export default function PaymentsScreen() {
                   <Text style={styles.methodOptionSub}>Fastest · No fees</Text>
                 </View>
                 <View style={[styles.radioOuter, selectedMethod === "gcash" && styles.radioOuterSelected]}>
-                  {selectedMethod === "gcash" && <Check size={13} color={colors.white} />}
+                  {selectedMethod === "gcash" && <View style={styles.radioInner} />}
                 </View>
               </Pressable>
 
@@ -593,16 +610,15 @@ export default function PaymentsScreen() {
                   <Text style={styles.methodOptionSub}>Instant transfer</Text>
                 </View>
                 <View style={[styles.radioOuter, selectedMethod === "paymaya" && styles.radioOuterSelected]}>
-                  {selectedMethod === "paymaya" && <Check size={13} color={colors.white} />}
+                  {selectedMethod === "paymaya" && <View style={styles.radioInner} />}
                 </View>
               </Pressable>
 
               {selectedMethod && (
                 <View style={styles.methodInfoBanner}>
-                  <Info size={15} color={colors.textSecondary} />
+                  <Info size={13} color={colors.textSecondary} />
                   <Text style={styles.methodInfoText}>
-                    You'll be redirected to {selectedMethod === "gcash" ? "GCash" : "Maya"} to confirm
-                    the transaction. A receipt is auto-saved to your history.
+                    Continue in {selectedMethod === "gcash" ? "GCash" : "Maya"} to confirm your payment. Your receipt is saved automatically.
                   </Text>
                 </View>
               )}
@@ -626,16 +642,14 @@ export default function PaymentsScreen() {
                 const isActivePress = pressed && !(redirecting || !selectedMethod);
                 return (
                   <>
-                    <Zap size={16} color={isActivePress ? colors.emerald : colors.white} />
+                    <Lock size={16} color={isActivePress ? colors.emerald : colors.white} />
                     <Text
                       style={[styles.payNowInlineText, isActivePress && styles.payNowInlineTextPressed]}
                       numberOfLines={1}
                     >
                       {redirecting
                         ? "Opening payment..."
-                        : `Pay ₱${(Number(payAmount) || Math.round(paymentDue)).toLocaleString()}${
-                            selectedMethod ? ` with ${selectedMethod === "gcash" ? "GCash" : "Maya"}` : ""
-                          }`}
+                        : `Pay ₱${(Number(payAmount) || Math.round(paymentDue)).toLocaleString()}`}
                     </Text>
                   </>
                 );
@@ -648,7 +662,8 @@ export default function PaymentsScreen() {
             </View>
           </>
         )}
-      </ScrollView>
+        </ScrollView>
+      </View>
 
       {/* WEBVIEW PAYMENT MODAL */}
       <Modal visible={showWebView} animationType="slide" onRequestClose={handlePaymentCancel}>
@@ -699,6 +714,50 @@ export default function PaymentsScreen() {
         </View>
       </Modal>
 
+      <Modal
+        visible={paymentSuccess !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPaymentSuccess(null)}
+      >
+        <View style={styles.paymentSuccessOverlay}>
+          <View style={styles.paymentSuccessCard}>
+            <View style={styles.paymentSuccessIcon}>
+              <CheckCircle2 size={42} color={colors.emerald} />
+            </View>
+            <Text style={styles.paymentSuccessTitle}>Payment successful</Text>
+            <Text style={styles.paymentSuccessMessage}>
+              Your online payment was processed and submitted for admin confirmation.
+            </Text>
+            <View style={styles.paymentSuccessDetails}>
+              <View style={styles.paymentSuccessDetailRow}>
+                <Text style={styles.paymentSuccessDetailLabel}>Amount</Text>
+                <Text style={styles.paymentSuccessDetailValue}>
+                  ₱{Number(paymentSuccess?.amount ?? 0).toLocaleString("en-PH", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </Text>
+              </View>
+              <View style={styles.paymentSuccessDetailRow}>
+                <Text style={styles.paymentSuccessDetailLabel}>Method</Text>
+                <Text style={styles.paymentSuccessDetailValue}>{paymentSuccess?.method ?? "Online"}</Text>
+              </View>
+              <View style={styles.paymentSuccessDetailRow}>
+                <Text style={styles.paymentSuccessDetailLabel}>Status</Text>
+                <Text style={styles.paymentSuccessPending}>Pending confirmation</Text>
+              </View>
+            </View>
+            <Pressable
+              style={({ pressed }) => [styles.paymentSuccessButton, pressed && styles.paymentSuccessButtonPressed]}
+              onPress={() => setPaymentSuccess(null)}
+            >
+              <Text style={styles.paymentSuccessButtonText}>Done</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
       {showToast && (
         <Animated.View style={[styles.toastOverlay, { opacity: toastOpacity }]}>
           <View style={styles.toastBox}>
@@ -744,10 +803,8 @@ const styles = StyleSheet.create({
   },
 
   headerGradient: {
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-    overflow: "hidden",
-    paddingBottom: spacing.xxl,
+    backgroundColor: colors.parchment,
+    paddingBottom: spacing.md,
   },
 
   header: {
@@ -755,7 +812,11 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     paddingHorizontal: spacing.xl,
-    paddingBottom: spacing.lg,
+    paddingBottom: spacing.md,
+  },
+
+  headerTitleGroup: {
+    flex: 1,
   },
 
   headerActions: {
@@ -765,40 +826,86 @@ const styles = StyleSheet.create({
   },
 
   headerTitle: {
-    flex: 1,
-    textAlign: "center",
-    color: colors.white,
-    fontSize: fontSize.xl,
+    color: colors.ink,
+    fontSize: fontSize.lg,
     fontFamily: fontFamily.extrabold,
+    marginTop: 2,
+  },
+
+  headerEyebrow: {
+    color: colors.emerald,
+    fontSize: 10,
+    fontFamily: fontFamily.bold,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
   },
 
   historyBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: "rgba(255,255,255,0.14)",
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow.card,
   },
 
   balanceCard: {
     marginHorizontal: spacing.xl,
-    backgroundColor: "rgba(255,255,255,0.1)",
+    backgroundColor: colors.emerald,
     borderRadius: radius.lg,
-    padding: spacing.lg + 2,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md + 2,
+  },
+
+  balanceHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
 
   balanceLabel: {
     color: colors.emeraldSoft,
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.medium,
+    fontSize: 10,
+    fontFamily: fontFamily.semibold,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+
+  leaseBadge: {
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.45)",
+    backgroundColor: "rgba(255,255,255,0.12)",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+
+  leaseBadgeText: {
+    color: colors.white,
+    fontSize: 9,
+    fontFamily: fontFamily.semibold,
+  },
+
+  balanceAmountRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    marginTop: spacing.sm,
   },
 
   balanceAmount: {
     color: colors.white,
-    fontSize: fontSize.display,
+    fontSize: 30,
     fontFamily: fontFamily.extrabold,
-    marginTop: 4,
+  },
+
+  balanceCents: {
+    color: colors.white,
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+    marginLeft: 3,
   },
 
   // ── Body ────────────────────────────────────────
@@ -806,16 +913,23 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
+  bodyScroll: {
+    flex: 1,
+  },
+
   bodyContent: {
+    flexGrow: 1,
     paddingHorizontal: spacing.xl,
-    paddingTop: spacing.lg,
+    paddingTop: 0,
   },
 
   // ── Enter amount card ────────────────────────────
   amountCard: {
     backgroundColor: colors.white,
     borderRadius: radius.lg,
-    padding: spacing.md + 2,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
     ...shadow.card,
   },
 
@@ -827,9 +941,11 @@ const styles = StyleSheet.create({
   },
 
   amountCardTitle: {
-    fontSize: fontSize.md,
-    fontFamily: fontFamily.bold,
+    fontSize: 10,
+    fontFamily: fontFamily.medium,
     color: colors.ink,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
 
   amountCardCurrency: {
@@ -837,19 +953,25 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.semibold,
     color: colors.textMuted,
     letterSpacing: 0.5,
+    backgroundColor: colors.mist,
+    borderRadius: radius.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
   },
 
   amountBox: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.mist,
+    backgroundColor: colors.white,
     borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: "rgba(15, 125, 91, 0.22)",
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md + 2,
+    paddingVertical: spacing.sm + 2,
   },
 
   amountPeso: {
-    fontSize: fontSize.xxl,
+    fontSize: fontSize.xl,
     fontFamily: fontFamily.bold,
     color: colors.ink,
     marginRight: 6,
@@ -857,7 +979,7 @@ const styles = StyleSheet.create({
 
   amountInput: {
     flex: 1,
-    fontSize: fontSize.xxl,
+    fontSize: fontSize.xl,
     fontFamily: fontFamily.extrabold,
     color: colors.ink,
     padding: 0,
@@ -889,22 +1011,18 @@ const styles = StyleSheet.create({
 
   // ── Payment method card ──────────────────────────
   methodCard: {
-    backgroundColor: colors.white,
-    borderRadius: radius.lg,
-    padding: spacing.lg + 2,
     marginTop: spacing.lg,
-    ...shadow.card,
   },
 
   methodCardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: spacing.lg,
+    marginBottom: spacing.sm,
   },
 
   methodCardTitle: {
-    fontSize: fontSize.md,
+    fontSize: fontSize.sm,
     fontFamily: fontFamily.bold,
     color: colors.ink,
   },
@@ -913,6 +1031,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
+    backgroundColor: colors.emeraldSoft,
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
   },
 
   securedBadgeText: {
@@ -924,16 +1046,18 @@ const styles = StyleSheet.create({
   methodOptionCard: {
     flexDirection: "row",
     alignItems: "center",
-    borderWidth: 1.5,
+    borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.md,
+    backgroundColor: colors.white,
     padding: spacing.md,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
 
   methodOptionCardSelected: {
+    borderWidth: 1.5,
     borderColor: colors.emerald,
-    backgroundColor: colors.emeraldSoft,
+    backgroundColor: colors.white,
   },
 
   methodBrandIcon: {
@@ -983,25 +1107,33 @@ const styles = StyleSheet.create({
   },
 
   radioOuterSelected: {
-    backgroundColor: colors.emerald,
     borderColor: colors.emerald,
+  },
+
+  radioInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: colors.emerald,
   },
 
   methodInfoBanner: {
     flexDirection: "row",
-    gap: spacing.sm,
+    alignItems: "center",
+    gap: 6,
     backgroundColor: colors.mist,
     borderRadius: radius.sm,
-    padding: spacing.md,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.sm,
     marginTop: 4,
   },
 
   methodInfoText: {
     flex: 1,
-    fontSize: fontSize.xs + 1,
+    fontSize: 11,
     fontFamily: fontFamily.regular,
     color: colors.textSecondary,
-    lineHeight: 17,
+    lineHeight: 14,
   },
 
   // ── Pay now (inline) ─────────────────────────────
@@ -1069,6 +1201,96 @@ const styles = StyleSheet.create({
 
   webViewClose: {
     padding: 4,
+  },
+
+  paymentSuccessOverlay: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: spacing.xl,
+    backgroundColor: colors.overlay,
+  },
+  paymentSuccessCard: {
+    width: "100%",
+    maxWidth: 380,
+    alignItems: "center",
+    backgroundColor: colors.white,
+    borderRadius: radius.xl,
+    padding: spacing.xxl,
+    ...shadow.raised,
+  },
+  paymentSuccessIcon: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.successSoft,
+    marginBottom: spacing.md,
+  },
+  paymentSuccessTitle: {
+    color: colors.ink,
+    fontSize: fontSize.xl,
+    fontFamily: fontFamily.bold,
+    textAlign: "center",
+  },
+  paymentSuccessMessage: {
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    lineHeight: 20,
+    textAlign: "center",
+    marginTop: spacing.sm,
+  },
+  paymentSuccessDetails: {
+    alignSelf: "stretch",
+    backgroundColor: colors.mist,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginTop: spacing.lg,
+  },
+  paymentSuccessDetailRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.md,
+    marginVertical: 4,
+  },
+  paymentSuccessDetailLabel: {
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+  },
+  paymentSuccessDetailValue: {
+    flexShrink: 1,
+    color: colors.ink,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.bold,
+    textAlign: "right",
+  },
+  paymentSuccessPending: {
+    flexShrink: 1,
+    color: colors.warning,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.bold,
+    textAlign: "right",
+  },
+  paymentSuccessButton: {
+    alignSelf: "stretch",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.emerald,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    marginTop: spacing.lg,
+  },
+  paymentSuccessButtonPressed: {
+    opacity: 0.85,
+  },
+  paymentSuccessButtonText: {
+    color: colors.white,
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
   },
 
   webViewSpinner: {

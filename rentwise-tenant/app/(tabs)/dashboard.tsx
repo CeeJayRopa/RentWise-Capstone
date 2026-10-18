@@ -42,6 +42,7 @@ import { MONTHS, chargedSinceMonthStart, computePeriodCharge, nextPeriodStart } 
 
 import { setRememberMe } from "../../shared/services/rememberMe";
 import { hasSeenTenantDashboardTour, markTenantDashboardTourSeen } from "../../shared/services/onboardingTour";
+import { requireOnlineAction } from "../../shared/services/networkStatus";
 
 import { router, useFocusEffect } from "expo-router";
 import {
@@ -53,7 +54,7 @@ import {
   CalendarClock,
   Wallet,
   HelpCircle,
-  Camera,
+  ScanLine,
 } from "lucide-react-native";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import HelpTour, { HelpStep } from "../components/HelpTour";
@@ -80,8 +81,6 @@ export default function Dashboard() {
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [isOffline, setIsOffline] = useState(false);
-  const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [toastMsg, setToastMsg] = useState("");
   const [showToast, setShowToast] = useState(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
@@ -169,21 +168,7 @@ export default function Dashboard() {
 
       const unsubscribe = onSnapshot(
         q,
-        { includeMetadataChanges: true },
         (snapshot) => {
-          // Firestore serves its local cache while there is no connection.
-          // Watching metadata changes lets this modal close as soon as the
-          // server confirms the same data after internet access returns.
-          if (!snapshot.metadata.fromCache) {
-            if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-            offlineTimerRef.current = null;
-            setIsOffline(false);
-          } else if (!offlineTimerRef.current) {
-            offlineTimerRef.current = setTimeout(() => {
-              if (auth.currentUser) setIsOffline(true);
-              offlineTimerRef.current = null;
-            }, 5000);
-          }
           const newPayments = snapshot.docs.map((d) => ({
             id: d.id,
             ...d.data(),
@@ -197,12 +182,7 @@ export default function Dashboard() {
         },
       );
 
-      return () => {
-        unsubscribe();
-        if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-        offlineTimerRef.current = null;
-        setIsOffline(false);
-      };
+      return unsubscribe;
     }, [])
   );
 
@@ -273,6 +253,7 @@ export default function Dashboard() {
   }
 
   async function handleForcedPasswordChange() {
+    if (!(await requireOnlineAction("Changing your password"))) return;
     const pwRegex = /^(?=.*[a-zA-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
     if (!pwRegex.test(newPassword)) {
       setChangePwError("8–12 characters with letters, numbers, and special characters.");
@@ -326,6 +307,14 @@ export default function Dashboard() {
 
   const remainingBill = monthTotalCharge - paidThisMonth;
   const paidPercent = Math.max(0, Math.min(100, (paidThisMonth / Math.max(monthTotalCharge, 1)) * 100));
+  const [remainingBillWhole, remainingBillCents] = Math.max(0, remainingBill)
+    .toLocaleString("en-PH", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+    .split(".");
+  const formatBillValue = (value: number) =>
+    value.toLocaleString("en-PH", { maximumFractionDigits: 2 });
 
   useEffect(() => {
     progressAnim.setValue(0);
@@ -429,7 +418,7 @@ export default function Dashboard() {
       >
         <View style={[styles.header, { paddingTop: topInset + 14 }]}>
           <Image
-            source={require("../../assets/RentWise Logo.png")}
+            source={require("../../assets/rentwise-icon.png")}
             style={styles.headerLogo}
             resizeMode="contain"
           />
@@ -462,9 +451,9 @@ export default function Dashboard() {
               accessibilityLabel="Open AR Stall Designer"
             >
               <View style={styles.arShortcutIcon}>
-                <Camera size={23} color={colors.white} />
+                <ScanLine size={19} color="#BFF5E3" strokeWidth={2.3} />
               </View>
-              <Text style={styles.arShortcutText}>AR</Text>
+              <Text style={styles.arShortcutText} numberOfLines={1}>AR View</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -485,42 +474,59 @@ export default function Dashboard() {
       >
         {/* CARD 1 — Rental payment information */}
         <View style={styles.card} ref={paymentCardRef} collapsable={false}>
-          <View style={styles.paymentCardHeader}>
-            <Text style={styles.cardTitle}>Rental Payment</Text>
-            <View style={styles.monthBadge}>
-              <Text style={styles.monthBadgeText}>{MONTHS[month]} {year}</Text>
-            </View>
-          </View>
-
-          <View style={styles.billBox}>
-            <View style={styles.billHeaderRow}>
-              <AlertCircle size={13} color={colors.error} />
+          <LinearGradient colors={["#FFFFFF", "#F8FFFC"]} style={styles.billBox}>
+            <View style={styles.billLabelRow}>
               <Text style={styles.billLabel}>Remaining Bill</Text>
+              <Text style={styles.billDate}>
+                {MONTHS[month].slice(0, 3).toUpperCase()}/{year}
+              </Text>
             </View>
-            <Text style={styles.billAmount}>₱{remainingBill.toLocaleString()}</Text>
+            <View style={styles.billAmountRow}>
+              <Text style={styles.billAmount}>₱{remainingBillWhole}</Text>
+              <Text style={styles.billCents}>.{remainingBillCents}</Text>
+            </View>
 
-            <View style={styles.progressTrack}>
-              <Animated.View
-                style={[
-                  styles.progressFill,
-                  {
-                    width: progressAnim.interpolate({
-                      inputRange: [0, 100],
-                      outputRange: ["0%", "100%"],
-                      extrapolate: "clamp",
-                    }),
-                  },
-                ]}
-              />
+            <View style={styles.segmentedProgress}>
+              {Array.from({ length: 10 }, (_, index) => (
+                <View key={index} style={styles.progressSegment}>
+                  <Animated.View
+                    style={[
+                      styles.progressSegmentFill,
+                      {
+                        width: progressAnim.interpolate({
+                          inputRange: [index * 10, (index + 1) * 10],
+                          outputRange: ["0%", "100%"],
+                          extrapolate: "clamp",
+                        }),
+                      },
+                    ]}
+                  />
+                </View>
+              ))}
             </View>
 
             <View style={styles.billFooterRow}>
-              <Text style={styles.billFooterText}>
-                <Text style={styles.billFooterStrong}>₱{paidThisMonth.toLocaleString()}</Text> paid
-              </Text>
-              <Text style={styles.billFooterText}>of ₱{monthTotalCharge.toLocaleString()}</Text>
+              <View style={styles.billFooterItem}>
+                <Text style={styles.billFooterText}>Settled</Text>
+                <View style={styles.billFooterValueRow}>
+                  <View style={styles.settledValueDot} />
+                  <Text style={styles.billFooterStrong}>₱{formatBillValue(paidThisMonth)}</Text>
+                </View>
+              </View>
+              <View style={[styles.billFooterItem, styles.totalBillItem]}>
+                <Text style={[styles.billFooterText, styles.totalBillLabel]}>Total Bill</Text>
+                <View style={styles.billFooterValueRow}>
+                  <Text style={styles.billFooterStrong}>₱{formatBillValue(monthTotalCharge)}</Text>
+                  <View
+                    style={[
+                      styles.totalValueDot,
+                      remainingBill <= 0 && styles.totalValueDotComplete,
+                    ]}
+                  />
+                </View>
+              </View>
             </View>
-          </View>
+          </LinearGradient>
 
           <View style={styles.statsRow}>
             <View style={styles.statCard}>
@@ -555,43 +561,34 @@ export default function Dashboard() {
         <View ref={scheduleRef} collapsable={false}>
           <Text style={styles.sectionTitle}>Upcoming Schedule</Text>
 
-          {upcomingSchedule.map((item, index) => (
-            <View key={index} style={styles.scheduleRow}>
-              <View style={styles.scheduleIconCircle}>
-                <Wallet size={18} color={colors.emerald} />
-              </View>
-              <View style={styles.scheduleInfo}>
-                <Text style={styles.scheduleTitle}>Rent Installment</Text>
-                <Text style={styles.scheduleDate}>
-                  {item.date.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
-                </Text>
-              </View>
-              <View style={styles.scheduleRight}>
-                <Text style={styles.scheduleAmount}>₱{item.amount.toLocaleString()}.00</Text>
-                <View style={styles.scheduledBadge}>
-                  <Text style={styles.scheduledBadgeText}>SCHEDULED</Text>
+          {upcomingSchedule.map((item, index) => {
+            const [amountWhole, amountCents] = Number(item.amount)
+              .toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+              .split(".");
+
+            return (
+              <View key={index} style={styles.scheduleRow}>
+                <View style={styles.scheduleDateTile}>
+                  <Text style={styles.scheduleMonth}>
+                    {item.date.toLocaleDateString("en-US", { month: "short" }).toUpperCase()}
+                  </Text>
+                  <Text style={styles.scheduleDay}>{item.date.getDate()}</Text>
+                </View>
+                <View style={styles.scheduleInfo}>
+                  <Text style={styles.scheduleTitle}>Rent Installment</Text>
+                  <View style={styles.scheduledBadge}>
+                    <Text style={styles.scheduledBadgeText}>Scheduled</Text>
+                  </View>
+                </View>
+                <View style={styles.scheduleAmountRow}>
+                  <Text style={styles.scheduleAmount}>₱{amountWhole}</Text>
+                  <Text style={styles.scheduleAmountCents}>.{amountCents}</Text>
                 </View>
               </View>
-            </View>
-          ))}
+            );
+          })}
         </View>
       </ScrollView>
-
-      {/* The dashboard can render Firestore's cached data offline. Make the
-          stale state explicit so tenants do not mistake it for live data. */}
-      <Modal visible={isOffline && !!auth.currentUser} transparent animationType="fade" onRequestClose={() => {}}>
-        <View style={styles.offlineOverlay}>
-          <View style={styles.offlineCard}>
-            <View style={styles.offlineIcon}>
-              <AlertCircle size={28} color={colors.error} />
-            </View>
-            <Text style={styles.offlineTitle}>No internet connection</Text>
-            <Text style={styles.offlineMessage}>
-              Your device is offline. Connect to the internet to view the latest rental information.
-            </Text>
-          </View>
-        </View>
-      </Modal>
 
       {/* FORCED PASSWORD CHANGE MODAL */}
       <Modal visible={mustChangePassword} transparent animationType="fade" onRequestClose={() => {}}>
@@ -710,47 +707,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.parchment,
   },
 
-  offlineOverlay: {
-    flex: 1,
-    backgroundColor: colors.overlay,
-    justifyContent: "center",
-    padding: spacing.xxl,
-  },
-
-  offlineCard: {
-    backgroundColor: colors.white,
-    borderRadius: radius.lg,
-    padding: spacing.xxl,
-    alignItems: "center",
-    ...shadow.raised,
-  },
-
-  offlineIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: "#FDECEC",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: spacing.md,
-  },
-
-  offlineTitle: {
-    fontSize: fontSize.lg,
-    fontFamily: fontFamily.bold,
-    color: colors.ink,
-    textAlign: "center",
-  },
-
-  offlineMessage: {
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.regular,
-    color: colors.textSecondary,
-    textAlign: "center",
-    lineHeight: 20,
-    marginTop: spacing.sm,
-  },
-
   // ── Header ──────────────────────────────────────
   headerGradient: {
     borderBottomLeftRadius: 24,
@@ -788,7 +744,8 @@ const styles = StyleSheet.create({
   // ── Profile banner ───────────────────────────────
   banner: {
     paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.lg + 2,
+    paddingTop: 0,
+    paddingBottom: spacing.md,
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md + 2,
@@ -811,29 +768,36 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   arShortcut: {
-    width: 68,
-    height: 68,
-    borderRadius: radius.lg,
+    width: 108,
+    height: 42,
+    borderRadius: 21,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.3)",
-    backgroundColor: "rgba(255,255,255,0.13)",
+    borderColor: "rgba(8, 91, 68, 0.18)",
+    backgroundColor: "#DDF4EC",
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: 3,
+    paddingHorizontal: 8,
+    gap: 6,
+    shadowColor: "#001F17",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.2,
+    shadowRadius: 7,
+    elevation: 6,
   },
   arShortcutIcon: {
-    width: 36,
-    height: 30,
-    borderRadius: radius.sm,
-    backgroundColor: "rgba(255,255,255,0.12)",
+    width: 27,
+    height: 27,
+    borderRadius: 14,
+    backgroundColor: "#075B45",
     alignItems: "center",
     justifyContent: "center",
   },
   arShortcutText: {
-    color: colors.white,
-    fontSize: 11,
+    flex: 1,
+    color: colors.ink,
+    fontSize: 13,
     fontFamily: fontFamily.bold,
-    letterSpacing: 0.8,
+    flexShrink: 0,
   },
 
   // ── Body ────────────────────────────────────────
@@ -885,61 +849,185 @@ const styles = StyleSheet.create({
   },
 
   billBox: {
-    backgroundColor: colors.mist,
-    borderRadius: radius.md,
-    padding: spacing.lg,
+    borderRadius: radius.lg,
+    padding: spacing.lg + 2,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(15, 125, 91, 0.24)",
   },
 
-  billHeaderRow: {
+  billTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: spacing.xl,
+  },
+
+  cycleBadge: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 5,
+    backgroundColor: "#F1F3F1",
+    borderRadius: radius.pill,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+
+  cycleBadgeText: {
+    fontSize: 10,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
+  },
+
+  dueBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "#FFD9D8",
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+
+  dueDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: "#E43030",
+  },
+
+  dueBadgeText: {
+    fontSize: 10,
+    fontFamily: fontFamily.semibold,
+    color: "#A91F22",
+  },
+
+  settledBadge: {
+    backgroundColor: colors.emeraldSoft,
+  },
+
+  settledDot: {
+    backgroundColor: colors.emerald,
+  },
+
+  settledBadgeText: {
+    color: colors.emerald,
   },
 
   billLabel: {
     fontSize: fontSize.xs,
-    fontFamily: fontFamily.semibold,
-    color: colors.textSecondary,
-    letterSpacing: 0.4,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    letterSpacing: 1.2,
     textTransform: "uppercase",
   },
 
+  billLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  billDate: {
+    fontSize: 10,
+    fontFamily: fontFamily.medium,
+    color: colors.textSecondary,
+  },
+
+  billAmountRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    marginTop: 2,
+    marginBottom: spacing.lg,
+  },
+
   billAmount: {
-    fontSize: fontSize.display,
+    fontSize: 40,
     fontFamily: fontFamily.extrabold,
-    color: colors.error,
-    marginTop: 4,
+    color: colors.ink,
+    letterSpacing: -1,
+  },
+
+  billCents: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
+    marginLeft: 3,
+    marginBottom: 5,
+  },
+
+  segmentedProgress: {
+    flexDirection: "row",
+    gap: 7,
     marginBottom: spacing.md,
   },
 
-  progressTrack: {
-    height: 8,
+  progressSegment: {
+    flex: 1,
+    height: 10,
     borderRadius: radius.pill,
-    backgroundColor: colors.border,
+    backgroundColor: "#E4E7E5",
     overflow: "hidden",
-    marginBottom: spacing.sm,
   },
 
-  progressFill: {
+  progressSegmentFill: {
     height: "100%",
     borderRadius: radius.pill,
-    backgroundColor: colors.emerald,
+    backgroundColor: colors.emeraldBright,
   },
 
   billFooterRow: {
     flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "center",
+  },
+
+  billFooterItem: {
+    gap: 2,
+  },
+
+  totalBillItem: {
+    alignItems: "flex-end",
+  },
+
+  billFooterValueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+
+  settledValueDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: colors.emerald,
+  },
+
+  totalValueDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: "#BBC4BF",
+  },
+
+  totalValueDotComplete: {
+    backgroundColor: colors.emerald,
   },
 
   billFooterText: {
     fontSize: fontSize.xs,
-    fontFamily: fontFamily.regular,
-    color: colors.textSecondary,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
+  },
+
+  totalBillLabel: {
+    textAlign: "right",
   },
 
   billFooterStrong: {
     fontFamily: fontFamily.bold,
-    color: colors.ink,
+    fontSize: fontSize.lg,
+    color: colors.emerald,
   },
 
   statsRow: {
@@ -995,20 +1083,37 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: colors.white,
-    borderRadius: radius.md,
-    padding: spacing.md + 2,
-    marginBottom: spacing.md,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: "rgba(15, 125, 91, 0.14)",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm + 2,
     ...shadow.card,
   },
 
-  scheduleIconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.emeraldSoft,
+  scheduleDateTile: {
+    width: 52,
+    height: 52,
+    borderRadius: radius.sm + 2,
+    backgroundColor: colors.ink,
     alignItems: "center",
     justifyContent: "center",
-    marginRight: spacing.md,
+    marginRight: spacing.sm + 2,
+  },
+
+  scheduleMonth: {
+    color: "#7FF0CF",
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.bold,
+    lineHeight: 14,
+  },
+
+  scheduleDay: {
+    color: colors.white,
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.extrabold,
+    lineHeight: 21,
   },
 
   scheduleInfo: {
@@ -1016,41 +1121,43 @@ const styles = StyleSheet.create({
   },
 
   scheduleTitle: {
-    fontSize: fontSize.base,
+    fontSize: fontSize.sm,
     fontFamily: fontFamily.bold,
     color: colors.ink,
   },
 
-  scheduleDate: {
-    fontSize: fontSize.xs + 1,
-    fontFamily: fontFamily.regular,
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
-
-  scheduleRight: {
-    alignItems: "flex-end",
+  scheduleAmountRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    marginLeft: spacing.sm,
   },
 
   scheduleAmount: {
-    fontSize: fontSize.base,
-    fontFamily: fontFamily.bold,
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.extrabold,
     color: colors.ink,
   },
 
+  scheduleAmountCents: {
+    fontSize: 10,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
+    marginLeft: 2,
+  },
+
   scheduledBadge: {
+    alignSelf: "flex-start",
     backgroundColor: colors.emeraldSoft,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.sm,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.sm + 2,
     paddingVertical: 2,
-    marginTop: 4,
+    marginTop: 3,
   },
 
   scheduledBadgeText: {
-    fontSize: 9,
-    fontFamily: fontFamily.bold,
+    fontSize: 10,
+    fontFamily: fontFamily.semibold,
     color: colors.emerald,
-    letterSpacing: 0.3,
   },
 
   // ── Pay modal ────────────────────────────────────

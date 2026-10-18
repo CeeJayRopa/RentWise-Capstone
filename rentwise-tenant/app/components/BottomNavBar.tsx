@@ -7,8 +7,8 @@ import { bottomNavRefs } from "./bottomNavRefs";
 
 type NavKey = keyof typeof bottomNavRefs;
 
-const PILL_WIDTH = 40;
-const PILL_HEIGHT = 28;
+const PILL_WIDTH = 58;
+const PILL_HEIGHT = 30;
 
 const TAB_CONFIG: { routeName: string; key: NavKey; label: string; Icon: typeof House }[] = [
   { routeName: "dashboard", key: "home", label: "Home", Icon: House },
@@ -84,31 +84,33 @@ export default function BottomNavBar({ state, navigation, insets }: BottomTabBar
   }, [activeRouteName]);
 
   return (
-    <View style={[styles.bar, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-      <Animated.View
-        pointerEvents="none"
-        style={[styles.pill, { opacity: pillOpacity, transform: [{ translateX: pillX }] }]}
-      />
-      {TAB_CONFIG.map((tab) => {
-        const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
-        const route = state.routes[routeIndex];
-        const isFocused = routeIndex !== -1 && state.index === routeIndex;
+    <View style={styles.barBackdrop}>
+      <View style={[styles.bar, { paddingBottom: Math.max(insets.bottom - 10, 6) }]}>
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.pill, { opacity: pillOpacity, transform: [{ translateX: pillX }] }]}
+        />
+        {TAB_CONFIG.map((tab) => {
+          const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
+          const route = state.routes[routeIndex];
+          const isFocused = routeIndex !== -1 && state.index === routeIndex;
 
-        return (
-          <NavItem
-            key={tab.key}
-            itemRef={bottomNavRefs[tab.key]}
-            label={tab.label}
-            Icon={tab.Icon}
-            active={isFocused}
-            onPress={() => {
-              if (!route || isFocused) return;
-              navigation.navigate(route.name);
-            }}
-            onLayout={(e) => onItemLayout(tab.routeName, e)}
-          />
-        );
-      })}
+          return (
+            <NavItem
+              key={tab.key}
+              itemRef={bottomNavRefs[tab.key]}
+              label={tab.label}
+              Icon={tab.Icon}
+              active={isFocused}
+              onPress={() => {
+                if (!route || isFocused) return;
+                navigation.navigate(route.name);
+              }}
+              onLayout={(e) => onItemLayout(tab.routeName, e)}
+            />
+          );
+        })}
+      </View>
     </View>
   );
 }
@@ -132,7 +134,7 @@ function NavItem({
     <View ref={itemRef} collapsable={false} style={styles.item} onLayout={onLayout}>
       <Pressable style={styles.itemPressable} onPress={onPress} hitSlop={8}>
         <View style={styles.iconWrap}>
-          <Icon size={20} color={active ? colors.emerald : colors.textMuted} />
+          <Icon size={19} color={active ? colors.ink : "#9CB0A8"} strokeWidth={active ? 2.25 : 1.8} />
         </View>
         <Text style={[styles.label, active && styles.labelActive]}>{label}</Text>
       </Pressable>
@@ -141,24 +143,34 @@ function NavItem({
 }
 
 const styles = StyleSheet.create({
+  barBackdrop: {
+    backgroundColor: colors.parchment,
+  },
+
   bar: {
     flexDirection: "row",
     backgroundColor: colors.white,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-    paddingTop: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    ...shadow.raised,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(14, 107, 84, 0.12)",
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingTop: 2,
+    paddingHorizontal: spacing.xxl,
+    shadowColor: "#0B2B22",
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 8,
   },
 
   pill: {
     position: "absolute",
-    top: spacing.sm,
+    top: 2,
     left: 0,
     width: PILL_WIDTH,
     height: PILL_HEIGHT,
     borderRadius: radius.pill,
-    backgroundColor: colors.emeraldSoft,
+    backgroundColor: "#BFEBDD",
   },
 
   item: {
@@ -167,7 +179,7 @@ const styles = StyleSheet.create({
 
   itemPressable: {
     alignItems: "center",
-    gap: 4,
+    gap: 2,
   },
 
   iconWrap: {
@@ -180,7 +192,7 @@ const styles = StyleSheet.create({
   label: {
     fontSize: fontSize.xs,
     fontFamily: fontFamily.medium,
-    color: colors.textMuted,
+    color: "#9CB0A8",
   },
 
   labelActive: {

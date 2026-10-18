@@ -22,14 +22,15 @@ import { doc, onSnapshot, updateDoc } from "firebase/firestore";
 import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 import { auth } from "../../shared/firebaseConfig";
 import { db } from "../../shared/services/firestore";
-import { getTenantData, updateTenantProfile, syncPersonalEmail } from "../../services/tenantService";
+import { getTenantData, updateTenantProfile } from "../../services/tenantService";
 import { logoutUser } from "../../services/authService";
 import { setRememberMe } from "../../shared/services/rememberMe";
 import { router, useFocusEffect } from "expo-router";
-import { Store, Tag, CheckCircle2, LogOut, User, Phone, Mail, Pencil, ShieldCheck, HelpCircle, Eye, EyeOff } from "lucide-react-native";
+import { Tag, CheckCircle2, LogOut, User, Phone, Pencil, ShieldCheck, HelpCircle, Eye, EyeOff, KeyRound, Info, RotateCcw, Droplet, Archive, Store } from "lucide-react-native";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import HelpTour, { HelpStep } from "../components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
+import { requireOnlineAction } from "../../shared/services/networkStatus";
 
 type MarketCategory = "Wet Market" | "Dry Market" | "Home Essential";
 const MARKET_CATEGORIES: MarketCategory[] = ["Wet Market", "Dry Market", "Home Essential"];
@@ -39,15 +40,14 @@ export default function Profile() {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [contact, setContact] = useState("");
-  const [personalEmail, setPersonalEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [stallId, setStallId] = useState("");
   const [memberSince, setMemberSince] = useState("");
   const [category, setCategory] = useState<MarketCategory | "">("");
   const [lastNameFocused, setLastNameFocused] = useState(false);
   const [firstNameFocused, setFirstNameFocused] = useState(false);
   const [contactFocused, setContactFocused] = useState(false);
-  const [emailFocused, setEmailFocused] = useState(false);
-  const [original, setOriginal] = useState({ firstName: "", lastName: "", contact: "", personalEmail: "", category: "" as MarketCategory | "" });
+  const [original, setOriginal] = useState({ firstName: "", lastName: "", contact: "", username: "", category: "" as MarketCategory | "" });
   const [isEditing, setIsEditing] = useState(false);
   const [showToast, setShowToast] = useState(false);
 
@@ -159,7 +159,7 @@ export default function Profile() {
   const tourSteps: HelpStep[] = [
     { key: "identity", ref: identityRef, title: "Your space", description: "Your space ID and how long you've been a tenant.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(identityRef) },
     { key: "category", ref: categoryRef, title: "Market category", description: "The kind of goods sold at your stall. Tap Edit Profile to change it — updates here sync with the admin's records too.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(categoryRef) },
-    { key: "form", ref: formRef, endRef: emailSectionRef, title: "Your details", description: "Your name, contact number, and registered Gmail. Gmail identifies your account, while SMS OTP secures password recovery.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(formRef) },
+    { key: "form", ref: formRef, endRef: emailSectionRef, title: "Your details", description: "Your name, contact number, and assigned login username. SMS OTP secures password recovery.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(formRef) },
     { key: "save", ref: saveBtnRef, title: "Edit Profile", description: "Unlocks the fields above so you can update them.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(saveBtnRef) },
     { key: "password", ref: pwSectionRef, title: "Change password", description: "Set a new login password without needing the Forgot Password flow. Must be 8-12 characters with an uppercase letter, a number, and a special character.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(pwSectionRef) },
     { key: "signout", ref: signOutRef, title: "Sign out", description: "Signs you out of your account.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(signOutRef) },
@@ -216,7 +216,7 @@ export default function Profile() {
         setFirstName(data.firstName || "");
         setLastName(data.lastName || "");
         setContact(data.contactNo || "");
-        setPersonalEmail(data.personalEmail || "");
+        setUsername(data.username || "");
         setStallId(data.stallId || "");
         const createdAt = (data as any).createdAt;
         if (createdAt?.toDate) {
@@ -232,7 +232,7 @@ export default function Profile() {
           firstName: data.firstName || "",
           lastName: data.lastName || "",
           contact: data.contactNo || "",
-          personalEmail: data.personalEmail || "",
+          username: data.username || "",
           category: "",
         });
       }
@@ -265,6 +265,7 @@ export default function Profile() {
   }
 
   async function handleChangePassword() {
+    if (!(await requireOnlineAction("Changing your password"))) return;
     const pwRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
     let valid = true;
 
@@ -383,17 +384,15 @@ export default function Profile() {
     setFirstName(original.firstName);
     setLastName(original.lastName);
     setContact(original.contact);
-    setPersonalEmail(original.personalEmail);
     setCategory(original.category);
     setIsEditing(false);
   }
 
   async function saveProfile() {
+    if (!(await requireOnlineAction("Saving your profile"))) return;
     const fn = firstName.trim();
     const ln = lastName.trim();
     const cn = contact.trim();
-    const pe = personalEmail.trim().toLowerCase();
-    const emailRegex = /^[A-Z0-9._%+-]+@gmail\.com$/i;
 
     if (!fn || !ln || !cn) {
       Alert.alert("Missing Information", "Name and contact no. are required.");
@@ -403,26 +402,10 @@ export default function Profile() {
       Alert.alert("Invalid Contact Number", "Enter a valid 10-digit number starting with 9.");
       return;
     }
-    if (pe && !emailRegex.test(pe)) {
-      Alert.alert("Invalid Gmail", "Enter a valid @gmail.com address, or leave it blank.");
-      return;
-    }
 
     try {
       const user = auth.currentUser;
       if (!user) return;
-
-      // Sync the email first — if it fails (e.g. already used by another
-      // account), nothing else has changed yet.
-      if (pe && pe !== original.personalEmail) {
-        try {
-          await syncPersonalEmail(pe);
-        } catch (error) {
-          console.log("Email Sync Error:", error);
-          Alert.alert("Error", "Couldn't save that email — it may already be in use.");
-          return;
-        }
-      }
 
       const profileUpdates: Record<string, any> = { firstName: fn, lastName: ln, contactNo: cn };
       if (category !== original.category) {
@@ -440,7 +423,7 @@ export default function Profile() {
       setFirstName(fn);
       setLastName(ln);
       setContact(cn);
-      setOriginal({ firstName: fn, lastName: ln, contact: cn, personalEmail: pe, category });
+      setOriginal({ firstName: fn, lastName: ln, contact: cn, username, category });
       setIsEditing(false);
       triggerToast();
     } catch (error) {
@@ -453,17 +436,16 @@ export default function Profile() {
     <View style={styles.root}>
       {/* Header */}
       <LinearGradient
-        colors={[colors.emerald, colors.ink]}
+        colors={[colors.parchment, colors.parchment]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.headerGradient}
       >
-        <View style={[styles.header, { paddingTop: insets.top + 28 }]}>
-          <View style={styles.headerSpacer} />
-          <Text style={styles.headerTitle}>Manage Profile</Text>
+        <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
+          <Text style={styles.headerTitle}>Profile</Text>
           <View ref={helpRef} collapsable={false}>
             <Pressable onPress={() => setTourVisible(true)} hitSlop={8} style={styles.helpBtn}>
-              <HelpCircle size={22} color={colors.white} />
+              <HelpCircle size={20} color={colors.ink} />
             </Pressable>
           </View>
         </View>
@@ -484,25 +466,29 @@ export default function Profile() {
       >
         {/* Identity card */}
         <View style={styles.identityCard} ref={identityRef} collapsable={false}>
-          <View style={styles.avatarWrap}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>
-                {`${firstName?.[0] ?? ""}${lastName?.[0] ?? ""}`.toUpperCase() || "?"}
+          <View style={styles.identityMainRow}>
+            <View style={styles.avatarWrap}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>
+                  {`${firstName?.[0] ?? ""}${lastName?.[0] ?? ""}`.toUpperCase() || "?"}
+                </Text>
+              </View>
+              <View style={styles.avatarBadge}>
+                <ShieldCheck size={10} color={colors.emerald} />
+              </View>
+            </View>
+
+            <View style={styles.identityInfo}>
+              <Text style={styles.identityName}>{firstName} {lastName}</Text>
+              <Text style={styles.identitySubtitle}>
+                Tenant{memberSince ? ` · Member since ${memberSince}` : ""}
               </Text>
             </View>
-            <View style={styles.avatarBadge}>
-              <ShieldCheck size={12} color={colors.emerald} />
+
+            <View style={styles.spaceIdChip}>
+              <Text style={styles.spaceIdText}>Space ID: {stallId || "—"}</Text>
             </View>
           </View>
-
-          <View style={styles.spaceIdChip}>
-            <Store size={14} color={colors.emerald} style={{ marginRight: 6 }} />
-            <Text style={styles.spaceIdText}>Space ID: {stallId || "—"}</Text>
-          </View>
-
-          <Text style={styles.identitySubtitle}>
-            Tenant{memberSince ? ` · Member since ${memberSince}` : ""}
-          </Text>
         </View>
 
         {/* Market category card */}
@@ -512,39 +498,32 @@ export default function Profile() {
             <Text style={styles.label}>Market category</Text>
           </View>
           <View style={[styles.categoryRow, !isEditing && styles.categoryRowReadOnly]}>
-            {MARKET_CATEGORIES.map((c) => (
-              <Pressable
-                key={c}
-                style={[styles.categoryTab, category === c && styles.categoryTabActive]}
-                onPress={() => setCategory(c)}
-                disabled={!isEditing}
-              >
-                <Text style={[styles.categoryTabText, category === c && styles.categoryTabTextActive]}>
-                  {c}
-                </Text>
-              </Pressable>
-            ))}
+            {MARKET_CATEGORIES.map((c) => {
+              const CategoryIcon = c === "Wet Market" ? Droplet : c === "Dry Market" ? Archive : Store;
+              const isActive = category === c;
+              return (
+                <Pressable
+                  key={c}
+                  style={[styles.categoryTab, isActive && styles.categoryTabActive]}
+                  onPress={() => setCategory(c)}
+                  disabled={!isEditing}
+                >
+                  <CategoryIcon size={13} color={isActive ? colors.white : colors.emerald} strokeWidth={2} />
+                  <Text
+                    numberOfLines={1}
+                    style={[styles.categoryTabText, isActive && styles.categoryTabTextActive]}
+                  >
+                    {c}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
         </View>
 
         {/* Form card */}
         <View style={styles.formCard} ref={formRef} collapsable={false}>
-          {/* Last name */}
-          <View style={styles.labelRow}>
-            <User size={13} color={colors.emerald} />
-            <Text style={styles.label}>Last name</Text>
-          </View>
-          <TextInput
-            style={[styles.input, !isEditing && styles.inputReadOnly, isEditing && lastNameFocused && styles.inputFocused]}
-            value={lastName}
-            onChangeText={setLastName}
-            placeholder="Enter last name"
-            placeholderTextColor={colors.textMuted}
-            editable={isEditing}
-            onFocus={() => { setLastNameFocused(true); scrollFieldIntoView(formRef); }}
-            onBlur={() => setLastNameFocused(false)}
-          />
-
+          <Text style={styles.personalInfoTitle}>Personal Information</Text>
           {/* First name */}
           <View style={styles.labelRow}>
             <User size={13} color={colors.emerald} />
@@ -559,6 +538,22 @@ export default function Profile() {
             editable={isEditing}
             onFocus={() => { setFirstNameFocused(true); scrollFieldIntoView(formRef); }}
             onBlur={() => setFirstNameFocused(false)}
+          />
+
+          {/* Last name */}
+          <View style={styles.labelRow}>
+            <User size={13} color={colors.emerald} />
+            <Text style={styles.label}>Last name</Text>
+          </View>
+          <TextInput
+            style={[styles.input, !isEditing && styles.inputReadOnly, isEditing && lastNameFocused && styles.inputFocused]}
+            value={lastName}
+            onChangeText={setLastName}
+            placeholder="Enter last name"
+            placeholderTextColor={colors.textMuted}
+            editable={isEditing}
+            onFocus={() => { setLastNameFocused(true); scrollFieldIntoView(formRef); }}
+            onBlur={() => setLastNameFocused(false)}
           />
 
           {/* Contact no. */}
@@ -584,47 +579,23 @@ export default function Profile() {
             />
           </View>
 
-          {/* Personal email — optional, enables self-service password reset.
-              Once set, it's shown read-only (changing an email in place isn't
-              supported yet — that's a bigger operation than adding one).
-              Wrapped in its own ref so the "Your details" tour step's
-              spotlight can end here instead of at formRef's full height,
-              which also spans the Save/Edit button below. */}
+          {/* The Firebase email identifier stays internal. The assigned
+              username is the only credential identifier shown to tenants. */}
           <View ref={emailSectionRef} collapsable={false}>
             <View style={styles.labelRow}>
-              <Mail size={13} color={colors.emerald} />
-              <Text style={styles.label}>Email</Text>
+              <User size={13} color={colors.emerald} />
+              <Text style={styles.label}>Username</Text>
             </View>
-            {!original.personalEmail && (
-              <Text style={styles.emailHint}>
-                Add this so you can reset your own password later, without needing the admin.
-              </Text>
-            )}
             <TextInput
               style={[
                 styles.input,
-                (!isEditing || !!original.personalEmail) && styles.inputReadOnly,
-                isEditing && !original.personalEmail && emailFocused && styles.inputFocused,
+                styles.inputReadOnly,
               ]}
-              value={personalEmail}
-              onChangeText={setPersonalEmail}
-              placeholder="example@gmail.com"
+              value={username}
+              placeholder="Assigned by RentWise"
               placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              keyboardType="email-address"
-              editable={isEditing && !original.personalEmail}
-              onFocus={() => { setEmailFocused(true); scrollFieldIntoView(emailSectionRef); }}
-              onBlur={() => setEmailFocused(false)}
+              editable={false}
             />
-
-            {!!original.personalEmail && (
-              <View style={styles.verifyRow}>
-                <View style={styles.verifyBadgeSuccess}>
-                  <Mail size={13} color={colors.emerald} />
-                  <Text style={styles.verifyBadgeSuccessText}>Registered Gmail</Text>
-                </View>
-              </View>
-            )}
           </View>
 
           {/* Edit / Save button */}
@@ -633,7 +604,6 @@ export default function Profile() {
               firstName !== original.firstName ||
               lastName !== original.lastName ||
               contact !== original.contact ||
-              personalEmail.trim() !== original.personalEmail ||
               category !== original.category;
             const hasEmptyField = !firstName.trim() || !lastName.trim() || !contact.trim();
             const disabled = isEditing && (!hasChanges || hasEmptyField);
@@ -679,14 +649,15 @@ export default function Profile() {
                 ref={saveBtnRef}
                 style={({ pressed }) => [
                   styles.saveButton,
+                  styles.profileEditButton,
                   pressed && { backgroundColor: colors.white, transform: [{ scale: 0.97 }] },
                 ]}
                 onPress={handleStartEditProfile}
               >
                 {({ pressed }) => (
                   <>
-                    <Pencil size={15} color={pressed ? colors.emerald : colors.white} style={{ marginRight: 8 }} />
-                    <Text style={[styles.saveText, pressed && styles.pwUpdateBtnTextPressed]}>Edit Profile</Text>
+                    <Pencil size={13} color={colors.ink} style={{ marginRight: 6 }} />
+                    <Text style={styles.profileEditText}>Edit Profile</Text>
                   </>
                 )}
               </Pressable>
@@ -696,7 +667,10 @@ export default function Profile() {
 
         {/* Change password */}
         <View ref={pwSectionRef} collapsable={false} style={styles.formCard}>
-          <Text style={styles.sectionTitle}>Change Password</Text>
+          <View style={styles.passwordTitleRow}>
+            <RotateCcw size={18} color={colors.emerald} strokeWidth={2.2} />
+            <Text style={styles.sectionTitle}>Change Password</Text>
+          </View>
 
           <View style={styles.labelRow}>
             <Text style={styles.label}>Current password</Text>
@@ -717,7 +691,7 @@ export default function Profile() {
               editable={pwEditing}
             />
             <Pressable onPress={() => setShowOldPass((v) => !v)} hitSlop={8}>
-              {showOldPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+              {showOldPass ? <Eye size={18} color={colors.ink} /> : <EyeOff size={18} color={colors.ink} />}
             </Pressable>
           </View>
           {!!oldPwError && <Text style={styles.pwFieldErrorText}>{oldPwError}</Text>}
@@ -743,11 +717,10 @@ export default function Profile() {
               editable={pwEditing}
             />
             <Pressable onPress={() => setShowNewPass((v) => !v)} hitSlop={8}>
-              {showNewPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+              {showNewPass ? <Eye size={18} color={colors.ink} /> : <EyeOff size={18} color={colors.ink} />}
             </Pressable>
           </View>
           {!!pwError && <Text style={styles.pwFieldErrorText}>{pwError}</Text>}
-          <Text style={styles.emailHint}>Min. 8 characters with a capital letter, a number, and a special character.</Text>
 
           <View style={styles.labelRow}>
             <Text style={styles.label}>Confirm password</Text>
@@ -769,10 +742,15 @@ export default function Profile() {
               editable={pwEditing}
             />
             <Pressable onPress={() => setShowConfirmPass((v) => !v)} hitSlop={8}>
-              {showConfirmPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+              {showConfirmPass ? <Eye size={18} color={colors.ink} /> : <EyeOff size={18} color={colors.ink} />}
             </Pressable>
           </View>
           {!!confirmError && <Text style={styles.pwFieldErrorText}>{confirmError}</Text>}
+
+          <View style={styles.passwordHintBox}>
+            <Info size={15} color={colors.emerald} />
+            <Text style={styles.emailHint}>Minimum 8 characters with a capital letter, a number, and a special character</Text>
+          </View>
 
           {pwEditing ? (
             <View style={styles.pwActionsRow}>
@@ -792,6 +770,7 @@ export default function Profile() {
                 style={({ pressed }) => [
                   styles.saveButton,
                   styles.pwUpdateBtn,
+                  styles.passwordPrimaryButton,
                   (changingPw || !oldPassword || newPassword.length < 8 || confirmPassword.length < 8) &&
                     styles.saveButtonDisabled,
                   pressed && !changingPw && { backgroundColor: colors.white, transform: [{ scale: 0.97 }] },
@@ -816,13 +795,14 @@ export default function Profile() {
             <Pressable
               style={({ pressed }) => [
                 styles.saveButton,
+                styles.passwordPrimaryButton,
                 pressed && { backgroundColor: colors.white, transform: [{ scale: 0.97 }] },
               ]}
               onPress={handleStartEditPassword}
             >
               {({ pressed }) => (
                 <>
-                  <Pencil size={15} color={pressed ? colors.emerald : colors.white} style={{ marginRight: 8 }} />
+                  <KeyRound size={16} color={pressed ? colors.ink : colors.white} style={{ marginRight: 8 }} />
                   <Text style={[styles.saveText, pressed && styles.pwUpdateBtnTextPressed]}>Change Password</Text>
                 </>
               )}
@@ -984,23 +964,21 @@ const styles = StyleSheet.create({
 
   // ── Header ──────────────────────────────────────
   headerGradient: {
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-    overflow: "hidden",
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
 
   header: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: spacing.xl,
-    paddingBottom: spacing.xxl + 4,
+    justifyContent: "space-between",
+    paddingBottom: spacing.sm,
   },
 
   headerTitle: {
-    flex: 1,
-    textAlign: "center",
-    color: colors.white,
-    fontSize: fontSize.lg,
+    color: colors.ink,
+    fontSize: fontSize.base,
     fontFamily: fontFamily.bold,
   },
 
@@ -1009,10 +987,10 @@ const styles = StyleSheet.create({
   },
 
   helpBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.16)",
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.mist,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1024,36 +1002,40 @@ const styles = StyleSheet.create({
   },
 
   bodyContent: {
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xxl,
-    gap: spacing.lg,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    gap: spacing.md,
   },
 
   // ── Identity card ─────────────────────────────────
   identityCard: {
-    backgroundColor: colors.white,
+    backgroundColor: colors.ink,
     borderRadius: radius.lg,
-    paddingVertical: spacing.xxl,
-    alignItems: "center",
+    padding: spacing.md,
     ...shadow.card,
   },
 
+  identityMainRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+
   avatarWrap: {
-    marginBottom: spacing.lg,
+    marginRight: spacing.md,
   },
 
   avatar: {
-    width: 88,
-    height: 88,
-    borderRadius: radius.xl,
-    backgroundColor: colors.emerald,
+    width: 48,
+    height: 48,
+    borderRadius: radius.md,
+    backgroundColor: "#063D31",
     alignItems: "center",
     justifyContent: "center",
   },
 
   avatarText: {
     color: colors.white,
-    fontSize: fontSize.xxl,
+    fontSize: fontSize.sm,
     fontFamily: fontFamily.extrabold,
   },
 
@@ -1061,53 +1043,62 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: -4,
     right: -4,
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: colors.white,
-    borderWidth: 2,
-    borderColor: colors.emeraldSoft,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: colors.emeraldSoft,
+    borderWidth: 1,
+    borderColor: colors.white,
     alignItems: "center",
     justifyContent: "center",
   },
 
+  identityInfo: {
+    flex: 1,
+  },
+
+  identityName: {
+    color: colors.white,
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+  },
+
   identitySubtitle: {
-    fontSize: fontSize.sm,
+    fontSize: 10,
     fontFamily: fontFamily.regular,
-    color: colors.textSecondary,
-    marginTop: spacing.sm,
+    color: colors.emeraldSoft,
+    marginTop: 3,
   },
 
   // ── Space ID chip ────────────────────────────────
   spaceIdChip: {
     flexDirection: "row",
     alignItems: "center",
-    alignSelf: "center",
+    alignSelf: "flex-start",
     backgroundColor: colors.emeraldSoft,
     borderRadius: radius.pill,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.xs + 2,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
   },
 
   spaceIdText: {
-    fontSize: fontSize.sm,
+    fontSize: 9,
     color: colors.emerald,
     fontFamily: fontFamily.semibold,
   },
 
   // ── Market category card ─────────────────────────
   categoryCard: {
-    backgroundColor: colors.white,
-    borderRadius: radius.lg,
-    padding: spacing.xl,
-    ...shadow.card,
+    paddingHorizontal: 2,
   },
 
   categoryRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm + 2,
+    flexWrap: "nowrap",
+    justifyContent: "space-between",
+    gap: 3,
     marginTop: 2,
+    width: "100%",
   },
 
   categoryRowReadOnly: {
@@ -1115,13 +1106,16 @@ const styles = StyleSheet.create({
   },
 
   categoryTab: {
-    flexBasis: "47%",
-    flexGrow: 1,
-    maxWidth: "47%",
-    paddingVertical: spacing.md - 1,
-    paddingHorizontal: spacing.sm - 2,
-    borderRadius: radius.pill,
+    flexDirection: "row",
+    width: "32.5%",
+    minWidth: 0,
+    paddingVertical: 5,
+    paddingHorizontal: 3,
+    borderRadius: radius.sm,
+    justifyContent: "center",
     alignItems: "center",
+    gap: 2,
+    overflow: "hidden",
     backgroundColor: colors.mist,
   },
 
@@ -1130,7 +1124,8 @@ const styles = StyleSheet.create({
   },
 
   categoryTabText: {
-    fontSize: fontSize.sm,
+    fontSize: 9,
+    flexShrink: 1,
     fontFamily: fontFamily.medium,
     color: colors.textSecondary,
     textAlign: "center",
@@ -1145,7 +1140,7 @@ const styles = StyleSheet.create({
   formCard: {
     backgroundColor: colors.white,
     borderRadius: radius.lg,
-    padding: spacing.xl,
+    padding: spacing.md,
     ...shadow.card,
   },
 
@@ -1154,18 +1149,49 @@ const styles = StyleSheet.create({
     fontSize: fontSize.base,
     fontFamily: fontFamily.bold,
     color: colors.ink,
+    marginBottom: 0,
+  },
+
+  passwordTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
     marginBottom: spacing.lg,
+  },
+
+  personalInfoTitle: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    marginBottom: spacing.lg,
+  },
+
+  profileEditButton: {
+    position: "absolute",
+    top: spacing.md,
+    right: spacing.md,
+    width: "auto",
+    paddingHorizontal: spacing.md,
+    paddingVertical: 7,
+    borderRadius: radius.sm,
+    backgroundColor: colors.mist,
+  },
+
+  profileEditText: {
+    color: colors.ink,
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
   },
 
   pwField: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: colors.white,
-    borderRadius: radius.pill,
-    borderWidth: 1.5,
-    borderColor: colors.emeraldSoft,
-    paddingHorizontal: spacing.lg,
+    backgroundColor: colors.mist,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.mist,
+    paddingHorizontal: spacing.md,
     marginBottom: spacing.sm - 2,
   },
 
@@ -1175,8 +1201,8 @@ const styles = StyleSheet.create({
 
   pwInput: {
     flex: 1,
-    paddingVertical: spacing.md + 1,
-    fontSize: fontSize.base,
+    paddingVertical: spacing.sm + 2,
+    fontSize: fontSize.sm,
     fontFamily: fontFamily.medium,
     color: colors.ink,
   },
@@ -1197,22 +1223,24 @@ const styles = StyleSheet.create({
   },
 
   label: {
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.semibold,
-    color: colors.emerald,
+    fontSize: 9,
+    fontFamily: fontFamily.medium,
+    color: colors.textSecondary,
+    textTransform: "uppercase",
+    letterSpacing: 0.35,
   },
 
   input: {
     backgroundColor: colors.white,
-    borderRadius: radius.pill,
-    borderWidth: 1.5,
-    borderColor: colors.emeraldSoft,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md + 1,
-    fontSize: fontSize.base,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    fontSize: fontSize.sm,
     fontFamily: fontFamily.medium,
     color: colors.ink,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
 
   inputFocused: {
@@ -1226,11 +1254,24 @@ const styles = StyleSheet.create({
   },
 
   emailHint: {
-    fontSize: fontSize.xs + 1,
+    flex: 1,
+    fontSize: fontSize.xs,
     fontFamily: fontFamily.regular,
     color: colors.textSecondary,
-    marginTop: -4,
-    marginBottom: spacing.sm,
+    marginTop: 0,
+    marginBottom: 0,
+    lineHeight: 16,
+  },
+
+  passwordHintBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+    backgroundColor: colors.mist,
+    borderRadius: radius.sm,
+    padding: spacing.md,
+    marginTop: spacing.sm,
+    marginBottom: spacing.md,
   },
 
   verifyRow: {
@@ -1278,10 +1319,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: colors.white,
-    borderRadius: radius.pill,
-    borderWidth: 1.5,
-    borderColor: colors.emeraldSoft,
-    marginBottom: spacing.lg,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.md,
     overflow: "hidden",
   },
 
@@ -1302,13 +1343,13 @@ const styles = StyleSheet.create({
   phonePrefix: {
     backgroundColor: colors.emeraldSoft,
     paddingHorizontal: spacing.md + 2,
-    paddingVertical: spacing.md + 1,
+    paddingVertical: spacing.sm + 2,
     borderRightWidth: 1,
     borderRightColor: colors.emeraldSoft,
   },
 
   phonePrefixText: {
-    fontSize: fontSize.base,
+    fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     color: colors.emerald,
   },
@@ -1316,8 +1357,8 @@ const styles = StyleSheet.create({
   phoneInput: {
     flex: 1,
     paddingHorizontal: spacing.md + 2,
-    paddingVertical: spacing.md + 1,
-    fontSize: fontSize.base,
+    paddingVertical: spacing.sm + 2,
+    fontSize: fontSize.sm,
     fontFamily: fontFamily.medium,
     color: colors.ink,
   },
@@ -1411,6 +1452,12 @@ const styles = StyleSheet.create({
     color: colors.emerald,
   },
 
+  passwordPrimaryButton: {
+    backgroundColor: colors.ink,
+    borderRadius: radius.sm,
+    paddingVertical: spacing.md,
+  },
+
   saveText: {
     color: colors.white,
     fontSize: fontSize.md,
@@ -1424,12 +1471,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.sm,
-    borderRadius: radius.pill,
-    borderWidth: 1.5,
+    borderRadius: radius.sm,
+    borderWidth: 0,
     borderColor: colors.errorSoft,
     backgroundColor: colors.errorSoft,
-    paddingVertical: 13,
-    ...shadow.card,
+    paddingVertical: spacing.md,
   },
 
   signOutText: {

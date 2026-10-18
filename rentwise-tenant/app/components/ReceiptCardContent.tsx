@@ -3,7 +3,7 @@ import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Check, Clock, XCircle, Download } from "lucide-react-native";
+import { Check, Clock, XCircle, Download, Copy } from "lucide-react-native";
 import { computePeriodCharge, consecutivePeriodsEnding, periodLabel } from "../../services/billingSchedule";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 
@@ -18,7 +18,7 @@ function statusInfo(rawStatus: string) {
       iconColor: colors.emerald,
       iconBg: colors.emeraldSoft,
       totalLabel: "TOTAL PAID",
-      pillLabel: "TRANSACTION SUCCESSFUL",
+      pillLabel: "Transaction Successful",
       pillBg: colors.successSoft,
       pillColor: colors.emerald,
       statusText: "PAID",
@@ -31,7 +31,7 @@ function statusInfo(rawStatus: string) {
       iconColor: colors.error,
       iconBg: colors.errorSoft,
       totalLabel: "AMOUNT REJECTED",
-      pillLabel: "TRANSACTION REJECTED",
+      pillLabel: "Transaction Rejected",
       pillBg: colors.errorSoft,
       pillColor: colors.error,
       statusText: "REJECTED",
@@ -43,7 +43,7 @@ function statusInfo(rawStatus: string) {
     iconColor: colors.warning,
     iconBg: colors.warningSoft,
     totalLabel: "AMOUNT PENDING",
-    pillLabel: "TRANSACTION PENDING",
+    pillLabel: "Transaction Pending",
     pillBg: colors.warningSoft,
     pillColor: colors.warning,
     statusText: "PENDING",
@@ -243,7 +243,7 @@ export function ReceiptActionsBar({
         {({ pressed }) => (
           <>
             <Download size={16} color={pressed ? colors.emerald : colors.white} />
-            <Text style={[styles.pdfBtnText, pressed && styles.pdfBtnTextPressed]}>PDF</Text>
+            <Text style={[styles.pdfBtnText, pressed && styles.pdfBtnTextPressed]}>Download PDF</Text>
           </>
         )}
       </Pressable>
@@ -276,19 +276,17 @@ export default function ReceiptCardContent({
         <Icon size={26} color={info.iconColor} />
       </View>
 
+      <Text style={[styles.transactionStatusText, { color: info.pillColor }]}>{info.pillLabel}</Text>
       <Text style={styles.totalLabel}>{info.totalLabel}</Text>
-      <Text style={styles.totalAmount}>₱{amountPaid.toLocaleString()}.00</Text>
-
-      <View style={[styles.pill, { backgroundColor: info.pillBg }]}>
-        <Text style={[styles.pillText, { color: info.pillColor }]}>{info.pillLabel}</Text>
-      </View>
-
-      <View style={styles.divider} />
+      <Text style={styles.totalAmount}>₱{amountPaid.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
 
       <View style={styles.detailRows}>
         <View style={styles.detailRow}>
           <Text style={styles.detailLabel}>Reference ID</Text>
-          <Text style={styles.detailValue}>#{data.receiptNo}</Text>
+          <View style={styles.referenceValueRow}>
+            <Text style={styles.detailValue}>#{data.receiptNo}</Text>
+            <Copy size={12} color={colors.ink} />
+          </View>
         </View>
         <View style={styles.detailRow}>
           <Text style={styles.detailLabel}>Payment Date</Text>
@@ -322,7 +320,9 @@ export default function ReceiptCardContent({
         </View>
         <View style={data.change > 0 ? styles.detailRow : [styles.detailRow, { borderBottomWidth: 0 }]}>
           <Text style={styles.detailLabel}>Status</Text>
-          <Text style={[styles.detailValue, { color: info.pillColor }]}>{info.statusText}</Text>
+          <View style={[styles.statusDetailBadge, { backgroundColor: info.pillBg }]}>
+            <Text style={[styles.statusDetailText, { color: info.pillColor }]}>{info.statusText}</Text>
+          </View>
         </View>
         {data.change > 0 && (
           <>
@@ -378,7 +378,7 @@ export default function ReceiptCardContent({
             {({ pressed }) => (
               <>
                 <Download size={16} color={pressed ? colors.emerald : colors.white} />
-                <Text style={[styles.pdfBtnText, pressed && styles.pdfBtnTextPressed]}>PDF</Text>
+                <Text style={[styles.pdfBtnText, pressed && styles.pdfBtnTextPressed]}>Download PDF</Text>
               </>
             )}
           </Pressable>
@@ -395,39 +395,32 @@ const styles = StyleSheet.create({
   },
 
   statusIconCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
+  },
+
+  transactionStatusText: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    marginBottom: 4,
   },
 
   totalLabel: {
-    fontSize: fontSize.xs,
+    fontSize: 9,
     fontFamily: fontFamily.semibold,
     color: colors.textSecondary,
     letterSpacing: 0.6,
   },
 
   totalAmount: {
-    fontSize: fontSize.display,
+    fontSize: 28,
     fontFamily: fontFamily.extrabold,
     color: colors.ink,
     marginTop: 4,
-  },
-
-  pill: {
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 5,
-    marginTop: spacing.sm,
-  },
-
-  pillText: {
-    fontSize: fontSize.xs,
-    fontFamily: fontFamily.bold,
-    letterSpacing: 0.3,
   },
 
   divider: {
@@ -439,25 +432,28 @@ const styles = StyleSheet.create({
 
   detailRows: {
     width: "100%",
+    backgroundColor: colors.mist,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginTop: spacing.lg,
   },
 
   detailRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingVertical: spacing.sm + 2,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
+    paddingVertical: 6,
   },
 
   detailLabel: {
-    fontSize: fontSize.sm,
+    fontSize: fontSize.xs,
     fontFamily: fontFamily.regular,
     color: colors.textSecondary,
   },
 
   detailValue: {
-    fontSize: fontSize.sm,
+    fontSize: fontSize.xs,
     fontFamily: fontFamily.semibold,
     color: colors.ink,
     flexShrink: 1,
@@ -465,7 +461,25 @@ const styles = StyleSheet.create({
   },
 
   detailValueAccent: {
-    color: colors.warning,
+    color: colors.ink,
+  },
+
+  referenceValueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexShrink: 1,
+  },
+
+  statusDetailBadge: {
+    borderRadius: radius.pill,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+  },
+
+  statusDetailText: {
+    fontSize: 9,
+    fontFamily: fontFamily.bold,
   },
 
   methodValueRow: {
@@ -516,17 +530,17 @@ const styles = StyleSheet.create({
   },
 
   breakdownLabel: {
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.medium,
-    color: colors.emeraldBright,
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
     flexShrink: 1,
     paddingRight: spacing.sm,
   },
 
   breakdownValue: {
-    fontSize: fontSize.sm,
+    fontSize: fontSize.xs,
     fontFamily: fontFamily.semibold,
-    color: colors.emeraldBright,
+    color: colors.ink,
   },
 
   breakdownDivider: {
@@ -560,9 +574,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
-    borderRadius: radius.pill,
-    borderWidth: 1.5,
-    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 0,
+    backgroundColor: colors.mist,
     paddingVertical: spacing.md,
   },
 
@@ -587,8 +601,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
-    borderRadius: radius.pill,
-    backgroundColor: colors.emerald,
+    borderRadius: radius.sm,
+    backgroundColor: colors.ink,
     paddingVertical: spacing.md,
     borderWidth: 1.5,
     borderColor: "transparent",
@@ -597,7 +611,7 @@ const styles = StyleSheet.create({
 
   pdfBtnPressed: {
     backgroundColor: colors.white,
-    borderColor: colors.emerald,
+    borderColor: colors.ink,
   },
 
   pdfBtnText: {
@@ -607,6 +621,6 @@ const styles = StyleSheet.create({
   },
 
   pdfBtnTextPressed: {
-    color: colors.emerald,
+    color: colors.ink,
   },
 });

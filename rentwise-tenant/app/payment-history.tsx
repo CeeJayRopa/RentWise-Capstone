@@ -7,18 +7,19 @@ import {
   ActivityIndicator,
   Modal,
   ScrollView,
+  FlatList,
   Image,
   TextInput,
   Animated,
   Easing,
-  Dimensions,
+  StatusBar,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { collection, doc, getDoc, onSnapshot, query, where } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { router, useFocusEffect } from "expo-router";
-import { ArrowLeft, ChevronDown, FileText, Search, X, HelpCircle } from "lucide-react-native";
+import { ArrowLeft, Search, X, HelpCircle, CalendarDays, Banknote } from "lucide-react-native";
 
 import { db } from "../shared/services/firestore";
 import { auth } from "../shared/firebaseConfig";
@@ -30,6 +31,10 @@ import HelpTour, { HelpStep } from "./components/HelpTour";
 import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
 
 const AnimatedLinearGradient = Animated.createAnimatedComponent(LinearGradient);
+const YEAR_ROW_HEIGHT = 30;
+const YEAR_WHEEL_HEIGHT = 150;
+const YEAR_CENTER_PADDING = (YEAR_WHEEL_HEIGHT - YEAR_ROW_HEIGHT) / 2;
+const EARLIEST_YEAR = 1900;
 
 export default function PaymentHistoryScreen() {
   const insets = useSafeAreaInsets();
@@ -45,10 +50,12 @@ export default function PaymentHistoryScreen() {
   const monthScrollRef = useRef<ScrollView>(null);
   const hasScrolledToMonth = useRef(false);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [draftYear, setDraftYear] = useState(new Date().getFullYear());
   const [showYearPicker, setShowYearPicker] = useState(false);
-  const yearPillRef = useRef<View>(null);
-  const [yearDropdownPos, setYearDropdownPos] = useState({ top: 0, right: 0, width: 0 });
-  const YEARS = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i);
+  const currentYear = new Date().getFullYear();
+  const latestYear = currentYear + 20;
+  const YEARS = Array.from({ length: latestYear - EARLIEST_YEAR + 1 }, (_, i) => latestYear - i);
+  const yearListRef = useRef<FlatList<number>>(null);
 
   const progressAnim = useRef(new Animated.Value(0)).current;
   const [focusTick, setFocusTick] = useState(0);
@@ -149,7 +156,7 @@ export default function PaymentHistoryScreen() {
   function formatDateShort(date: any) {
     if (!date) return "-";
     const d = date.toDate ? date.toDate() : new Date(date);
-    return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
   }
 
   function openReceipt(payment: any) {
@@ -158,11 +165,14 @@ export default function PaymentHistoryScreen() {
   }
 
   function openYearPicker() {
-    yearPillRef.current?.measure((_x, _y, width, height, pageX, pageY) => {
-      const screenWidth = Dimensions.get("window").width;
-      setYearDropdownPos({ top: pageY + height + 6, right: screenWidth - (pageX + width), width });
-      setShowYearPicker(true);
-    });
+    setDraftYear(selectedYear);
+    setShowYearPicker(true);
+  }
+
+  function centerYearInWheel(year: number, animated: boolean) {
+    const index = YEARS.indexOf(year);
+    if (index < 0) return;
+    yearListRef.current?.scrollToOffset({ offset: index * YEAR_ROW_HEIGHT, animated });
   }
 
   const searching = searchQuery.trim().length > 0;
@@ -170,8 +180,6 @@ export default function PaymentHistoryScreen() {
   const history = payments
     .filter((p) => p.status === "approved" || p.status === "pending")
     .filter((p) => {
-      // Search looks across every month/year for this tenant; otherwise the
-      // list stays scoped to whichever month + year is picked above.
       if (searching) return true;
       if (!p.date) return false;
       const d = p.date.toDate ? p.date.toDate() : new Date(p.date);
@@ -192,10 +200,16 @@ export default function PaymentHistoryScreen() {
         new Date(a.date?.toDate ? a.date.toDate() : a.date).getTime(),
     );
 
+  const selectedMonthHistory = history.filter((p) => {
+    if (!p.date) return false;
+    const d = p.date.toDate ? p.date.toDate() : new Date(p.date);
+    return MONTHS[d.getMonth()] === selectedMonth && d.getFullYear() === selectedYear;
+  });
+
   // Only confirmed payments count toward "Total paid" and the progress bar —
   // a pending payment isn't actually money received yet from the admin's
   // perspective, even though it already shows up in the list below.
-  const totalAmount = history
+  const totalAmount = selectedMonthHistory
     .filter((p) => p.status === "approved")
     .reduce((sum, p) => sum + Number(p.amount || 0), 0);
 
@@ -240,6 +254,7 @@ export default function PaymentHistoryScreen() {
 
   return (
     <View style={styles.root}>
+      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
       <LinearGradient
         colors={[colors.emerald, colors.ink]}
         start={{ x: 0, y: 0 }}
@@ -286,48 +301,7 @@ export default function PaymentHistoryScreen() {
               autoFocus
             />
           </View>
-        ) : (
-          <View style={styles.summaryBlock} ref={summaryRef} collapsable={false}>
-            <Text style={styles.summaryLabel}>Total paid in {selectedMonth} {selectedYear}</Text>
-            <Text style={styles.summaryAmount}>₱{totalAmount.toLocaleString()}</Text>
-
-            <Text style={styles.summaryCount}>
-              {monthTotalCharge > 0 ? `of ₱${monthTotalCharge.toLocaleString()} goal · ` : ""}
-              {history.length} transaction{history.length !== 1 ? "s" : ""}
-            </Text>
-
-            {monthTotalCharge > 0 && (
-              <>
-                <View style={styles.progressTrack}>
-                  <AnimatedLinearGradient
-                    colors={[colors.goldSoft, colors.gold]}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={[
-                      styles.progressFill,
-                      {
-                        width: progressAnim.interpolate({
-                          inputRange: [0, 100],
-                          outputRange: ["0%", "100%"],
-                        }),
-                      },
-                    ]}
-                  />
-                </View>
-
-                <View style={styles.progressLabelsRow}>
-                  <Text style={[styles.progressLabelText, styles.progressLabelLeft]}>0</Text>
-                  <Text style={[styles.progressLabelText, styles.progressLabelCenter]}>
-                    {Math.round(targetPercent)}%
-                  </Text>
-                  <Text style={[styles.progressLabelText, styles.progressLabelRight]} numberOfLines={1}>
-                    ₱{monthTotalCharge.toLocaleString()}
-                  </Text>
-                </View>
-              </>
-            )}
-          </View>
-        )}
+        ) : null}
       </LinearGradient>
 
       {loading ? (
@@ -342,7 +316,20 @@ export default function PaymentHistoryScreen() {
           showsVerticalScrollIndicator={false}
         >
           {!searching && (
-            <View style={styles.pickerRow} ref={pickerRef} collapsable={false}>
+            <View ref={pickerRef} collapsable={false}>
+              <View style={styles.archiveTopRow}>
+                <View collapsable={false}>
+                  <TouchableOpacity
+                    style={[styles.yearPill, showYearPicker && styles.yearPillActive]}
+                    onPress={openYearPicker}
+                    activeOpacity={0.7}
+                  >
+                    <CalendarDays size={14} color={colors.emerald} />
+                    <Text style={styles.yearPillText}>{selectedYear}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
               <View style={styles.monthScrollWrapper}>
                 <ScrollView
                   ref={monthScrollRef}
@@ -375,25 +362,52 @@ export default function PaymentHistoryScreen() {
                 </ScrollView>
               </View>
 
-              <View ref={yearPillRef} collapsable={false}>
-                <TouchableOpacity
-                  style={[styles.yearPill, showYearPicker && styles.yearPillActive]}
-                  onPress={openYearPicker}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.yearPillText}>{selectedYear}</Text>
-                  <ChevronDown
-                    size={14}
-                    color={colors.emerald}
-                    style={showYearPicker ? styles.yearPillChevronFlipped : undefined}
-                  />
-                </TouchableOpacity>
+              <View style={styles.summaryBlock} ref={summaryRef} collapsable={false}>
+                <View style={styles.summaryHeadingRow}>
+                  <Text style={styles.summaryLabel}>Total paid in {selectedMonth} {selectedYear}</Text>
+                  <View style={styles.transactionCountBadge}>
+                    <Text style={styles.transactionCountText}>
+                      {selectedMonthHistory.length} transaction{selectedMonthHistory.length !== 1 ? "s" : ""}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.summaryAmount}>₱{totalAmount.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+
+                {monthTotalCharge > 0 && (
+                  <>
+                    <View style={styles.progressTrack}>
+                      <AnimatedLinearGradient
+                        colors={[colors.emeraldBright, colors.emerald]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={[
+                          styles.progressFill,
+                          {
+                            width: progressAnim.interpolate({
+                              inputRange: [0, 100],
+                              outputRange: ["0%", "100%"],
+                            }),
+                          },
+                        ]}
+                      />
+                    </View>
+                    <View style={styles.progressSummaryRow}>
+                      <Text style={styles.progressSettledText}>{Math.round(targetPercent)}% settled</Text>
+                      <Text style={styles.progressTargetText}>Target: ₱{monthTotalCharge.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                    </View>
+                  </>
+                )}
               </View>
             </View>
           )}
 
           <View ref={listRef} collapsable={false}>
-          <Text style={styles.sectionHeaderTitle}>Transactions</Text>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionHeaderTitle}>Transactions</Text>
+            <View style={styles.entriesBadge}>
+              <Text style={styles.entriesBadgeText}>{history.length} entries recorded</Text>
+            </View>
+          </View>
 
           {history.length === 0 ? (
             <View style={styles.emptyRow}>
@@ -403,46 +417,86 @@ export default function PaymentHistoryScreen() {
             </View>
           ) : (
             <>
-              {history.map((item) => {
+              {history.map((item, index) => {
                 const hasReceipt = !!(item.receiptData || item.receipt);
                 const Row = hasReceipt ? TouchableOpacity : View;
+                const itemDate = item.date?.toDate ? item.date.toDate() : new Date(item.date);
+                const previous = index > 0 ? history[index - 1] : null;
+                const previousDate = previous
+                  ? (previous.date?.toDate ? previous.date.toDate() : new Date(previous.date))
+                  : null;
+                const startsMonth = !previousDate
+                  || itemDate.getMonth() !== previousDate.getMonth()
+                  || itemDate.getFullYear() !== previousDate.getFullYear();
+                const monthPaymentCount = startsMonth
+                  ? history.filter((payment) => {
+                      const date = payment.date?.toDate ? payment.date.toDate() : new Date(payment.date);
+                      return date.getMonth() === itemDate.getMonth() && date.getFullYear() === itemDate.getFullYear();
+                    }).length
+                  : 0;
+
                 return (
-                  <Row
-                    key={item.id}
-                    style={styles.txCard}
-                    {...(hasReceipt ? { onPress: () => openReceipt(item), activeOpacity: 0.7 } : {})}
-                  >
-                    <View style={styles.rowIconCircle}>
-                      <FileText size={18} color={colors.emerald} />
-                    </View>
-
-                    <View style={styles.rowInfo}>
-                      <Text style={styles.rowAmount}>₱{Number(item.amount || 0).toLocaleString()}</Text>
-                      <Text style={styles.rowDate}>
-                        {formatDateShort(item.date)}
-                        {item.receiptNo ? ` · #${item.receiptNo}` : ""}
-                      </Text>
-                    </View>
-
-                    <View style={styles.rowRight}>
-                      <View
-                        style={[
-                          styles.statusBadge,
-                          item.status === "pending" ? styles.badgePending : styles.badgeApproved,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.statusBadgeText,
-                            item.status === "pending" ? styles.textPending : styles.textApproved,
-                          ]}
-                        >
-                          {item.status === "pending" ? "PENDING" : "PAID"}
+                  <Fragment key={item.id}>
+                    {startsMonth && (
+                      <View style={styles.periodHeadingRow}>
+                        <View style={styles.periodDot} />
+                        <Text style={styles.periodHeadingText}>
+                          {MONTHS[itemDate.getMonth()].toUpperCase()} {itemDate.getFullYear()}
+                        </Text>
+                        <Text style={styles.periodPaymentCount}>
+                          · {monthPaymentCount} payment{monthPaymentCount !== 1 ? "s" : ""}
                         </Text>
                       </View>
-                      <Text style={styles.rowMethod}>via {methodLabel(item)}</Text>
-                    </View>
-                  </Row>
+                    )}
+                    <Row
+                      style={styles.txCard}
+                      {...(hasReceipt ? { onPress: () => openReceipt(item), activeOpacity: 0.7 } : {})}
+                    >
+                      <View style={styles.txMainRow}>
+                        <View style={[styles.rowIconCircle, methodLabel(item) === "Cash" && styles.cashIconCircle]}>
+                          {methodLabel(item) === "GCash" ? (
+                            <Image source={require("../assets/gcash.png")} style={styles.methodIconImage} resizeMode="cover" />
+                          ) : methodLabel(item) === "Maya" ? (
+                            <Image source={require("../assets/maya-icon.png")} style={styles.methodIconImage} resizeMode="contain" />
+                          ) : (
+                            <Banknote size={18} color={colors.emerald} />
+                          )}
+                        </View>
+                        <View style={styles.rowInfo}>
+                          <Text style={styles.rowMethodName}>{methodLabel(item)}</Text>
+                          <Text style={styles.rowDate}>{formatDateShort(item.date)}</Text>
+                        </View>
+                        <View style={styles.rowRight}>
+                          <Text style={styles.rowAmount}>₱{Number(item.amount || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                          <View
+                            style={[
+                              styles.statusBadge,
+                              item.status === "pending" ? styles.badgePending : styles.badgeApproved,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.statusBadgeText,
+                                item.status === "pending" ? styles.textPending : styles.textApproved,
+                              ]}
+                            >
+                              {item.status === "pending" ? "PENDING" : "PAID"}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+                      <View style={styles.referenceStrip}>
+                        <Text style={styles.referenceText} numberOfLines={1}>
+                          REF #{item.receiptNo || String(item.id).slice(-12).toUpperCase()}
+                        </Text>
+                        {hasReceipt && (
+                          <View style={styles.copyBadge}>
+                            <Text style={styles.copyBadgeText}>View receipt</Text>
+                          </View>
+                        )}
+                      </View>
+                    </Row>
+                  </Fragment>
                 );
               })}
 
@@ -456,34 +510,76 @@ export default function PaymentHistoryScreen() {
       )}
 
       {/* YEAR DROPDOWN */}
-      <Modal visible={showYearPicker} transparent animationType="fade" statusBarTranslucent>
-        <TouchableOpacity
+      <Modal
+        visible={showYearPicker}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onShow={() => requestAnimationFrame(() => centerYearInWheel(selectedYear, false))}
+      >
+        <Pressable
           style={styles.yearOverlay}
-          activeOpacity={1}
           onPress={() => setShowYearPicker(false)}
         >
-          <View
-            style={[
-              styles.yearDropdown,
-              { top: yearDropdownPos.top, right: yearDropdownPos.right, width: yearDropdownPos.width },
-            ]}
+          <Pressable
+            style={[styles.yearDropdown, { paddingBottom: Math.max(insets.bottom, 12) }]}
+            onPress={(event) => event.stopPropagation()}
           >
-            {YEARS.map((y) => (
+            <View style={styles.yearModalHeader}>
+              <Text style={styles.yearModalTitle}>Select Year</Text>
               <TouchableOpacity
-                key={y}
-                style={[styles.pickerItem, y === selectedYear && styles.pickerItemActive]}
+                style={styles.yearDoneButton}
                 onPress={() => {
-                  setSelectedYear(y);
+                  setSelectedYear(draftYear);
                   setShowYearPicker(false);
                 }}
               >
-                <Text style={[styles.pickerItemText, y === selectedYear && styles.pickerItemTextActive]}>
-                  {y}
-                </Text>
+                <Text style={styles.yearDoneText}>Done</Text>
               </TouchableOpacity>
-            ))}
-          </View>
-        </TouchableOpacity>
+            </View>
+            <View style={styles.yearWheelViewport}>
+              <View pointerEvents="none" style={styles.yearSelectionHighlight} />
+              <FlatList
+                ref={yearListRef}
+                data={YEARS}
+                keyExtractor={(year) => String(year)}
+                style={styles.yearList}
+                showsVerticalScrollIndicator={false}
+                snapToInterval={YEAR_ROW_HEIGHT}
+                snapToAlignment="start"
+                decelerationRate="fast"
+                contentContainerStyle={styles.yearListContent}
+                getItemLayout={(_data, index) => ({ length: YEAR_ROW_HEIGHT, offset: YEAR_ROW_HEIGHT * index, index })}
+                onMomentumScrollEnd={(event) => {
+                  const index = Math.max(0, Math.min(YEARS.length - 1, Math.round(event.nativeEvent.contentOffset.y / YEAR_ROW_HEIGHT)));
+                  setDraftYear(YEARS[index]);
+                }}
+                renderItem={({ item: y }) => {
+                  const distance = Math.abs(y - draftYear);
+                  return (
+                    <TouchableOpacity
+                      style={styles.pickerItem}
+                      onPress={() => {
+                        setDraftYear(y);
+                        centerYearInWheel(y, true);
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.pickerItemText,
+                          y === draftYear && styles.pickerItemTextActive,
+                          y !== draftYear && { opacity: distance === 1 ? 0.76 : distance === 2 ? 0.52 : 0.32 },
+                        ]}
+                      >
+                        {y}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            </View>
+          </Pressable>
+        </Pressable>
       </Modal>
 
       {/* RECEIPT PREVIEW MODAL */}
@@ -565,10 +661,10 @@ const styles = StyleSheet.create({
   },
 
   headerGradient: {
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
+    paddingBottom: spacing.sm,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
     overflow: "hidden",
-    paddingBottom: spacing.xl,
   },
 
   header: {
@@ -576,7 +672,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: spacing.xl,
-    paddingBottom: spacing.lg,
+    paddingBottom: spacing.sm,
   },
 
   headerActions: {
@@ -589,40 +685,51 @@ const styles = StyleSheet.create({
   // centered headerTitle balances against two equal-width anchors instead
   // of drifting toward whichever side is narrower.
   headerLeftAnchor: {
-    width: 84,
+    width: 38,
   },
 
   headerIconBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: "rgba(255,255,255,0.14)",
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.12)",
     alignItems: "center",
     justifyContent: "center",
   },
 
   headerTitle: {
     flex: 1,
-    textAlign: "center",
+    textAlign: "left",
     color: colors.white,
-    fontSize: fontSize.lg,
+    fontSize: fontSize.base,
     fontFamily: fontFamily.bold,
   },
 
   // ── Summary ──────────────────────────────────────
   summaryBlock: {
-    paddingHorizontal: spacing.xl,
+    marginTop: spacing.lg,
+    paddingBottom: spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+
+  summaryHeadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
 
   summaryLabel: {
-    color: colors.emeraldSoft,
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.medium,
+    color: colors.ink,
+    fontSize: 10,
+    fontFamily: fontFamily.semibold,
+    textTransform: "uppercase",
+    letterSpacing: 0.35,
   },
 
   summaryAmount: {
-    color: colors.white,
-    fontSize: fontSize.display,
+    color: colors.ink,
+    fontSize: 28,
     fontFamily: fontFamily.extrabold,
     marginTop: 2,
   },
@@ -631,7 +738,7 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
     height: 8,
     borderRadius: radius.pill,
-    backgroundColor: "rgba(255,255,255,0.2)",
+    backgroundColor: "#DCE6E1",
     overflow: "hidden",
     marginTop: spacing.md,
   },
@@ -641,35 +748,35 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
 
-  progressLabelsRow: {
+  progressSummaryRow: {
     flexDirection: "row",
-    marginTop: spacing.xs + 2,
-  },
-
-  progressLabelText: {
-    flex: 1,
-    fontSize: fontSize.xs,
-    fontFamily: fontFamily.semibold,
-    color: colors.emeraldSoft,
-  },
-
-  progressLabelLeft: {
-    textAlign: "left",
-  },
-
-  progressLabelCenter: {
-    textAlign: "center",
-  },
-
-  progressLabelRight: {
-    textAlign: "right",
-  },
-
-  summaryCount: {
-    color: colors.emeraldSoft,
-    fontSize: fontSize.xs + 1,
-    fontFamily: fontFamily.regular,
+    justifyContent: "space-between",
     marginTop: spacing.sm,
+  },
+
+  progressSettledText: {
+    color: colors.emerald,
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.bold,
+  },
+
+  progressTargetText: {
+    color: colors.textSecondary,
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.regular,
+  },
+
+  transactionCountBadge: {
+    backgroundColor: colors.mist,
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+
+  transactionCountText: {
+    color: colors.ink,
+    fontSize: 9,
+    fontFamily: fontFamily.medium,
   },
 
   // ── Search ───────────────────────────────────────
@@ -678,7 +785,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.sm,
     marginHorizontal: spacing.xl,
-    backgroundColor: "rgba(255,255,255,0.14)",
+    backgroundColor: colors.white,
     borderRadius: radius.pill,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm + 2,
@@ -686,7 +793,7 @@ const styles = StyleSheet.create({
 
   searchInput: {
     flex: 1,
-    color: colors.white,
+    color: colors.ink,
     fontSize: fontSize.sm,
     fontFamily: fontFamily.medium,
     padding: 0,
@@ -699,33 +806,31 @@ const styles = StyleSheet.create({
 
   bodyContent: {
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xl,
+    paddingTop: spacing.md,
   },
 
   // ── Month / Year picker row ───────────────────────
-  pickerRow: {
+  archiveTopRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
-    marginBottom: spacing.lg,
+    justifyContent: "flex-end",
+    marginBottom: spacing.md,
   },
 
   monthScrollWrapper: {
-    flex: 1,
-    backgroundColor: colors.white,
-    borderRadius: radius.pill,
-    paddingVertical: spacing.xs + 2,
-    paddingHorizontal: spacing.xs + 2,
-    ...shadow.card,
+    marginBottom: spacing.sm,
   },
 
   monthScrollContent: {
-    gap: spacing.xs,
+    flexGrow: 1,
+    justifyContent: "space-between",
   },
 
   monthChip: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 2,
+    minWidth: 45,
+    alignItems: "center",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
     borderRadius: radius.pill,
   },
 
@@ -734,7 +839,7 @@ const styles = StyleSheet.create({
   },
 
   monthChipText: {
-    fontSize: fontSize.sm,
+    fontSize: 10,
     fontFamily: fontFamily.semibold,
     color: colors.textSecondary,
   },
@@ -747,13 +852,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.xs,
-    backgroundColor: colors.white,
+    backgroundColor: colors.mist,
     borderRadius: radius.pill,
     paddingHorizontal: spacing.md + 2,
-    paddingVertical: spacing.sm + 2,
-    borderWidth: 1.5,
+    paddingVertical: 7,
+    borderWidth: 1,
     borderColor: "transparent",
-    ...shadow.card,
   },
 
   // Shown while the dropdown is open -- gives the pill a "clicked in"
@@ -766,57 +870,171 @@ const styles = StyleSheet.create({
   yearPillText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
-    color: colors.emerald,
-  },
-
-  // Flips the chevron to point up while the dropdown is open, so the
-  // button visibly reacts to being clicked in vs. clicked out.
-  yearPillChevronFlipped: {
-    transform: [{ rotate: "180deg" }],
+    color: colors.ink,
   },
 
   yearOverlay: {
     flex: 1,
-    backgroundColor: "transparent",
+    backgroundColor: colors.overlay,
+    justifyContent: "flex-end",
   },
 
   yearDropdown: {
-    position: "absolute",
     backgroundColor: colors.white,
-    borderRadius: radius.md,
-    borderTopLeftRadius: 0,
-    borderTopRightRadius: 0,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 6,
+    paddingHorizontal: spacing.md,
     overflow: "hidden",
     ...shadow.raised,
   },
 
+  yearModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 44,
+    marginBottom: 2,
+  },
+
+  yearModalTitle: {
+    color: colors.ink,
+    fontSize: 20,
+    fontFamily: fontFamily.extrabold,
+  },
+
+  yearDoneButton: {
+    minWidth: 72,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.emerald,
+    alignItems: "center",
+    justifyContent: "center",
+    ...shadow.button,
+  },
+
+  yearDoneText: {
+    color: colors.white,
+    fontSize: fontSize.xs + 1,
+    fontFamily: fontFamily.bold,
+  },
+
+  yearWheelViewport: {
+    height: YEAR_WHEEL_HEIGHT,
+    position: "relative",
+    overflow: "hidden",
+  },
+
+  yearSelectionHighlight: {
+    position: "absolute",
+    zIndex: 0,
+    top: YEAR_CENTER_PADDING,
+    left: 0,
+    right: 0,
+    height: YEAR_ROW_HEIGHT,
+    borderRadius: radius.md,
+    backgroundColor: "#DCEFE7",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.emeraldBright,
+  },
+
+  yearList: {
+    height: YEAR_WHEEL_HEIGHT,
+    zIndex: 1,
+  },
+
+  yearListContent: {
+    paddingVertical: YEAR_CENTER_PADDING,
+  },
+
   // ── Section header ─────────────────────────────────
+  sectionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: spacing.lg,
+    marginBottom: spacing.md,
+  },
+
   sectionHeaderTitle: {
     fontSize: fontSize.md,
     fontFamily: fontFamily.bold,
     color: colors.ink,
-    marginBottom: spacing.md,
+  },
+
+  entriesBadge: {
+    backgroundColor: colors.mist,
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+
+  entriesBadgeText: {
+    color: colors.ink,
+    fontSize: 9,
+    fontFamily: fontFamily.medium,
+  },
+
+  periodHeadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: spacing.sm,
+  },
+
+  periodDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: colors.emeraldBright,
+    marginRight: 6,
+  },
+
+  periodHeadingText: {
+    color: colors.ink,
+    fontSize: 9,
+    fontFamily: fontFamily.bold,
+  },
+
+  periodPaymentCount: {
+    color: colors.textSecondary,
+    fontSize: 9,
+    fontFamily: fontFamily.regular,
   },
 
   // ── Transaction card ───────────────────────────────
   txCard: {
-    flexDirection: "row",
-    alignItems: "center",
     backgroundColor: colors.white,
     borderRadius: radius.lg,
-    padding: spacing.md + 2,
-    marginBottom: spacing.md,
-    ...shadow.card,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: "rgba(15, 125, 91, 0.08)",
+  },
+
+  txMainRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    width: "100%",
   },
 
   rowIconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.emeraldSoft,
+    width: 36,
+    height: 36,
+    borderRadius: radius.sm,
+    backgroundColor: colors.ink,
     alignItems: "center",
     justifyContent: "center",
-    marginRight: spacing.md,
+    marginRight: spacing.sm + 2,
+    overflow: "hidden",
+  },
+
+  cashIconCircle: {
+    backgroundColor: colors.emeraldSoft,
+  },
+
+  methodIconImage: {
+    width: "100%",
+    height: "100%",
   },
 
   rowInfo: {
@@ -825,6 +1043,12 @@ const styles = StyleSheet.create({
 
   rowAmount: {
     fontSize: fontSize.base,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+  },
+
+  rowMethodName: {
+    fontSize: fontSize.sm,
     fontFamily: fontFamily.bold,
     color: colors.ink,
   },
@@ -844,7 +1068,7 @@ const styles = StyleSheet.create({
     alignSelf: "flex-end",
     borderRadius: radius.pill,
     paddingHorizontal: spacing.sm + 2,
-    paddingVertical: 4,
+    paddingVertical: 2,
   },
 
   badgeApproved: { backgroundColor: colors.successSoft },
@@ -863,6 +1087,39 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.regular,
     color: colors.textMuted,
     marginTop: 4,
+  },
+
+  referenceStrip: {
+    flexBasis: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: colors.mist,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
+    marginTop: spacing.sm,
+  },
+
+  referenceText: {
+    flex: 1,
+    color: colors.ink,
+    fontSize: 8,
+    fontFamily: fontFamily.semibold,
+    letterSpacing: 0.3,
+  },
+
+  copyBadge: {
+    backgroundColor: colors.white,
+    borderRadius: radius.sm,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+
+  copyBadgeText: {
+    color: colors.emerald,
+    fontSize: 9,
+    fontFamily: fontFamily.semibold,
   },
 
   endOfListText: {
@@ -886,25 +1143,23 @@ const styles = StyleSheet.create({
 
   // ── Year dropdown items ────────────────────────────
   pickerItem: {
+    height: YEAR_ROW_HEIGHT,
+    alignItems: "center",
+    justifyContent: "center",
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-
-  pickerItemActive: {
-    backgroundColor: colors.emeraldSoft,
   },
 
   pickerItemText: {
-    fontSize: fontSize.base,
+    fontSize: 15,
     fontFamily: fontFamily.regular,
-    color: colors.ink,
+    color: "#66756F",
   },
 
   pickerItemTextActive: {
-    color: colors.emerald,
-    fontFamily: fontFamily.semibold,
+    color: "#0B2B22",
+    fontSize: 20,
+    fontFamily: fontFamily.bold,
+    opacity: 1,
   },
 
   // ── Receipt modal ────────────────────────────────
@@ -912,19 +1167,19 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.overlay,
     justifyContent: "center",
-    padding: spacing.xxl + 1,
+    padding: spacing.md,
   },
 
   receiptPreviewCard: {
     backgroundColor: colors.white,
-    padding: spacing.xl,
-    paddingTop: spacing.xxl + 4,
+    padding: spacing.md,
+    paddingTop: spacing.lg,
     borderRadius: radius.lg,
     ...shadow.raised,
   },
 
   receiptScrollArea: {
-    maxHeight: 480,
+    maxHeight: 560,
   },
 
   legacyReceiptCloseBtn: {

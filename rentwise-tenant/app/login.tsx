@@ -14,6 +14,7 @@ import {
   Modal,
   Alert,
   Image,
+  ActivityIndicator,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -71,6 +72,7 @@ export default function Login() {
   const { height: screenHeight } = useWindowDimensions();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [emailFocused, setEmailFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
@@ -223,39 +225,58 @@ export default function Login() {
     setFpError(null);
   }
 
-  // Just validates the email and hands off to the loading screen, which does
+  // Resolves the username and hands off to the loading screen, which does
   // the real work: verify the account + text the SMS OTP, then the code-entry
   // screen. The Firebase reset code is only minted after that OTP is verified
   // server-side -- see sendResetOtp/verifyResetOtp in functions/src/index.ts
   // and OTP_RESET_PLAN.md.
   function handleForgotSubmit() {
     const trimmed = fpEmail.trim().toLowerCase();
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!trimmed || !emailRegex.test(trimmed)) {
-      setFpError("Please enter a valid email address.");
+    if (!/^[A-Za-z0-9._-]{3,40}$/.test(trimmed)) {
+      setFpError("Please enter a valid username.");
       return;
     }
     setFpError(null);
-    closeForgotModal();
-    router.push({ pathname: "/reset-sending", params: { email: trimmed } });
+    void (async () => {
+      try {
+        const resolveLoginEmail = httpsCallable(cloudFunctions, "resolveLoginEmail");
+        const resolved = (await resolveLoginEmail({ identifier: trimmed, role: "tenant" })).data as { email?: string | null };
+        if (!resolved.email) {
+          setFpError("We couldn't find that username. Please check it and try again.");
+          return;
+        }
+        closeForgotModal();
+        router.push({ pathname: "/reset-sending", params: { email: resolved.email } });
+      } catch {
+        setFpError("We couldn't start the reset. Please try again.");
+      }
+    })();
   }
 
   async function handleLogin() {
     setErrorMsg("");
-    const identifier = email.trim();
+    const identifier = email.trim().toLowerCase();
     if (!identifier || !password.trim()) {
-      setErrorMsg("Please enter your email and password.");
+      setErrorMsg("Please enter your username and password.");
+      return;
+    }
+    if (!/^[A-Za-z0-9._-]{3,40}$/.test(identifier)) {
+      setErrorMsg("Enter a valid username.");
       return;
     }
 
-    const existingLockout = await checkLockout(identifier);
-    if (existingLockout) {
-      setLockoutUntil(existingLockout);
-      return;
-    }
-
+    setLoading(true);
     try {
-      const user = await loginUser(identifier, password);
+      const existingLockout = await checkLockout(identifier);
+      if (existingLockout) {
+        setLockoutUntil(existingLockout);
+        return;
+      }
+
+      const resolveLoginEmail = httpsCallable(cloudFunctions, "resolveLoginEmail");
+      const resolved = (await resolveLoginEmail({ identifier, role: "tenant" })).data as { email?: string | null };
+      if (!resolved.email) throw { code: "auth/invalid-credential" };
+      const user = await loginUser(resolved.email, password);
 
       const role = await getUserRole(user.uid);
       if (role !== "tenant") {
@@ -289,9 +310,11 @@ export default function Login() {
         }
       } else {
         setErrorMsg(
-          `Incorrect email or password. ${remainingAttempts} attempt${remainingAttempts === 1 ? "" : "s"} remaining.`,
+          `Incorrect username or password. ${remainingAttempts} attempt${remainingAttempts === 1 ? "" : "s"} remaining.`,
         );
       }
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -348,9 +371,9 @@ export default function Login() {
               <Text style={styles.subheading}>Sign in to your account</Text>
             </Animated.View>
 
-            {/* Email field */}
+            {/* Username field */}
             <Animated.View style={[{ marginTop: spacing.xxl }, slideIn(emailAnim)]}>
-              <Text style={styles.fieldLabel}>Email</Text>
+              <Text style={styles.fieldLabel}>Username</Text>
               <View style={styles.inputWrapper}>
                 <Mail size={17} color={colors.emeraldBright} style={styles.leftIcon} />
                 <TextInput
@@ -358,15 +381,15 @@ export default function Login() {
                   style={[styles.textInput, emailFocused && styles.textInputFocused]}
                   value={email}
                   onChangeText={setEmail}
-                  placeholder="example@gmail.com"
+                  placeholder="Enter your username"
                   placeholderTextColor={colors.textMuted}
                   autoCapitalize="none"
-                  keyboardType="email-address"
+                  keyboardType="default"
                   editable={!lockoutUntil}
                   onFocus={() => { setEmailFocused(true); scrollToRevealForm(); }}
                   onBlur={() => {
                     setEmailFocused(false);
-                    checkLockout(email.trim()).then((u) => { if (u) setLockoutUntil(u); });
+                    checkLockout(email.trim().toLowerCase()).then((u) => { if (u) setLockoutUntil(u); });
                   }}
                 />
               </View>
@@ -408,14 +431,15 @@ export default function Login() {
             {/* Remember me + Forgot password row */}
             <View style={styles.optionsRow}>
               <Pressable
-                style={styles.rememberMeRow}
+                style={[styles.rememberMeRow, loading && styles.rememberMeRowDisabled]}
                 onPress={() => setRememberMeChecked((v) => !v)}
+                disabled={loading}
                 hitSlop={8}
               >
-                <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
+                <View style={[styles.checkbox, loading && styles.checkboxDisabled, rememberMe && styles.checkboxChecked]}>
                   {rememberMe && <Check size={13} color={colors.white} />}
                 </View>
-                <Text style={styles.rememberMeText}>Remember me</Text>
+                <Text style={[styles.rememberMeText, loading && styles.rememberMeTextDisabled]}>Remember me</Text>
               </Pressable>
 
               <Pressable onPress={() => setShowForgotModal(true)}>
@@ -441,17 +465,21 @@ export default function Login() {
               <Pressable
                 style={({ pressed }) => [
                   styles.signInBtn,
-                  !!lockoutUntil && styles.signInBtnDisabled,
-                  pressed && !lockoutUntil && styles.signInBtnPressed,
+                  (loading || !!lockoutUntil) && styles.signInBtnDisabled,
+                  pressed && !loading && !lockoutUntil && styles.signInBtnPressed,
                 ]}
                 onPress={handleLogin}
-                disabled={!!lockoutUntil}
+                disabled={loading || !!lockoutUntil}
               >
-                {({ pressed }) => (
-                  <Text style={[styles.signInText, pressed && !lockoutUntil && styles.signInTextPressed]}>
-                    Sign in
-                  </Text>
-                )}
+                {({ pressed }) =>
+                  loading ? (
+                    <ActivityIndicator color={colors.white} size="small" />
+                  ) : (
+                    <Text style={[styles.signInText, pressed && !lockoutUntil && styles.signInTextPressed]}>
+                      Sign in
+                    </Text>
+                  )
+                }
               </Pressable>
             </Animated.View>
           </View>
@@ -485,21 +513,21 @@ export default function Login() {
               </View>
               <Text style={fp.title}>Forgot password</Text>
               <Text style={fp.subtitle}>
-                Enter the Gmail you verified in your profile. We'll text a 6-digit code to the phone on your account.
+                Enter your username. We'll text a 6-digit code to the phone on your account.
               </Text>
 
-              {/* Email field */}
+              {/* Username field */}
               <View style={{ marginTop: spacing.xxl - 2, alignSelf: "stretch" }}>
-                <Text style={fp.label}>Registered Gmail</Text>
+                <Text style={fp.label}>Username</Text>
                 <View style={fp.inputWrapper}>
                   <Mail size={16} color={colors.emeraldBright} style={fp.inputIcon} />
                   <TextInput
                     style={[fp.input, fpEmailFocused && fp.inputFocused]}
                     value={fpEmail}
                     onChangeText={(t) => { setFpEmail(t); setFpError(null); }}
-                    placeholder="example@gmail.com"
+                    placeholder="Username"
                     placeholderTextColor={colors.textMuted}
-                    keyboardType="email-address"
+                    keyboardType="default"
                     autoCapitalize="none"
                     onFocus={() => setFpEmailFocused(true)}
                     onBlur={() => setFpEmailFocused(false)}
@@ -682,6 +710,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
+  rememberMeRowDisabled: {
+    opacity: 0.5,
+  },
   checkbox: {
     width: 20,
     height: 20,
@@ -697,10 +728,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.emerald,
     borderColor: colors.emerald,
   },
+  checkboxDisabled: {
+    backgroundColor: colors.mist,
+    borderColor: colors.borderStrong,
+  },
   rememberMeText: {
     fontSize: fontSize.sm,
     color: colors.ink,
     fontFamily: fontFamily.medium,
+  },
+  rememberMeTextDisabled: {
+    color: colors.textMuted,
   },
 });
 

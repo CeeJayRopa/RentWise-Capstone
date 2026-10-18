@@ -23,6 +23,7 @@ import {
 import { useResponsive, MAX_CONTENT_WIDTH } from "../shared/hooks/useResponsive";
 import { colors } from "../shared/theme";
 import { initializeLocalCache } from "../shared/services/localCache";
+import NetworkStatusBanner from "../shared/components/NetworkStatusBanner";
 
 configurePushNotifications();
 
@@ -174,6 +175,7 @@ export default function RootLayout() {
       <View style={styles.outer}>
         <View style={[styles.inner, isTablet && styles.innerTablet]}>
           <Stack screenOptions={{ headerShown: false, animation: "fade", animationDuration: 200 }} />
+          <NetworkStatusBanner />
         </View>
       </View>
     </SafeAreaProvider>

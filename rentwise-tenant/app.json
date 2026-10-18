@@ -17,7 +17,7 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/rentwise-app-icon.png",
+          "image": "./assets/tenant-icon.png",
           "imageWidth": 140,
           "resizeMode": "contain",
           "backgroundColor": "#0E6B54"
@@ -52,7 +52,7 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#0E6B54",
-        "foregroundImage": "./assets/tenant-icon.png",
+        "foregroundImage": "./assets/tenant-icon-adaptive.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
@@ -74,9 +74,9 @@
         "style": "dark"
       },
       "eas": {
-        "projectId": "38345b58-5832-43c6-b509-5eb55c94c6c2"
+        "projectId": "da395cf3-d504-46d4-8386-aeafe1f745f8"
       }
     },
-    "owner": "cj27"
+    "owner": "cean27"
   }
 }

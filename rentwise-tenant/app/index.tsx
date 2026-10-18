@@ -2,7 +2,6 @@ import { useEffect, useRef, useCallback } from "react";
 import { Image, Animated, Easing, StyleSheet, StatusBar } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import { onAuthStateChanged } from "firebase/auth";
 import * as SplashScreen from "expo-splash-screen";
 import { auth } from "../shared/firebaseConfig";
 import { getRememberMe } from "../shared/services/rememberMe";
@@ -66,14 +65,11 @@ export default function EntranceScreen() {
     // hasn't, yet) by the time the entrance animation finishes, then route:
     // an existing session goes to the quick password-only unlock screen
     // instead of the full username+password login.
-    let hasSession = false;
-    const unsub = onAuthStateChanged(auth, (user) => {
-      hasSession = !!user;
-    });
-
+    let cancelled = false;
     const timer = setTimeout(async () => {
-      unsub();
-      if (!hasSession) {
+      await auth.authStateReady();
+      if (cancelled) return;
+      if (!auth.currentUser) {
         router.replace("/login");
         return;
       }
@@ -84,8 +80,8 @@ export default function EntranceScreen() {
     }, 1900);
 
     return () => {
+      cancelled = true;
       clearTimeout(timer);
-      unsub();
     };
   }, []);
 

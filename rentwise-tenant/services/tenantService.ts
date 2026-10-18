@@ -13,6 +13,8 @@ export interface Tenant {
 
   email?: string;
 
+  username?: string;
+
   role?: string;
 
   stallId?: string;

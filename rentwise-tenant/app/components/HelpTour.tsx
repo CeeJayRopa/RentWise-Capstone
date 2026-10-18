@@ -499,7 +499,11 @@ export default function HelpTour({
           <View style={[styles.dim, StyleSheet.absoluteFill]} />
         )}
 
-        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+        <TouchableOpacity
+          style={StyleSheet.absoluteFill}
+          activeOpacity={1}
+          onPress={() => (isLast ? onClose() : setStepIndex((i) => i + 1))}
+        />
 
         <Animated.View
           style={[styles.tooltip, { top: tooltipTop, opacity: contentOpacity, transform: [{ scale: popScale }] }]}
