@@ -4,6 +4,8 @@ import {
   Image,
   StyleSheet,
   TouchableOpacity,
+  Pressable,
+  TextInput,
   ScrollView,
   ActivityIndicator,
   useWindowDimensions,
@@ -12,6 +14,7 @@ import {
 } from "react-native";
 import { useEffect, useRef, useState } from "react";
 import { router } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 import StallPopup from "../shared/components/StallPopup";
 import { subscribeToStalls } from "../services/stallService";
 import { MARKET_LAYOUT, StallHotspot } from "../shared/constants/marketLayout";
@@ -49,6 +52,205 @@ interface Stall {
   width?: number;
   length?: number;
   price?: number;
+}
+
+type MobileMapItem = {
+  hotspot: StallHotspot;
+  stall: Stall;
+};
+
+const MOBILE_PRIMARY = "#0B6247";
+const MOBILE_BG = "#F7F4EC";
+
+function stallCode(stall: Stall): string {
+  return String(stall.spaceId ?? stall.name ?? stall.id).replace(/^stall\s*/i, "").trim();
+}
+
+function stallCategory(stall: Stall): string {
+  return String(stall.marketType ?? stall.category ?? "Uncategorized").trim();
+}
+
+function statusMeta(status?: string) {
+  const normalized = String(status ?? "available").trim().toLowerCase();
+  if (normalized === "occupied") return {label: "Occupied", color: "#D95F61", soft: "#FBE0E1"};
+  if (normalized === "reserved" || normalized === "pending") return {label: "Reserved", color: "#D49B15", soft: "#FFF0BD"};
+  if (normalized === "unavailable" || normalized === "disabled") return {label: "Unavailable", color: "#87939A", soft: "#E8ECEE"};
+  return {label: "Available", color: "#16845F", soft: "#D9F4E9"};
+}
+
+function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: boolean}) {
+  const {width} = useWindowDimensions();
+  const mapWidth = Math.max(296, width - 24);
+  const mapHeight = mapWidth / BLUEPRINT_ASPECT_RATIO;
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("All");
+  const [selected, setSelected] = useState<MobileMapItem | null>(null);
+  const mapScale = useRef(new Animated.Value(1)).current;
+  const mapX = useRef(new Animated.Value(0)).current;
+  const mapY = useRef(new Animated.Value(0)).current;
+
+  const categories = ["All", "Wet Market", "Dry Market", "Home Essential"];
+  const filtered = items.filter(({stall}) => {
+    const text = `${stallCode(stall)} ${stall.name ?? ""} ${stall.buildingNumber ?? ""} ${stallCategory(stall)}`.toLowerCase();
+    const matchesQuery = text.includes(query.trim().toLowerCase());
+    const normalizedCategory = stallCategory(stall).toLowerCase().replace(/s$/, "");
+    const selectedCategory = category.toLowerCase().replace(/s$/, "");
+    return matchesQuery && (category === "All" || normalizedCategory.includes(selectedCategory));
+  });
+
+  const animateMap = (item: MobileMapItem | null, explicitScale?: number) => {
+    const targetScale = explicitScale ?? (item ? 1.7 : 1);
+    let targetX = 0;
+    let targetY = 0;
+    if (item && targetScale > 1) {
+      const centerX = ((item.hotspot.xPct + item.hotspot.widthPct / 2) / 100) * mapWidth;
+      const centerY = ((item.hotspot.yPct + item.hotspot.heightPct / 2) / 100) * mapHeight;
+      targetX = (mapWidth / 2 - centerX) * (targetScale - 1);
+      targetY = (mapHeight / 2 - centerY) * (targetScale - 1);
+    }
+    Animated.parallel([
+      Animated.spring(mapScale, {toValue: targetScale, useNativeDriver: Platform.OS !== "web", damping: 18, stiffness: 150}),
+      Animated.spring(mapX, {toValue: targetX, useNativeDriver: Platform.OS !== "web", damping: 18, stiffness: 150}),
+      Animated.spring(mapY, {toValue: targetY, useNativeDriver: Platform.OS !== "web", damping: 18, stiffness: 150}),
+    ]).start();
+  };
+
+  const selectItem = (item: MobileMapItem) => {
+    setSelected(item);
+    animateMap(item);
+  };
+  const closeSelection = () => {
+    setSelected(null);
+    animateMap(null);
+  };
+  const adjustZoom = (delta: number) => {
+    mapScale.stopAnimation((current) => {
+      const next = Math.max(1, Math.min(2.2, current + delta));
+      animateMap(selected, next);
+    });
+  };
+
+  return (
+    <View style={mobileStyles.screen}>
+      <View style={mobileStyles.header}>
+        <Pressable style={mobileStyles.headerButton} onPress={() => router.replace("/")} accessibilityLabel="Back to home">
+          <Ionicons name="arrow-back" size={22} color="#fff" />
+        </Pressable>
+        <Text style={mobileStyles.headerTitle}>Market Map</Text>
+        <View style={mobileStyles.headerButtonPlaceholder} />
+      </View>
+
+      <ScrollView contentContainerStyle={mobileStyles.content} keyboardShouldPersistTaps="handled">
+        <View style={mobileStyles.searchBox}>
+          <Ionicons name="search" size={20} color="#68726D" />
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search stall, category, or tenant"
+            placeholderTextColor="#7B827E"
+            style={mobileStyles.searchInput}
+          />
+          {!!query && (
+            <Pressable onPress={() => setQuery("")} accessibilityLabel="Clear search">
+              <Ionicons name="close-circle" size={19} color="#8B928E" />
+            </Pressable>
+          )}
+        </View>
+
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={mobileStyles.chips}>
+          {categories.map((item) => (
+            <Pressable key={item} onPress={() => setCategory(item)} style={[mobileStyles.chip, category === item && mobileStyles.chipActive]}>
+              <Text style={[mobileStyles.chipText, category === item && mobileStyles.chipTextActive]}>{item}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+
+        <View style={[mobileStyles.mapCard, {width: mapWidth, height: mapHeight}]}>
+          <Animated.View style={{width: mapWidth, height: mapHeight, transform: [{translateX: mapX}, {translateY: mapY}, {scale: mapScale}]}}>
+            <Image source={require("../assets/market-2Dlayout.png")} style={mobileStyles.mapImage} resizeMode="contain" />
+            {items.map((item, index) => {
+              const {hotspot, stall} = item;
+              const meta = statusMeta(stall.status);
+              const active = selected?.hotspot.name === hotspot.name;
+              return (
+                <Pressable
+                  key={`${hotspot.name}-${index}`}
+                  onPress={() => selectItem(item)}
+                  accessibilityLabel={`View ${stallCode(stall)}`}
+                  style={[
+                    mobileStyles.hotspot,
+                    {
+                      left: `${hotspot.xPct}%`, top: `${hotspot.yPct}%`,
+                      width: `${hotspot.widthPct}%`, height: `${hotspot.heightPct}%`,
+                      backgroundColor: `${meta.color}55`, borderColor: active ? "#00D68F" : meta.color,
+                      borderWidth: active ? 2.5 : 0.8,
+                      transform: hotspot.rotationDeg ? [{rotate: `${hotspot.rotationDeg}deg`}] : undefined,
+                    },
+                  ]}
+                />
+              );
+            })}
+          </Animated.View>
+          {loading && <View style={mobileStyles.mapLoading}><ActivityIndicator color={MOBILE_PRIMARY} /></View>}
+          <View style={mobileStyles.zoomControls}>
+            <Pressable style={mobileStyles.zoomButton} onPress={() => adjustZoom(0.25)} accessibilityLabel="Zoom in"><Ionicons name="add" size={22} color={MOBILE_PRIMARY} /></Pressable>
+            <Pressable style={mobileStyles.zoomButton} onPress={() => adjustZoom(-0.25)} accessibilityLabel="Zoom out"><Ionicons name="remove" size={22} color={MOBILE_PRIMARY} /></Pressable>
+            <Pressable style={mobileStyles.zoomButton} onPress={closeSelection} accessibilityLabel="Reset map"><Ionicons name="scan-outline" size={19} color={MOBILE_PRIMARY} /></Pressable>
+          </View>
+        </View>
+
+        <View style={mobileStyles.legend}>
+          {["Available", "Occupied", "Reserved", "Unavailable"].map((label) => {
+            const meta = statusMeta(label);
+            return <View key={label} style={mobileStyles.legendItem}><View style={[mobileStyles.legendDot, {backgroundColor: meta.color}]} /><Text style={mobileStyles.legendText}>{label}</Text></View>;
+          })}
+        </View>
+
+        <View style={mobileStyles.sheet}>
+          <View style={mobileStyles.sheetHandle} />
+          <Text style={mobileStyles.sheetTitle}>All Stalls</Text>
+
+          {selected && (() => {
+            const meta = statusMeta(selected.stall.status);
+            return (
+              <View style={mobileStyles.selectedCard}>
+                <Pressable style={mobileStyles.selectedClose} onPress={closeSelection} accessibilityLabel="Close stall details"><Ionicons name="close" size={22} color="#22302A" /></Pressable>
+                <Text style={mobileStyles.selectedCode}>{stallCode(selected.stall)}</Text>
+                <Text style={mobileStyles.selectedCategory}>{stallCategory(selected.stall)}</Text>
+                <View style={mobileStyles.selectedDetails}>
+                  <Text style={mobileStyles.selectedDetail}>Dimensions: {selected.stall.spaceDimension ?? `${selected.stall.length ?? "—"} m × ${selected.stall.width ?? "—"} m`}</Text>
+                  <Text style={mobileStyles.selectedDetail}>Daily rent: ₱{Number(selected.stall.price ?? 0).toLocaleString("en-PH")}</Text>
+                  <View style={[mobileStyles.statusPill, {backgroundColor: meta.soft}]}><Text style={[mobileStyles.statusText, {color: meta.color}]}>{meta.label}</Text></View>
+                </View>
+                <Pressable style={mobileStyles.arButton} onPress={() => router.push("/ar-view")}><Ionicons name="cube-outline" size={17} color="#fff" /><Text style={mobileStyles.arButtonText}>View in AR</Text></Pressable>
+              </View>
+            );
+          })()}
+
+          {filtered.length === 0 && !loading ? (
+            <Text style={mobileStyles.emptyText}>No stalls match your search.</Text>
+          ) : filtered.map((item) => {
+            const meta = statusMeta(item.stall.status);
+            const active = selected?.hotspot.name === item.hotspot.name;
+            return (
+              <Pressable key={item.hotspot.name} onPress={() => selectItem(item)} style={[mobileStyles.stallRow, active && mobileStyles.stallRowActive]}>
+                <View style={mobileStyles.stallIcon}><Ionicons name="storefront-outline" size={20} color={MOBILE_PRIMARY} /></View>
+                <View style={mobileStyles.stallInfo}>
+                  <Text style={mobileStyles.stallCode}>{stallCode(item.stall)}</Text>
+                  <Text style={mobileStyles.stallMeta} numberOfLines={1}>{item.stall.buildingNumber ?? "Market"} · {stallCategory(item.stall)}</Text>
+                </View>
+                <View style={mobileStyles.stallRight}>
+                  <Text style={mobileStyles.stallPrice}>₱{Number(item.stall.price ?? 0).toLocaleString("en-PH")}/day</Text>
+                  <Text style={[mobileStyles.rowStatus, {color: meta.color}]}>{meta.label}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#8B928E" />
+              </Pressable>
+            );
+          })}
+        </View>
+      </ScrollView>
+    </View>
+  );
 }
 
 export default function MarketMap() {
@@ -196,6 +398,18 @@ export default function MarketMap() {
   // instead of hardcoded.
   const occupiedCount = stalls.filter((s) => s.status?.toLowerCase() === "occupied").length;
   const vacantCount = stalls.length - occupiedCount;
+
+  if (isMobile) {
+    const mobileItems: MobileMapItem[] = MARKET_LAYOUT.map((hotspot) => ({
+      hotspot,
+      stall: stallsByName.get(hotspot.name) ?? {
+        id: hotspot.name,
+        name: hotspot.name,
+        status: "Unavailable",
+      },
+    }));
+    return <MobileMarketView items={mobileItems} loading={loading} />;
+  }
 
   // Tablet renders this without any ScrollView (see below) -- ScrollView is
   // an overflow container under the hood, and an overflow ancestor clipping
@@ -809,4 +1023,64 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "rgba(0,0,0,0.3)",
   },
+});
+
+const mobileStyles = StyleSheet.create({
+  screen: {flex: 1, backgroundColor: MOBILE_BG},
+  header: {
+    minHeight: 112,
+    paddingTop: 48,
+    paddingHorizontal: 16,
+    paddingBottom: 18,
+    backgroundColor: MOBILE_PRIMARY,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  headerButton: {width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.14)"},
+  headerButtonPlaceholder: {width: 42},
+  headerTitle: {fontSize: 24, fontWeight: "800", color: "#fff"},
+  content: {padding: 12, paddingBottom: 36},
+  searchBox: {height: 52, paddingHorizontal: 15, borderRadius: 18, backgroundColor: "#fff", flexDirection: "row", alignItems: "center", gap: 10, shadowColor: "#102A20", shadowOpacity: 0.1, shadowRadius: 10, shadowOffset: {width: 0, height: 4}, elevation: 3},
+  searchInput: {flex: 1, fontSize: 15, color: "#17211D", paddingVertical: 0},
+  chips: {gap: 8, paddingVertical: 12},
+  chip: {paddingHorizontal: 15, paddingVertical: 9, borderRadius: 18, borderWidth: 1, borderColor: "#A8D1C1", backgroundColor: "#F6FBF8"},
+  chipActive: {backgroundColor: MOBILE_PRIMARY, borderColor: MOBILE_PRIMARY},
+  chipText: {fontSize: 13, fontWeight: "700", color: "#23483B"},
+  chipTextActive: {color: "#fff"},
+  mapCard: {position: "relative", overflow: "hidden", borderRadius: 18, backgroundColor: "#DDE8E2", borderWidth: 1, borderColor: "#CBD8D1"},
+  mapImage: {width: "100%", height: "100%"},
+  hotspot: {position: "absolute", borderRadius: 2},
+  mapLoading: {position: "absolute", inset: 0 as any, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.55)"},
+  zoomControls: {position: "absolute", right: 8, top: 8, gap: 6},
+  zoomButton: {width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: "#fff", shadowColor: "#000", shadowOpacity: 0.14, shadowRadius: 5, shadowOffset: {width: 0, height: 2}, elevation: 3},
+  legend: {marginTop: 10, paddingHorizontal: 10, paddingVertical: 10, borderRadius: 14, backgroundColor: "#fff", flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", rowGap: 8},
+  legendItem: {width: "48%", flexDirection: "row", alignItems: "center", gap: 7},
+  legendDot: {width: 10, height: 10, borderRadius: 3},
+  legendText: {fontSize: 11, color: "#58615D"},
+  sheet: {marginTop: 12, padding: 12, borderRadius: 22, backgroundColor: "#fff", shadowColor: "#14251E", shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: {width: 0, height: 5}, elevation: 3},
+  sheetHandle: {alignSelf: "center", width: 48, height: 5, borderRadius: 3, backgroundColor: "#A7AAA8", marginBottom: 10},
+  sheetTitle: {fontSize: 22, fontWeight: "800", color: "#123D2F", marginBottom: 10},
+  selectedCard: {position: "relative", borderRadius: 16, borderWidth: 1.5, borderColor: "#70C5A5", backgroundColor: "#EFFAF5", padding: 14, marginBottom: 10},
+  selectedClose: {position: "absolute", right: 10, top: 10, zIndex: 2},
+  selectedCode: {fontSize: 24, fontWeight: "900", color: "#14231D", paddingRight: 34},
+  selectedCategory: {fontSize: 13, fontWeight: "700", color: "#16845F", marginTop: 2},
+  selectedDetails: {marginTop: 10, gap: 5},
+  selectedDetail: {fontSize: 13, color: "#46524D"},
+  statusPill: {alignSelf: "flex-start", borderRadius: 12, paddingHorizontal: 9, paddingVertical: 4, marginTop: 2},
+  statusText: {fontSize: 11, fontWeight: "800"},
+  arButton: {marginTop: 12, height: 42, borderRadius: 13, backgroundColor: MOBILE_PRIMARY, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8},
+  arButtonText: {fontSize: 13, fontWeight: "800", color: "#fff"},
+  stallRow: {minHeight: 70, paddingHorizontal: 8, paddingVertical: 9, borderTopWidth: 1, borderTopColor: "#ECEEEB", flexDirection: "row", alignItems: "center", gap: 9},
+  stallRowActive: {backgroundColor: "#EFFAF5", borderRadius: 13, borderTopColor: "transparent"},
+  stallIcon: {width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "#DFF4EB"},
+  stallInfo: {flex: 1, minWidth: 0},
+  stallCode: {fontSize: 16, fontWeight: "800", color: "#17211D"},
+  stallMeta: {marginTop: 2, fontSize: 11, color: "#69716D"},
+  stallRight: {alignItems: "flex-end", maxWidth: 105},
+  stallPrice: {fontSize: 11, fontWeight: "800", color: "#24342D"},
+  rowStatus: {marginTop: 3, fontSize: 10, fontWeight: "800"},
+  emptyText: {paddingVertical: 28, textAlign: "center", color: "#6B746F", fontSize: 14},
 });
