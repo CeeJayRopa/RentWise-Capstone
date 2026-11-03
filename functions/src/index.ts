@@ -1425,6 +1425,7 @@ function requiredPublicString(value: unknown, field: string, maxLength: number):
 }
 
 const publicStallsCacheRef = db.collection("publicApiCache").doc("stalls");
+const PUBLIC_STALLS_CACHE_VERSION = 2;
 
 function publicStallData(id: string, data: FirebaseFirestore.DocumentData) {
   const numericPrice = Number(data.price);
@@ -1433,7 +1434,7 @@ function publicStallData(id: string, data: FirebaseFirestore.DocumentData) {
     name: typeof data.name === "string" ? data.name : "",
     spaceId: typeof data.spaceId === "string" ? data.spaceId : "",
     status: typeof data.status === "string" ? data.status : "unknown",
-    buildingNumber: typeof data.buildingNumber === "string" ? data.buildingNumber : "",
+    buildingNumber: data.buildingNumber == null ? "" : String(data.buildingNumber).trim(),
     category: typeof data.category === "string" ? data.category : "",
     marketType: typeof data.marketType === "string" ? data.marketType : "",
     width: Number.isFinite(Number(data.width)) ? Number(data.width) : null,
@@ -1450,6 +1451,7 @@ async function rebuildPublicStallsCache() {
     stalls,
     updatedAt: FieldValue.serverTimestamp(),
     sourceCount: stalls.length,
+    schemaVersion: PUBLIC_STALLS_CACHE_VERSION,
   });
   return stalls;
 }
@@ -1489,8 +1491,9 @@ export const getPublicStalls = onCall(async (request) => {
   // cache-document read instead of one read for every stall in the market.
   await checkRateLimit(publicCallerKey(request, "stalls"), 120, 60 * 60_000);
   const cacheSnap = await publicStallsCacheRef.get();
-  const cachedStalls = cacheSnap.data()?.stalls;
-  if (Array.isArray(cachedStalls)) return cachedStalls;
+  const cacheData = cacheSnap.data();
+  const cachedStalls = cacheData?.stalls;
+  if (Array.isArray(cachedStalls) && cacheData?.schemaVersion === PUBLIC_STALLS_CACHE_VERSION) return cachedStalls;
 
   // Safe self-seeding path for the first request after deployment or if the
   // cache document is ever removed.

@@ -68,7 +68,25 @@ function stallCode(stall: Stall): string {
 }
 
 function stallCategory(stall: Stall): string {
-  return String(stall.marketType ?? stall.category ?? "Uncategorized").trim();
+  const marketType = String(stall.marketType ?? "").trim();
+  const category = String(stall.category ?? "").trim();
+  return marketType || category || "Uncategorized";
+}
+
+function stallBuilding(stall: Stall): string {
+  const buildingNumber = String(stall.buildingNumber ?? "").trim();
+  return buildingNumber ? `Building ${buildingNumber}` : "Building not specified";
+}
+
+function stallDimensions(stall: Stall): string {
+  const savedDimension = String(stall.spaceDimension ?? "").trim();
+  if (savedDimension) return savedDimension;
+  const length = Number(stall.length);
+  const width = Number(stall.width);
+  if (Number.isFinite(length) && length > 0 && Number.isFinite(width) && width > 0) {
+    return `${length} m × ${width} m`;
+  }
+  return "Not specified";
 }
 
 function statusMeta(status?: string) {
@@ -221,7 +239,7 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
                 <Text style={mobileStyles.selectedCode}>{stallCode(selected.stall)}</Text>
                 <Text style={mobileStyles.selectedCategory}>{stallCategory(selected.stall)}</Text>
                 <View style={mobileStyles.selectedDetails}>
-                  <Text style={mobileStyles.selectedDetail}>Dimensions: {selected.stall.spaceDimension ?? `${selected.stall.length ?? "—"} m × ${selected.stall.width ?? "—"} m`}</Text>
+                  <Text style={mobileStyles.selectedDetail}>Dimensions: {stallDimensions(selected.stall)}</Text>
                   <Text style={mobileStyles.selectedDetail}>Daily rent: ₱{Number(selected.stall.price ?? 0).toLocaleString("en-PH")}</Text>
                   <View style={[mobileStyles.statusPill, {backgroundColor: meta.soft}]}><Text style={[mobileStyles.statusText, {color: meta.color}]}>{meta.label}</Text></View>
                 </View>
@@ -264,26 +282,24 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
                 <Text style={mobileStyles.modalEyebrow}>STALL DESCRIPTION</Text>
                 <Text style={mobileStyles.modalTitle}>{selected ? stallCode(selected.stall) : "Stall"}</Text>
               </View>
-              <Pressable style={mobileStyles.modalClose} onPress={() => setDescriptionVisible(false)} accessibilityLabel="Close stall description">
-                <Ionicons name="close" size={23} color="#24342D" />
-              </Pressable>
             </View>
 
             {selected && (() => {
               const stall = selected.stall;
               const meta = statusMeta(stall.status);
-              const dimension = stall.spaceDimension ?? `${stall.length ?? "—"} m × ${stall.width ?? "—"} m`;
+              const dimension = stallDimensions(stall);
+              const building = stallBuilding(stall);
               return (
                 <>
                   <Text style={mobileStyles.modalDescription}>
-                    {stallCode(stall)} is a {stallCategory(stall).toLowerCase()} stall located in {stall.buildingNumber ?? "the public market"}. It has an area measurement of {dimension} and a daily rental rate of ₱{Number(stall.price ?? 0).toLocaleString("en-PH")}.
+                    {stallCode(stall)} is a {stallCategory(stall).toLowerCase()} stall located in {building}. It has an area measurement of {dimension} and a daily rental rate of ₱{Number(stall.price ?? 0).toLocaleString("en-PH")}.
                   </Text>
                   <View style={mobileStyles.modalDetailsCard}>
-                    <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Building</Text><Text style={mobileStyles.modalDetailValue}>{stall.buildingNumber ?? "—"}</Text></View>
+                    <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Building</Text><Text style={mobileStyles.modalDetailValue}>{building}</Text></View>
                     <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Category</Text><Text style={mobileStyles.modalDetailValue}>{stallCategory(stall)}</Text></View>
                     <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Dimensions</Text><Text style={mobileStyles.modalDetailValue}>{dimension}</Text></View>
                     <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Rent rate</Text><Text style={mobileStyles.modalDetailValue}>₱{Number(stall.price ?? 0).toLocaleString("en-PH")} / day</Text></View>
-                    <View style={[mobileStyles.modalDetailRow, {borderBottomWidth: 0}]}><Text style={mobileStyles.modalDetailLabel}>Availability</Text><View style={[mobileStyles.statusPill, {backgroundColor: meta.soft, marginTop: 0}]}><Text style={[mobileStyles.statusText, {color: meta.color}]}>{meta.label}</Text></View></View>
+                    <View style={[mobileStyles.modalDetailRow, {borderBottomWidth: 0}]}><Text style={mobileStyles.modalDetailLabel}>Availability</Text><View style={[mobileStyles.statusPill, mobileStyles.modalStatusPill, {backgroundColor: meta.soft}]}><Text style={[mobileStyles.statusText, {color: meta.color}]}>{meta.label}</Text></View></View>
                   </View>
                   <Text style={mobileStyles.modalNote}>Availability may change. Contact the market administrator to confirm rental requirements and current availability.</Text>
                 </>
@@ -1135,12 +1151,12 @@ const mobileStyles = StyleSheet.create({
   modalHeader: {flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 16},
   modalEyebrow: {fontSize: 10, fontWeight: "800", letterSpacing: 1.2, color: "#16845F"},
   modalTitle: {marginTop: 3, fontSize: 27, fontWeight: "900", color: "#14372B"},
-  modalClose: {width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center", backgroundColor: "#EDF3EF"},
   modalDescription: {fontSize: 14, lineHeight: 22, color: "#4A5651", marginBottom: 15},
   modalDetailsCard: {borderRadius: 16, paddingHorizontal: 14, backgroundColor: "#F4F8F5"},
   modalDetailRow: {minHeight: 47, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12, borderBottomWidth: 1, borderBottomColor: "#DFE7E2"},
   modalDetailLabel: {fontSize: 12, color: "#68736E"},
   modalDetailValue: {flexShrink: 1, textAlign: "right", fontSize: 13, fontWeight: "800", color: "#23352E"},
+  modalStatusPill: {alignSelf: "center", marginTop: 3},
   modalNote: {marginTop: 14, fontSize: 11, lineHeight: 17, color: "#77807C"},
   modalDone: {height: 48, marginTop: 18, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: MOBILE_PRIMARY},
   modalDoneText: {fontSize: 14, fontWeight: "800", color: "#fff"},
