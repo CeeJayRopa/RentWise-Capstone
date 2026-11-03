@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   Pressable,
   TextInput,
+  Modal,
   ScrollView,
   ActivityIndicator,
   useWindowDimensions,
@@ -85,6 +86,7 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
   const [selected, setSelected] = useState<MobileMapItem | null>(null);
+  const [descriptionVisible, setDescriptionVisible] = useState(false);
   const mapScale = useRef(new Animated.Value(1)).current;
   const mapX = useRef(new Animated.Value(0)).current;
   const mapY = useRef(new Animated.Value(0)).current;
@@ -120,6 +122,7 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
     animateMap(item);
   };
   const closeSelection = () => {
+    setDescriptionVisible(false);
     setSelected(null);
     animateMap(null);
   };
@@ -222,7 +225,10 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
                   <Text style={mobileStyles.selectedDetail}>Daily rent: ₱{Number(selected.stall.price ?? 0).toLocaleString("en-PH")}</Text>
                   <View style={[mobileStyles.statusPill, {backgroundColor: meta.soft}]}><Text style={[mobileStyles.statusText, {color: meta.color}]}>{meta.label}</Text></View>
                 </View>
-                <Pressable style={mobileStyles.arButton} onPress={() => router.push("/ar-view")}><Ionicons name="cube-outline" size={17} color="#fff" /><Text style={mobileStyles.arButtonText}>View in AR</Text></Pressable>
+                <Pressable style={mobileStyles.descriptionButton} onPress={() => setDescriptionVisible(true)}>
+                  <Ionicons name="document-text-outline" size={17} color="#fff" />
+                  <Text style={mobileStyles.descriptionButtonText}>View Stall Description</Text>
+                </Pressable>
               </View>
             );
           })()}
@@ -249,6 +255,47 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
           })}
         </View>
       </ScrollView>
+
+      <Modal visible={descriptionVisible && !!selected} transparent animationType="fade" onRequestClose={() => setDescriptionVisible(false)}>
+        <View style={mobileStyles.modalBackdrop}>
+          <View style={mobileStyles.modalCard}>
+            <View style={mobileStyles.modalHeader}>
+              <View>
+                <Text style={mobileStyles.modalEyebrow}>STALL DESCRIPTION</Text>
+                <Text style={mobileStyles.modalTitle}>{selected ? stallCode(selected.stall) : "Stall"}</Text>
+              </View>
+              <Pressable style={mobileStyles.modalClose} onPress={() => setDescriptionVisible(false)} accessibilityLabel="Close stall description">
+                <Ionicons name="close" size={23} color="#24342D" />
+              </Pressable>
+            </View>
+
+            {selected && (() => {
+              const stall = selected.stall;
+              const meta = statusMeta(stall.status);
+              const dimension = stall.spaceDimension ?? `${stall.length ?? "—"} m × ${stall.width ?? "—"} m`;
+              return (
+                <>
+                  <Text style={mobileStyles.modalDescription}>
+                    {stallCode(stall)} is a {stallCategory(stall).toLowerCase()} stall located in {stall.buildingNumber ?? "the public market"}. It has an area measurement of {dimension} and a daily rental rate of ₱{Number(stall.price ?? 0).toLocaleString("en-PH")}.
+                  </Text>
+                  <View style={mobileStyles.modalDetailsCard}>
+                    <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Building</Text><Text style={mobileStyles.modalDetailValue}>{stall.buildingNumber ?? "—"}</Text></View>
+                    <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Category</Text><Text style={mobileStyles.modalDetailValue}>{stallCategory(stall)}</Text></View>
+                    <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Dimensions</Text><Text style={mobileStyles.modalDetailValue}>{dimension}</Text></View>
+                    <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Rent rate</Text><Text style={mobileStyles.modalDetailValue}>₱{Number(stall.price ?? 0).toLocaleString("en-PH")} / day</Text></View>
+                    <View style={[mobileStyles.modalDetailRow, {borderBottomWidth: 0}]}><Text style={mobileStyles.modalDetailLabel}>Availability</Text><View style={[mobileStyles.statusPill, {backgroundColor: meta.soft, marginTop: 0}]}><Text style={[mobileStyles.statusText, {color: meta.color}]}>{meta.label}</Text></View></View>
+                  </View>
+                  <Text style={mobileStyles.modalNote}>Availability may change. Contact the market administrator to confirm rental requirements and current availability.</Text>
+                </>
+              );
+            })()}
+
+            <Pressable style={mobileStyles.modalDone} onPress={() => setDescriptionVisible(false)}>
+              <Text style={mobileStyles.modalDoneText}>Done</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1071,8 +1118,8 @@ const mobileStyles = StyleSheet.create({
   selectedDetail: {fontSize: 13, color: "#46524D"},
   statusPill: {alignSelf: "flex-start", borderRadius: 12, paddingHorizontal: 9, paddingVertical: 4, marginTop: 2},
   statusText: {fontSize: 11, fontWeight: "800"},
-  arButton: {marginTop: 12, height: 42, borderRadius: 13, backgroundColor: MOBILE_PRIMARY, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8},
-  arButtonText: {fontSize: 13, fontWeight: "800", color: "#fff"},
+  descriptionButton: {marginTop: 12, height: 42, borderRadius: 13, backgroundColor: MOBILE_PRIMARY, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8},
+  descriptionButtonText: {fontSize: 13, fontWeight: "800", color: "#fff"},
   stallRow: {minHeight: 70, paddingHorizontal: 8, paddingVertical: 9, borderTopWidth: 1, borderTopColor: "#ECEEEB", flexDirection: "row", alignItems: "center", gap: 9},
   stallRowActive: {backgroundColor: "#EFFAF5", borderRadius: 13, borderTopColor: "transparent"},
   stallIcon: {width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "#DFF4EB"},
@@ -1083,4 +1130,18 @@ const mobileStyles = StyleSheet.create({
   stallPrice: {fontSize: 11, fontWeight: "800", color: "#24342D"},
   rowStatus: {marginTop: 3, fontSize: 10, fontWeight: "800"},
   emptyText: {paddingVertical: 28, textAlign: "center", color: "#6B746F", fontSize: 14},
+  modalBackdrop: {flex: 1, padding: 18, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(4, 22, 16, 0.58)"},
+  modalCard: {width: "100%", maxWidth: 420, borderRadius: 24, padding: 20, backgroundColor: "#fff", shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 18, shadowOffset: {width: 0, height: 8}, elevation: 8},
+  modalHeader: {flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 16},
+  modalEyebrow: {fontSize: 10, fontWeight: "800", letterSpacing: 1.2, color: "#16845F"},
+  modalTitle: {marginTop: 3, fontSize: 27, fontWeight: "900", color: "#14372B"},
+  modalClose: {width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center", backgroundColor: "#EDF3EF"},
+  modalDescription: {fontSize: 14, lineHeight: 22, color: "#4A5651", marginBottom: 15},
+  modalDetailsCard: {borderRadius: 16, paddingHorizontal: 14, backgroundColor: "#F4F8F5"},
+  modalDetailRow: {minHeight: 47, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12, borderBottomWidth: 1, borderBottomColor: "#DFE7E2"},
+  modalDetailLabel: {fontSize: 12, color: "#68736E"},
+  modalDetailValue: {flexShrink: 1, textAlign: "right", fontSize: 13, fontWeight: "800", color: "#23352E"},
+  modalNote: {marginTop: 14, fontSize: 11, lineHeight: 17, color: "#77807C"},
+  modalDone: {height: 48, marginTop: 18, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: MOBILE_PRIMARY},
+  modalDoneText: {fontSize: 14, fontWeight: "800", color: "#fff"},
 });
