@@ -22,8 +22,9 @@ import {
 } from "../shared/services/pushNotifications";
 import { useResponsive, MAX_CONTENT_WIDTH } from "../shared/hooks/useResponsive";
 import { colors } from "../shared/theme";
-import { initializeLocalCache } from "../shared/services/localCache";
+import { clearLocalCache, initializeLocalCache } from "../shared/services/localCache";
 import NetworkStatusBanner from "../shared/components/NetworkStatusBanner";
+import { setRememberMe } from "../shared/services/rememberMe";
 
 configurePushNotifications();
 
@@ -36,6 +37,7 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
   const pathname = usePathname();
+  const pathnameRef = useRef(pathname);
   const lastDashboardBack = useRef(0);
   const [fontsLoaded, fontError] = useFonts({
     PlusJakartaSans_400Regular,
@@ -50,9 +52,13 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        registerForPushNotificationsAsync(user.uid);
+        await registerForPushNotificationsAsync(user.uid);
       }
     });
     return unsub;
@@ -67,12 +73,71 @@ export default function RootLayout() {
 
       const token = await user.getIdTokenResult();
       const authenticatedAt = new Date(token.authTime).getTime();
+      let endingSession = false;
       unsubscribeProfile = onSnapshot(doc(db, "users", user.uid), async (snapshot) => {
+        if (endingSession) return;
+
+        if (!snapshot.exists()) {
+          // On a cold start Firestore can emit an empty cache snapshot before
+          // it has checked the server. That is not proof that the account was
+          // deleted, so wait for the server-backed snapshot.
+          if (snapshot.metadata.fromCache) return;
+
+          endingSession = true;
+          const publicOrLockedRoute = [
+            "/",
+            "/login",
+            "/welcome",
+            "/quick-unlock",
+            "/reset-sending",
+            "/reset-otp",
+            "/reset-password",
+          ].includes(pathnameRef.current);
+          await setRememberMe(false).catch(() => {});
+          await clearLocalCache().catch(() => {});
+          await signOut(auth).catch(() => {});
+          // A stale persisted Firebase session discovered during startup is
+          // cleaned up silently. Only interrupt a tenant who was already in
+          // the authenticated area when their account disappeared.
+          if (!publicOrLockedRoute) {
+            Alert.alert(
+              "Account Unavailable",
+              "This account no longer exists. Please contact the admin if this is unexpected.",
+            );
+          }
+          router.replace("/login");
+          return;
+        }
+
+        const status = snapshot.data().status;
+        if (status && status !== "active") {
+          endingSession = true;
+          await setRememberMe(false).catch(() => {});
+          await clearLocalCache().catch(() => {});
+          await signOut(auth).catch(() => {});
+          Alert.alert(
+            "Account Archived",
+            "This account has been archived. Please contact the admin if this is unexpected.",
+          );
+          router.replace("/login");
+          return;
+        }
+
         const revokedAt = snapshot.data()?.sessionRevokedAt?.toMillis?.() ?? 0;
         if (revokedAt > authenticatedAt) {
+          endingSession = true;
+          await setRememberMe(false).catch(() => {});
+          await clearLocalCache().catch(() => {});
           await signOut(auth).catch(() => {});
+          Alert.alert(
+            "Session Ended",
+            "Your password was changed. Please sign in again with your new password.",
+          );
           router.replace("/login");
         }
+      }, (error) => {
+        if (!auth.currentUser) return;
+        console.error("TENANT SESSION LISTENER ERROR:", error);
       });
     });
 
@@ -127,41 +192,6 @@ export default function RootLayout() {
         NavigationBar.setStyle("dark");
       } catch {}
     }
-  }, []);
-
-  useEffect(() => {
-    // Disabling the tenant's Firebase Auth account only blocks NEW sign-ins
-    // — a session already open on this device keeps working until its
-    // token naturally expires. Watching the tenant's own doc for real time
-    // lets us force a sign-out the moment an admin/owner archives them,
-    // instead of leaving the archived account usable for up to an hour.
-    let unsubDoc: (() => void) | null = null;
-
-    const unsubAuth = onAuthStateChanged(auth, (user) => {
-      unsubDoc?.();
-      unsubDoc = null;
-      if (!user) return;
-
-      unsubDoc = onSnapshot(doc(db, "users", user.uid), (snap) => {
-        const status = snap.data()?.status;
-        if (snap.exists() && status && status !== "active") {
-          signOut(auth)
-            .catch(() => {})
-            .finally(() => {
-              Alert.alert(
-                "Account Archived",
-                "This account has been archived. Please contact the admin if this is unexpected.",
-              );
-              router.replace("/login");
-            });
-        }
-      });
-    });
-
-    return () => {
-      unsubAuth();
-      unsubDoc?.();
-    };
   }, []);
 
   const { isTablet } = useResponsive();
