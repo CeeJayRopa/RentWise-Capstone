@@ -2,12 +2,24 @@ import { View, Text, Image, StyleSheet, Pressable, Alert, Platform } from "react
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import * as FileSystem from "expo-file-system/legacy";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Check, Clock, XCircle, Download, Copy } from "lucide-react-native";
-import { computePeriodCharge, consecutivePeriodsEnding, periodLabel } from "../../services/billingSchedule";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
+import {
+  getSavedReceiptDirectory,
+  requestReceiptDirectoryAccess,
+  saveBase64PdfToReceiptDirectory,
+} from "../../shared/services/receiptStorage";
 
 type BreakdownLine = { label: string; amount: number };
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 function statusInfo(rawStatus: string) {
   const s = String(rawStatus || "").toLowerCase();
@@ -56,6 +68,7 @@ type MethodBadge =
 
 function methodBadge(method: string): MethodBadge {
   const m = String(method || "").toLowerCase();
+  if (m.includes("qrph") || m.includes("qr ph")) return { initial: "QR", color: colors.emerald };
   if (m.includes("gcash")) return { image: require("../../assets/gcash.png") };
   if (m.includes("maya")) return { image: require("../../assets/maya-icon.png"), dark: true };
   return { initial: "C", color: colors.textMuted };
@@ -66,28 +79,20 @@ function methodBadge(method: string): MethodBadge {
 // itemized, date-listed breakdown for those by working out how many
 // consecutive periods that lump sum actually represents (rentAmount ÷ one
 // period's charge) and listing each one ending on the receipt's date.
-function synthesizeBreakdown(data: any, billing: any): BreakdownLine[] {
-  const schedule = billing?.paymentSchedule;
-  const dailyRate = Number(billing?.price || 0);
-  const rentAmount = Number(data.rentAmount || 0);
-  if (!schedule || dailyRate <= 0 || rentAmount <= 0) return [];
-
-  const receiptDate = data.date ? new Date(data.date) : new Date();
-  const onePeriodCharge = computePeriodCharge(dailyRate, schedule, receiptDate);
-  if (onePeriodCharge <= 0) return [];
-
-  const periodsCount = Math.max(1, Math.round(rentAmount / onePeriodCharge));
-  return consecutivePeriodsEnding(dailyRate, schedule, receiptDate, periodsCount).map((p) => ({
-    label: periodLabel(schedule, p.date),
-    amount: p.amount,
-  }));
+function synthesizeBreakdown(data: any, _billing: any): BreakdownLine[] {
+  const amountPaid = Number(data.payment ?? data.amount ?? data.rentAmount ?? 0) - Number(data.change ?? 0);
+  if (!Number.isFinite(amountPaid) || amountPaid <= 0) return [];
+  return [{
+    label: "Legacy payment — itemized coverage unavailable",
+    amount: amountPaid,
+  }];
 }
 
 function buildReceiptHtml(data: any, breakdown: BreakdownLine[], amountPaid: number) {
   const rows = breakdown
     .map(
       (b) =>
-        `<tr><td style="padding:4px 0;color:#5B6B63;">${b.label}</td><td style="padding:4px 0;text-align:right;">₱${b.amount.toLocaleString()}</td></tr>`,
+        `<tr><td style="padding:4px 0;color:#5B6B63;">${escapeHtml(b.label)}</td><td style="padding:4px 0;text-align:right;">₱${b.amount.toLocaleString()}</td></tr>`,
     )
     .join("");
   return `
@@ -96,13 +101,13 @@ function buildReceiptHtml(data: any, breakdown: BreakdownLine[], amountPaid: num
         <h1 style="text-align:center;margin-bottom:0;">RentWise</h1>
         <p style="text-align:center;color:#5B6B63;margin-top:4px;">Payment Receipt</p>
         <hr />
-        <p><b>Reference ID:</b> #${data.receiptNo ?? ""}</p>
-        <p><b>Tenant Name:</b> ${data.tenantName ?? ""}</p>
-        <p><b>Building No.:</b> ${data.buildingNumber ?? ""}</p>
-        <p><b>Space ID:</b> ${data.spaceId ?? ""}</p>
-        <p><b>Payment Date:</b> ${data.date ? new Date(data.date).toLocaleString() : ""}</p>
-        <p><b>Payment Method:</b> ${data.paymentMethod ?? ""}</p>
-        <p><b>Status:</b> ${data.status ?? ""}</p>
+        <p><b>Reference ID:</b> #${escapeHtml(data.receiptNo)}</p>
+        <p><b>Tenant Name:</b> ${escapeHtml(data.tenantName)}</p>
+        <p><b>Building No.:</b> ${escapeHtml(data.buildingNumber)}</p>
+        <p><b>Space ID:</b> ${escapeHtml(data.spaceId)}</p>
+        <p><b>Payment Date:</b> ${escapeHtml(data.date ? new Date(data.date).toLocaleString() : "")}</p>
+        <p><b>Payment Method:</b> ${escapeHtml(data.paymentMethod)}</p>
+        <p><b>Status:</b> ${escapeHtml(data.status)}</p>
         ${
           data.change > 0
             ? `<p><b>Cash Tendered:</b> ₱${Number(data.payment ?? 0).toLocaleString()}</p><p><b>Change:</b> ₱${Number(data.change).toLocaleString()}</p>`
@@ -120,48 +125,34 @@ function buildReceiptHtml(data: any, breakdown: BreakdownLine[], amountPaid: num
   `;
 }
 
-// Cached once granted, so returning tenants aren't asked to pick a folder
-// on every single receipt download -- only the first time, or again if
-// that permission ever gets revoked (handled below).
-const DOWNLOAD_DIR_KEY = "receiptDownloadDirectoryUri";
-
-async function getDownloadDirectoryUri(forceReprompt = false): Promise<string | null> {
-  if (!forceReprompt) {
-    const cached = await AsyncStorage.getItem(DOWNLOAD_DIR_KEY);
-    if (cached) return cached;
-  }
-  const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
-  if (!permissions.granted) return null;
-  await AsyncStorage.setItem(DOWNLOAD_DIR_KEY, permissions.directoryUri);
-  return permissions.directoryUri;
-}
-
 async function downloadPdfOnAndroid(sourceUri: string, fileName: string) {
-  const dirUri = await getDownloadDirectoryUri();
-  if (!dirUri) {
-    Alert.alert("Permission needed", "Choose a folder to save the receipt to continue.");
+  const base64 = await FileSystem.readAsStringAsync(sourceUri, { encoding: FileSystem.EncodingType.Base64 });
+  const saved = await saveBase64PdfToReceiptDirectory(base64, fileName);
+  if (!saved) {
+    Alert.alert("Folder needed", "Choose a folder to save receipt soft copies.");
     return;
   }
 
-  const base64 = await FileSystem.readAsStringAsync(sourceUri, { encoding: FileSystem.EncodingType.Base64 });
-
-  try {
-    const destUri = await FileSystem.StorageAccessFramework.createFileAsync(dirUri, fileName, "application/pdf");
-    await FileSystem.writeAsStringAsync(destUri, base64, { encoding: FileSystem.EncodingType.Base64 });
-  } catch {
-    // The cached folder permission may have been revoked since it was
-    // granted -- clear it and ask once more before giving up.
-    await AsyncStorage.removeItem(DOWNLOAD_DIR_KEY);
-    const retryDirUri = await getDownloadDirectoryUri(true);
-    if (!retryDirUri) {
-      Alert.alert("Permission needed", "Choose a folder to save the receipt to continue.");
-      return;
-    }
-    const destUri = await FileSystem.StorageAccessFramework.createFileAsync(retryDirUri, fileName, "application/pdf");
-    await FileSystem.writeAsStringAsync(destUri, base64, { encoding: FileSystem.EncodingType.Base64 });
-  }
-
   Alert.alert("Downloaded", "Receipt saved to your chosen folder.");
+}
+
+async function confirmReceiptFolderAccess(): Promise<boolean> {
+  if (await getSavedReceiptDirectory()) return true;
+
+  const allowed = await new Promise<boolean>((resolve) => {
+    Alert.alert(
+      "Allow receipt storage?",
+      "RentWise needs access to a folder you choose so it can save your receipt soft copies. RentWise can only access the folder you select.",
+      [
+        { text: "Not now", style: "cancel", onPress: () => resolve(false) },
+        { text: "Choose folder", onPress: () => resolve(true) },
+      ],
+      { cancelable: true, onDismiss: () => resolve(false) },
+    );
+  });
+  if (!allowed) return false;
+
+  return Boolean(await requestReceiptDirectoryAccess());
 }
 
 // Shared by the receipt content and the standalone action bar below, so a
@@ -180,8 +171,11 @@ function useReceiptDerived(data: any, billing: any) {
 
   async function handleDownloadPdf() {
     try {
+      if (Platform.OS === "android" && !(await confirmReceiptFolderAccess())) return;
+
       const { uri } = await Print.printToFileAsync({ html: buildReceiptHtml(data, breakdown, amountPaid) });
-      const fileName = `RentWise-Receipt-${data.receiptNo ?? Date.now()}`;
+      const safeReceiptNo = String(data.receiptNo ?? Date.now()).replace(/[^a-zA-Z0-9_-]/g, "-");
+      const fileName = `RentWise-Receipt-${safeReceiptNo}.pdf`;
 
       if (Platform.OS === "android") {
         // Android has no "Downloads" folder write access without the user
