@@ -61,6 +61,7 @@ type MobileMapItem = {
 
 const MOBILE_PRIMARY = "#0B6247";
 const MOBILE_BG = "#F7F4EC";
+const MOBILE_STALLS_PER_PAGE = 5;
 
 function stallCode(stall: Stall): string {
   return String(stall.spaceId ?? stall.name ?? stall.id).replace(/^stall\s*/i, "").trim();
@@ -102,13 +103,19 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
   const mapHeight = mapWidth / BLUEPRINT_ASPECT_RATIO;
   const [selected, setSelected] = useState<MobileMapItem | null>(null);
   const [descriptionVisible, setDescriptionVisible] = useState(false);
+  const [page, setPage] = useState(0);
   const mapScale = useRef(new Animated.Value(1)).current;
   const mapX = useRef(new Animated.Value(0)).current;
   const mapY = useRef(new Animated.Value(0)).current;
   const scrollRef = useRef<ScrollView>(null);
-  const sheetYRef = useRef(0);
 
   const filtered = items;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / MOBILE_STALLS_PER_PAGE));
+  const visibleItems = filtered.slice(page * MOBILE_STALLS_PER_PAGE, (page + 1) * MOBILE_STALLS_PER_PAGE);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages - 1));
+  }, [totalPages]);
 
   const animateMap = (item: MobileMapItem | null, explicitScale?: number) => {
     const targetScale = explicitScale ?? (item ? 1.7 : 1);
@@ -129,9 +136,11 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
 
   const selectItem = (item: MobileMapItem) => {
     setSelected(item);
+    const itemIndex = filtered.findIndex((candidate) => candidate.hotspot.name === item.hotspot.name);
+    if (itemIndex >= 0) setPage(Math.floor(itemIndex / MOBILE_STALLS_PER_PAGE));
     animateMap(item);
     requestAnimationFrame(() => {
-      scrollRef.current?.scrollTo({y: Math.max(0, sheetYRef.current - 8), animated: true});
+      scrollRef.current?.scrollTo({y: 0, animated: true});
     });
   };
   const closeSelection = () => {
@@ -139,13 +148,6 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
     setSelected(null);
     animateMap(null);
   };
-  const adjustZoom = (delta: number) => {
-    mapScale.stopAnimation((current) => {
-      const next = Math.max(1, Math.min(2.2, current + delta));
-      animateMap(selected, next);
-    });
-  };
-
   return (
     <View style={mobileStyles.screen}>
       <View style={mobileStyles.header}>
@@ -184,22 +186,9 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
             })}
           </Animated.View>
           {loading && <View style={mobileStyles.mapLoading}><ActivityIndicator color={MOBILE_PRIMARY} /></View>}
-          <View style={mobileStyles.zoomControls}>
-            <Pressable style={mobileStyles.zoomButton} onPress={() => adjustZoom(0.25)} accessibilityLabel="Zoom in"><Ionicons name="add" size={22} color={MOBILE_PRIMARY} /></Pressable>
-            <Pressable style={mobileStyles.zoomButton} onPress={() => adjustZoom(-0.25)} accessibilityLabel="Zoom out"><Ionicons name="remove" size={22} color={MOBILE_PRIMARY} /></Pressable>
-            <Pressable style={mobileStyles.zoomButton} onPress={closeSelection} accessibilityLabel="Reset map"><Ionicons name="scan-outline" size={19} color={MOBILE_PRIMARY} /></Pressable>
-          </View>
         </View>
 
-        <View style={mobileStyles.legend}>
-          {["Available", "Occupied", "Reserved", "Unavailable"].map((label) => {
-            const meta = statusMeta(label);
-            return <View key={label} style={mobileStyles.legendItem}><View style={[mobileStyles.legendDot, {backgroundColor: meta.color}]} /><Text style={mobileStyles.legendText}>{label}</Text></View>;
-          })}
-        </View>
-
-        <View style={mobileStyles.sheet} onLayout={(event) => { sheetYRef.current = event.nativeEvent.layout.y; }}>
-          <View style={mobileStyles.sheetHandle} />
+        <View style={mobileStyles.sheet}>
           <Text style={mobileStyles.sheetTitle}>All Stalls</Text>
 
           {selected && (() => {
@@ -224,7 +213,7 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
 
           {filtered.length === 0 && !loading ? (
             <Text style={mobileStyles.emptyText}>No stalls are available to display.</Text>
-          ) : filtered.map((item) => {
+          ) : visibleItems.map((item) => {
             const meta = statusMeta(item.stall.status);
             const active = selected?.hotspot.name === item.hotspot.name;
             return (
@@ -242,6 +231,30 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
               </Pressable>
             );
           })}
+
+          {filtered.length > MOBILE_STALLS_PER_PAGE ? (
+            <View style={mobileStyles.pagination}>
+              <Pressable
+                disabled={page === 0}
+                onPress={() => setPage((current) => Math.max(0, current - 1))}
+                style={[mobileStyles.pageButton, page === 0 && mobileStyles.pageButtonDisabled]}
+                accessibilityLabel="Previous stall page"
+              >
+                <Ionicons name="chevron-back" size={17} color={page === 0 ? "#AAB1AD" : MOBILE_PRIMARY} />
+                <Text style={[mobileStyles.pageButtonText, page === 0 && mobileStyles.pageButtonTextDisabled]}>Previous</Text>
+              </Pressable>
+              <Text style={mobileStyles.pageLabel}>Page {page + 1} of {totalPages}</Text>
+              <Pressable
+                disabled={page >= totalPages - 1}
+                onPress={() => setPage((current) => Math.min(totalPages - 1, current + 1))}
+                style={[mobileStyles.pageButton, page >= totalPages - 1 && mobileStyles.pageButtonDisabled]}
+                accessibilityLabel="Next stall page"
+              >
+                <Text style={[mobileStyles.pageButtonText, page >= totalPages - 1 && mobileStyles.pageButtonTextDisabled]}>Next</Text>
+                <Ionicons name="chevron-forward" size={17} color={page >= totalPages - 1 ? "#AAB1AD" : MOBILE_PRIMARY} />
+              </Pressable>
+            </View>
+          ) : null}
         </View>
       </ScrollView>
 
@@ -1081,14 +1094,7 @@ const mobileStyles = StyleSheet.create({
   mapImage: {width: "100%", height: "100%"},
   hotspot: {position: "absolute", borderRadius: 2},
   mapLoading: {position: "absolute", inset: 0 as any, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.55)"},
-  zoomControls: {position: "absolute", right: 8, top: 8, gap: 6},
-  zoomButton: {width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: "#fff", shadowColor: "#000", shadowOpacity: 0.14, shadowRadius: 5, shadowOffset: {width: 0, height: 2}, elevation: 3},
-  legend: {marginTop: 10, paddingHorizontal: 10, paddingVertical: 10, borderRadius: 14, backgroundColor: "#fff", flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", rowGap: 8},
-  legendItem: {width: "48%", flexDirection: "row", alignItems: "center", gap: 7},
-  legendDot: {width: 10, height: 10, borderRadius: 3},
-  legendText: {fontSize: 11, color: "#58615D"},
   sheet: {marginTop: 12, padding: 12, borderRadius: 22, backgroundColor: "#fff", shadowColor: "#14251E", shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: {width: 0, height: 5}, elevation: 3},
-  sheetHandle: {alignSelf: "center", width: 48, height: 5, borderRadius: 3, backgroundColor: "#A7AAA8", marginBottom: 10},
   sheetTitle: {fontSize: 22, fontWeight: "800", color: "#123D2F", marginBottom: 10},
   selectedCard: {position: "relative", borderRadius: 16, backgroundColor: "#EFFAF5", padding: 14, marginBottom: 10},
   selectedClose: {position: "absolute", right: 10, top: 10, zIndex: 2},
@@ -1109,6 +1115,12 @@ const mobileStyles = StyleSheet.create({
   stallRight: {alignItems: "flex-end", maxWidth: 105},
   stallPrice: {fontSize: 11, fontWeight: "800", color: "#24342D"},
   rowStatus: {marginTop: 3, fontSize: 10, fontWeight: "800"},
+  pagination: {marginTop: 10, paddingTop: 12, borderTopWidth: 1, borderTopColor: "#E6EBE8", flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8},
+  pageButton: {minHeight: 38, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 3, paddingHorizontal: 10, borderRadius: 12, backgroundColor: "#E4F3EC"},
+  pageButtonDisabled: {backgroundColor: "#F1F2F1"},
+  pageButtonText: {fontSize: 11, fontWeight: "800", color: MOBILE_PRIMARY},
+  pageButtonTextDisabled: {color: "#AAB1AD"},
+  pageLabel: {fontSize: 11, fontWeight: "700", color: "#59645F"},
   emptyText: {paddingVertical: 28, textAlign: "center", color: "#6B746F", fontSize: 14},
   modalBackdrop: {flex: 1, padding: 18, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(4, 22, 16, 0.58)"},
   modalCard: {width: "100%", maxWidth: 420, borderRadius: 24, padding: 20, backgroundColor: "#fff", shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 18, shadowOffset: {width: 0, height: 8}, elevation: 8},
