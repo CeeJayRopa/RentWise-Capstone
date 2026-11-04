@@ -77,7 +77,10 @@ module.exports = async function handler(req, res) {
         return redirectTo(appUrl("cancelled"));
       }
       if (status === "awaiting_payment_method") {
-        return redirectTo(appUrl(intent.data.attributes.last_payment_error ? "failed" : "pending"));
+        // A last_payment_error can be transient while the wallet result is
+        // settling. The authenticated backend reconciliation decides whether
+        // it is terminal; the browser return must stay neutral.
+        return redirectTo(appUrl("pending"));
       }
       // status is "awaiting_next_action" (or similar transitional state) —
       // PayMongo's backend likely hasn't caught up yet, give it a moment.

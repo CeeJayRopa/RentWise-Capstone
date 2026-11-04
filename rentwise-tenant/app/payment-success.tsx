@@ -161,8 +161,8 @@ export default function PaymentSuccess() {
       } catch (err) {
         console.log("[PaymentSuccess] error:", err);
         Alert.alert(
-          "Error",
-          "Payment was received but could not be recorded. Contact support.",
+          "Verification pending",
+          "RentWise could not confirm the final result yet. Your payment will continue to be checked securely.",
         );
       }
 

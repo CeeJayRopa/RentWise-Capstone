@@ -529,7 +529,10 @@ export default function PaymentsScreen() {
       await handleAttemptResult(result, paymentAmount);
     } catch (err) {
       console.log("[handlePaymentSuccess] error:", err);
-      Alert.alert("Error", "Payment received but could not be recorded. Contact support.");
+      Alert.alert(
+        "Verification pending",
+        "RentWise could not confirm the final result yet. Your payment will continue to be checked securely.",
+      );
     }
   }
 
