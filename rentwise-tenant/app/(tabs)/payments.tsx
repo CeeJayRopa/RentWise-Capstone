@@ -17,9 +17,8 @@ import {
   RefreshControl,
 } from "react-native";
 import { WebView } from "react-native-webview";
-import { captureRef } from "react-native-view-shot";
 
-import { collection, doc, onSnapshot, query, updateDoc, where } from "firebase/firestore";
+import { collection, doc, onSnapshot, query, where } from "firebase/firestore";
 
 import { db } from "../../shared/services/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -28,8 +27,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { auth } from "../../shared/firebaseConfig";
 import { requireOnlineAction } from "../../shared/services/networkStatus";
 import { getTenantData } from "../../services/tenantService";
-import { createOnlinePayment, createPayment } from "../../services/paymentService";
-import { uploadReceiptImage } from "../../services/storageService";
+import {
+  createPayment,
+  createOnlinePayment,
+  reconcilePendingPayment,
+  recoverPaymentSession,
+  PaymentRecordingResult,
+  PaymentAttemptStatus,
+} from "../../services/paymentService";
 import {
   setPendingCheckoutSession,
   getPendingCheckoutSession,
@@ -40,8 +45,7 @@ import {
 } from "../../services/pendingPayment";
 import {
   computePeriodCharge,
-  chargedSinceMonthStart,
-  isSamePeriod,
+  rollingAmountDue,
   nextPeriodStart,
   consecutivePeriodsEnding,
   periodLabel,
@@ -60,8 +64,8 @@ import {
 } from "lucide-react-native";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 
-import ReceiptCardContent from "../components/ReceiptCardContent";
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import HelpSupportModal from "../components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 
 export default function PaymentsScreen() {
@@ -86,16 +90,20 @@ export default function PaymentsScreen() {
   const [showWebView, setShowWebView] = useState(false);
   const [webViewUrl, setWebViewUrl] = useState("");
   const [webViewLoading, setWebViewLoading] = useState(false);
+  const [checkoutAttemptStatus, setCheckoutAttemptStatus] = useState<PaymentAttemptStatus>("pending");
+  const [activePaymentAmount, setActivePaymentAmount] = useState(0);
+  const paymentStartInFlight = useRef(false);
+  const reconciliationInFlight = useRef(false);
+  const recoveryPromiseRef = useRef<Promise<boolean> | null>(null);
 
   const [toastMsg, setToastMsg] = useState("");
   const [showToast, setShowToast] = useState(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const [paymentSuccess, setPaymentSuccess] = useState<{ amount: number; method: string } | null>(null);
 
-  const [captureReceipt, setCaptureReceipt] = useState<{ paymentId: string; data: any } | null>(null);
-  const receiptShotRef = useRef<View>(null);
 
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
   const helpRef = useRef<View>(null);
   const historyRef = useRef<View>(null);
   const balanceRef = useRef<View>(null);
@@ -138,6 +146,13 @@ export default function PaymentsScreen() {
       setPayAmount("");
       setHasEditedAmount(false);
 
+      // If Android killed the process during wallet authorization, recover
+      // the verified provider payment from the persisted session. Incomplete
+      // sessions stay stored so a later focus can check again safely.
+      void recoverUnfinishedPayment().catch((error) => {
+        console.log("PAYMENT RECONCILIATION ERROR:", error);
+      });
+
       loadTenantProfile(user.uid);
 
       const q = query(collection(db, "payments"), where("userId", "==", user.uid));
@@ -171,39 +186,33 @@ export default function PaymentsScreen() {
     })();
   }, [loading]);
 
-  // Renders the digital receipt off-screen, snapshots it as an image, and
-  // attaches the uploaded image URL to the payment doc so admins can view it
-  // in the "Tenant's Online Receipt" confirmation modal.
+  // E-wallet redirects are not guaranteed to return to the app. While the
+  // modal is open, ask the trusted backend for the provider result. Only a
+  // recorded (provider-succeeded) result closes the flow as successful.
   useEffect(() => {
-    if (!captureReceipt) return;
-
-    let cancelled = false;
-
-    (async () => {
-      await new Promise((resolve) => requestAnimationFrame(resolve));
+    if (!showWebView) return;
+    let stopped = false;
+    const verify = async () => {
+      if (reconciliationInFlight.current || stopped) return;
+      reconciliationInFlight.current = true;
       try {
-        const uri = await captureRef(receiptShotRef, {
-          format: "jpg",
-          quality: 0.9,
-          result: "base64",
-        });
-        const imageUrl = await uploadReceiptImage(uri);
-        if (!cancelled) {
-          await updateDoc(doc(db, "payments", captureReceipt.paymentId), {
-            receipt: imageUrl,
-          });
-        }
-      } catch (err) {
-        console.log("[receipt capture/upload] error:", err);
+        const sessionId = await getPendingCheckoutSession();
+        if (!sessionId) return;
+        const result = await reconcilePendingPayment(sessionId);
+        if (!stopped) await handleAttemptResult(result, activePaymentAmount);
+      } catch (error) {
+        console.log("PAYMENT STATUS CHECK ERROR:", error);
       } finally {
-        if (!cancelled) setCaptureReceipt(null);
+        reconciliationInFlight.current = false;
       }
-    })();
-
-    return () => {
-      cancelled = true;
     };
-  }, [captureReceipt]);
+    void verify();
+    const interval = setInterval(() => void verify(), 3000);
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
+  }, [showWebView, activePaymentAmount]);
 
   async function loadTenantProfile(uid: string) {
     try {
@@ -232,6 +241,8 @@ export default function PaymentsScreen() {
     }
     const unsubscribe = onSnapshot(doc(db, "stalls", currentStallId), (snap) => {
       if (snap.exists()) setStall({ id: snap.id, ...snap.data() });
+    }, (error) => {
+      if (auth.currentUser) console.error("TENANT PAYMENT STALL LISTENER ERROR:", error);
     });
     return unsubscribe;
   }, [tenant?.stallId]);
@@ -246,6 +257,8 @@ export default function PaymentsScreen() {
     if (!uid) return;
     const unsubscribe = onSnapshot(doc(db, "users", uid), (snap) => {
       if (snap.exists()) setTenant((prev: any) => ({ ...prev, ...snap.data(), id: snap.id }));
+    }, (error) => {
+      if (auth.currentUser) console.error("TENANT PAYMENT PROFILE LISTENER ERROR:", error);
     });
     return unsubscribe;
   }, []);
@@ -270,45 +283,98 @@ export default function PaymentsScreen() {
     ]).start(() => setShowToast(false));
   }
 
-  const successfulPayments = payments.filter((p) => p.status === "approved");
+  function recoverUnfinishedPayment(): Promise<boolean> {
+    if (recoveryPromiseRef.current) return recoveryPromiseRef.current;
+
+    const recovery = (async () => {
+      let checkoutSessionId = await getPendingCheckoutSession();
+      if (checkoutSessionId) {
+        try {
+          const result = await reconcilePendingPayment(checkoutSessionId);
+          await handleAttemptResult(result, 0, true);
+          return result.status === "recorded";
+        } catch (error: any) {
+          const code = String(error?.code ?? "");
+          if (code !== "functions/not-found" && code !== "not-found") throw error;
+          // The backend has confirmed this device reference is stale. Remove
+          // only the local pointer, then ask the backend for the tenant's real
+          // unresolved session instead of allowing it to block recovery.
+          await clearPendingCheckoutSession();
+          await clearPendingPaymentMethod();
+          checkoutSessionId = null;
+        }
+      }
+
+      const recovered = await recoverPaymentSession();
+      if (recovered.status === "none") return false;
+      checkoutSessionId = recovered.sessionId;
+      await setPendingCheckoutSession(checkoutSessionId);
+      const result = await reconcilePendingPayment(checkoutSessionId);
+      await handleAttemptResult(result, 0, true);
+      return result.status === "recorded";
+    })();
+
+    recoveryPromiseRef.current = recovery;
+    const clearRecoveryPromise = () => {
+      if (recoveryPromiseRef.current === recovery) recoveryPromiseRef.current = null;
+    };
+    void recovery.then(clearRecoveryPromise, clearRecoveryPromise);
+    return recovery;
+  }
+
+  async function handleAttemptResult(
+    result: PaymentRecordingResult,
+    amount: number,
+    recovered = false,
+  ) {
+    setCheckoutAttemptStatus(result.status === "recorded" ? "paid" : result.status);
+    if (result.status === "recorded") {
+      const pendingMethod = await getPendingPaymentMethod();
+      const recordedMethod = pendingMethod === "gcash" ? "GCash" : pendingMethod === "paymaya" ? "Maya" : "Online";
+      await clearPendingCheckoutSession();
+      await clearPendingPaymentMethod();
+      setShowWebView(false);
+      if (recovered) triggerToast("Payment recovered and sent for confirmation.");
+      else setPaymentSuccess({ amount, method: recordedMethod });
+      return;
+    }
+    if (result.status === "processing") {
+      return;
+    }
+    if (result.status === "pending") return;
+    // `paid` means the provider has confirmed funds but the verified RentWise
+    // payment record has not yet been returned. Keep the recovery reference;
+    // only `recorded` is allowed to clear it and show the success result.
+    if (result.status === "paid") return;
+    await clearPendingCheckoutSession();
+    await clearPendingPaymentMethod();
+    setShowWebView(false);
+    if (result.status === "expired") triggerToast("Payment session expired. Please try again.");
+    else if (result.status === "failed") triggerToast("Payment failed. Please try again.");
+    else triggerToast("Payment cancelled.");
+  }
+
   const pendingPayments = payments.filter((p) => p.status === "pending");
 
   const paymentSchedule = tenant?.paymentSchedule ?? "monthly";
   const today = new Date();
-  const year = today.getFullYear();
-  const month = today.getMonth();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const monthTotalCharge = periodRate * daysInMonth;
-
-  const paidThisMonth = successfulPayments.reduce((sum, p) => {
-    const d = p.date?.toDate ? p.date.toDate() : p.date ? new Date(p.date) : null;
-    if (!d || d.getFullYear() !== year || d.getMonth() !== month) return sum;
-    return sum + Number(p.amount || 0);
-  }, 0);
-
-  const remainingBill = monthTotalCharge - paidThisMonth;
-  const [balanceWhole, balanceCents] = Math.max(0, remainingBill)
+  const rawBillingStart = tenant?.billingStartedAt ?? tenant?.createdAt;
+  const billingStartedAt = rawBillingStart?.toDate?.()
+    ?? (rawBillingStart ? new Date(rawBillingStart) : null);
+  const storedNextDueAt = tenant?.nextDueAt?.toDate?.()
+    ?? (tenant?.nextDueAt ? new Date(tenant.nextDueAt) : billingStartedAt);
+  const actualPaymentDue = rollingAmountDue(periodRate, paymentSchedule, storedNextDueAt, today);
+  const paymentDue = actualPaymentDue;
+  const [balanceWhole, balanceCents] = Math.max(0, paymentDue)
     .toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     .split(".");
 
-  const chargedToDate = chargedSinceMonthStart(periodRate, paymentSchedule, today);
-  const paymentDue = chargedToDate - paidThisMonth;
-
-  const hasPendingThisMonth = pendingPayments.some((p) => {
-    const d = p.date?.toDate ? p.date.toDate() : p.date ? new Date(p.date) : null;
-    if (!d) return false;
-    return d.getFullYear() === year && d.getMonth() === month;
-  });
-  const hasPaidForCurrentSpecificPeriod = payments.some((p) => {
-    if (p.status !== "approved" && p.status !== "pending") return false;
-    const d = p.date?.toDate ? p.date.toDate() : p.date ? new Date(p.date) : null;
-    if (!d) return false;
-    return isSamePeriod(paymentSchedule, d, today);
-  });
-  const beforeSemiMonthlyDueDate = paymentSchedule === "semi-monthly" && today.getDate() < 15;
-
-  const hasPaidCurrentPeriod =
-    remainingBill <= 0 || hasPendingThisMonth || hasPaidForCurrentSpecificPeriod || beforeSemiMonthlyDueDate;
+  const pendingAmount = pendingPayments.reduce((sum, payment) => {
+    const amount = Number(payment.amount ?? 0);
+    return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
+  }, 0);
+  const hasPendingCoverage = paymentDue > 0 && pendingAmount >= paymentDue;
+  const hasPaidCurrentPeriod = paymentDue <= 0 || hasPendingCoverage;
 
   const tourSteps: HelpStep[] = [
     { key: "history", ref: historyRef, title: "Payment history", description: "View past payments and download receipts.", edgeInset: "top", round: true },
@@ -316,14 +382,17 @@ export default function PaymentsScreen() {
     ...(!hasPaidCurrentPeriod
       ? [
           { key: "amount", ref: amountRef, title: "Enter amount", description: "Pre-filled with what's currently due. You can pay more, but not less.", edgeInset: "top" as const, onBeforeMeasure: () => scrollSectionIntoView(amountRef) },
-          { key: "method", ref: methodRef, title: "Payment method", description: "Choose GCash or Maya to pay online.", edgeInset: "top" as const, onBeforeMeasure: () => scrollSectionIntoView(methodRef) },
-          { key: "pay", ref: payBtnRef, title: "Pay Now", description: "Redirects you to your chosen e-wallet to confirm the transaction. A receipt is auto-saved to your history.", edgeInset: "top" as const, onBeforeMeasure: () => scrollSectionIntoView(payBtnRef) },
+          { key: "method", ref: methodRef, title: "Payment method", description: "Choose GCash or Maya for the PayMongo test demonstration.", edgeInset: "top" as const, onBeforeMeasure: () => scrollSectionIntoView(methodRef) },
+          { key: "pay", ref: payBtnRef, title: "Pay Now", description: "Opens PayMongo's test checkout. No real money is charged.", edgeInset: "top" as const, onBeforeMeasure: () => scrollSectionIntoView(payBtnRef) },
         ]
       : []),
   ];
 
   async function handlePayNow() {
+    if (paymentStartInFlight.current) return;
     if (!(await requireOnlineAction("Starting an online payment"))) return;
+    paymentStartInFlight.current = true;
+    try {
     // The amount field falls back to displaying the computed `paymentDue`
     // whenever the tenant hasn't typed their own value — so the amount
     // actually being paid must fall back the same way, or a tenant who
@@ -350,40 +419,46 @@ export default function PaymentsScreen() {
     const user = auth.currentUser;
     if (!user) return;
 
-    try {
-      setRedirecting(true);
-      const tenantName = tenant ? `${tenant.firstName} ${tenant.lastName}` : "";
-      const tenantEmail = tenant?.email || auth.currentUser?.email || "";
-      const { paymentIntentId, redirectUrl } = await createOnlinePayment(
-        effectiveAmount,
-        selectedMethod,
-        { name: tenantName, email: tenantEmail },
-      );
-      setPendingCheckoutSession(paymentIntentId);
-      setPendingPaymentMethod(selectedMethod);
-      setPayAmount("");
-      setSelectedMethod(null);
-      setWebViewUrl(redirectUrl);
-      setShowWebView(true);
+    setRedirecting(true);
+    const tenantName = tenant
+      ? `${tenant.firstName ?? ""} ${tenant.lastName ?? ""}`.trim()
+      : "";
+    const tenantEmail = tenant?.email || user.email || "";
+    const { paymentIntentId, redirectUrl } = await createOnlinePayment(
+      effectiveAmount,
+      selectedMethod,
+      { name: tenantName, email: tenantEmail },
+    );
+    await setPendingCheckoutSession(paymentIntentId);
+    await setPendingPaymentMethod(selectedMethod);
+    setActivePaymentAmount(effectiveAmount);
+    setCheckoutAttemptStatus("pending");
+    setPayAmount("");
+    setHasEditedAmount(false);
+    setSelectedMethod(null);
+    setWebViewUrl(redirectUrl);
+    setShowWebView(true);
     } catch (error) {
       console.log("PAYMONGO ERROR:", error);
       Alert.alert("Error", "Unable to start payment. Please try again.");
     } finally {
       setRedirecting(false);
+      paymentStartInFlight.current = false;
     }
   }
 
   async function handlePaymentSuccess(amountCentavos: number) {
-    setShowWebView(false);
     try {
       const user = auth.currentUser;
       if (!user) return;
       const paymentAmount = amountCentavos / 100;
-      const sessionId = getPendingCheckoutSession();
-      clearPendingCheckoutSession();
-      const pendingMethod = getPendingPaymentMethod();
-      clearPendingPaymentMethod();
-      const paymentMethodLabel = pendingMethod === "gcash" ? "GCash" : pendingMethod === "paymaya" ? "Maya" : "GCash/Maya";
+      const sessionId = await getPendingCheckoutSession();
+      if (!sessionId) {
+        Alert.alert("Verification pending", "RentWise could not find the payment session. Reopen Payments to recover it securely.");
+        return;
+      }
+      const pendingMethod = await getPendingPaymentMethod();
+      const paymentMethodLabel = pendingMethod === "gcash" ? "GCash" : pendingMethod === "paymaya" ? "Maya" : "Online";
       const receiptNo = "RW-ONLINE-" + Date.now().toString().slice(-8);
       const tenantName = tenant ? `${tenant.firstName} ${tenant.lastName}` : "";
       const schedule = tenant?.paymentSchedule ?? "monthly";
@@ -393,8 +468,9 @@ export default function PaymentsScreen() {
         scheduleRent > 0 ? Math.max(1, Math.round(owedAmount / scheduleRent)) : 1;
       const advanceAmount = Math.max(0, paymentAmount - owedAmount);
       const periodsAdvance =
-        scheduleRent > 0 ? Math.round(advanceAmount / scheduleRent) : 0;
+        scheduleRent > 0 ? Math.floor((advanceAmount + 0.000001) / scheduleRent) : 0;
       const periodsCovered = periodsOwed + periodsAdvance;
+      const billingCredit = Math.max(0, Math.round((advanceAmount - periodsAdvance * scheduleRent) * 100) / 100);
 
       // Itemizes exactly which period(s) this payment covers — including
       // any consecutive unpaid days/periods before today — so the tenant
@@ -414,6 +490,7 @@ export default function PaymentsScreen() {
         advanceCursor = nextPeriodStart(schedule, advanceCursor);
       }
       const breakdown = [...owedBreakdown, ...advanceBreakdown];
+      if (billingCredit > 0) breakdown.push({ label: "Remaining billing credit", amount: billingCredit });
 
       const receiptData = {
         receiptNo,
@@ -428,7 +505,7 @@ export default function PaymentsScreen() {
         status: "PENDING",
         breakdown,
       };
-      const paymentId = await createPayment({
+      const result = await createPayment({
         userId: user.uid,
         amount: paymentAmount,
         rentAmount: scheduleRent,
@@ -449,11 +526,7 @@ export default function PaymentsScreen() {
         cashReceived: null,
         change: 0,
       });
-      // Admins are notified server-side by the notifyAdminsOnPayment Cloud
-      // Function trigger (functions/src/paymentNotifier.ts), which fires
-      // reliably on payment-doc creation regardless of client path.
-      setCaptureReceipt({ paymentId, data: receiptData });
-      setPaymentSuccess({ amount: paymentAmount, method: paymentMethodLabel });
+      await handleAttemptResult(result, paymentAmount);
     } catch (err) {
       console.log("[handlePaymentSuccess] error:", err);
       Alert.alert("Error", "Payment received but could not be recorded. Contact support.");
@@ -462,7 +535,7 @@ export default function PaymentsScreen() {
 
   function handlePaymentCancel() {
     setShowWebView(false);
-    triggerToast("Payment cancelled.");
+    triggerToast("Payment window closed. RentWise will check it again when Payments is reopened.");
   }
 
   if (loading) {
@@ -496,7 +569,7 @@ export default function PaymentsScreen() {
             <View ref={helpRef} collapsable={false}>
               <TouchableOpacity
                 style={styles.historyBtn}
-                onPress={() => setTourVisible(true)}
+                onPress={() => setHelpSupportVisible(true)}
                 activeOpacity={0.7}
               >
                 <HelpCircle size={18} color={colors.ink} />
@@ -539,13 +612,13 @@ export default function PaymentsScreen() {
         {hasPaidCurrentPeriod ? (
           <View style={styles.caughtUpCard}>
             <CheckCircle2 size={28} color={colors.emerald} />
-            <Text style={styles.caughtUpTitle}>
-              {beforeSemiMonthlyDueDate ? "Nothing due yet" : "You're all caught up"}
-            </Text>
+            <Text style={styles.caughtUpTitle}>You're all caught up</Text>
             <Text style={styles.caughtUpText}>
-              {beforeSemiMonthlyDueDate
-                ? "Your next payment isn't due until the 15th."
-                : "You've already paid or have a pending payment for this period."}
+              {hasPendingCoverage
+                ? "Your payment is pending administrator confirmation."
+                : storedNextDueAt && storedNextDueAt > today
+                  ? `Your next payment is due ${storedNextDueAt.toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" })}.`
+                  : "You have no payment due right now."}
             </Text>
           </View>
         ) : (
@@ -582,16 +655,25 @@ export default function PaymentsScreen() {
                 </View>
               </View>
 
+              <View style={styles.methodInfoBanner}>
+                <Info size={13} color={colors.textSecondary} />
+                <Text style={styles.methodInfoText}>TEST MODE — This demonstration does not charge real money.</Text>
+              </View>
+
               <Pressable
                 style={[styles.methodOptionCard, selectedMethod === "gcash" && styles.methodOptionCardSelected]}
                 onPress={() => setSelectedMethod("gcash")}
               >
                 <View style={styles.methodBrandIcon}>
-                  <Image source={require("../../assets/gcash.png")} style={styles.methodBrandIconImage} resizeMode="cover" />
+                  <Image
+                    source={require("../../assets/gcash.png")}
+                    style={styles.methodBrandIconImage}
+                    resizeMode="cover"
+                  />
                 </View>
                 <View style={styles.methodOptionInfo}>
                   <Text style={styles.methodOptionName}>GCash</Text>
-                  <Text style={styles.methodOptionSub}>Fastest · No fees</Text>
+                  <Text style={styles.methodOptionSub}>PayMongo test checkout</Text>
                 </View>
                 <View style={[styles.radioOuter, selectedMethod === "gcash" && styles.radioOuterSelected]}>
                   {selectedMethod === "gcash" && <View style={styles.radioInner} />}
@@ -607,7 +689,7 @@ export default function PaymentsScreen() {
                 </View>
                 <View style={styles.methodOptionInfo}>
                   <Text style={styles.methodOptionName}>Maya</Text>
-                  <Text style={styles.methodOptionSub}>Instant transfer</Text>
+                  <Text style={styles.methodOptionSub}>PayMongo test checkout</Text>
                 </View>
                 <View style={[styles.radioOuter, selectedMethod === "paymaya" && styles.radioOuterSelected]}>
                   {selectedMethod === "paymaya" && <View style={styles.radioInner} />}
@@ -618,7 +700,7 @@ export default function PaymentsScreen() {
                 <View style={styles.methodInfoBanner}>
                   <Info size={13} color={colors.textSecondary} />
                   <Text style={styles.methodInfoText}>
-                    Continue in {selectedMethod === "gcash" ? "GCash" : "Maya"} to confirm your payment. Your receipt is saved automatically.
+                    Continue to PayMongo's {selectedMethod === "gcash" ? "GCash" : "Maya"} test checkout to complete provider authorization. No real money is charged.
                   </Text>
                 </View>
               )}
@@ -669,7 +751,22 @@ export default function PaymentsScreen() {
       <Modal visible={showWebView} animationType="slide" onRequestClose={handlePaymentCancel}>
         <View style={styles.webViewContainer}>
           <View style={[styles.webViewHeader, { paddingTop: insets.top + 6 }]}>
-            <Text style={styles.webViewTitle}>Pay Online</Text>
+            <View>
+              <Text style={styles.webViewTitle}>Pay Online</Text>
+              <Text style={styles.webViewStatusText}>
+                {checkoutAttemptStatus === "processing"
+                  ? "Your payment is being verified."
+                  : checkoutAttemptStatus === "pending"
+                    ? "Awaiting payment."
+                    : checkoutAttemptStatus === "expired"
+                      ? "Payment session expired. Please try again."
+                      : checkoutAttemptStatus === "failed"
+                        ? "Payment failed. Please try again."
+                        : checkoutAttemptStatus === "cancelled"
+                          ? "Payment cancelled."
+                          : "Payment confirmed."}
+              </Text>
+            </View>
             <TouchableOpacity style={styles.webViewClose} onPress={handlePaymentCancel} activeOpacity={0.7}>
               <X size={22} color={colors.white} />
             </TouchableOpacity>
@@ -683,22 +780,37 @@ export default function PaymentsScreen() {
               const url = req.url;
               if (url.startsWith("rentwise://")) {
                 if (url.includes("payment-success")) {
-                  const match = url.match(/[?&]amount=(\d+)/);
-                  const centavos = match ? parseInt(match[1], 10) : 0;
-                  handlePaymentSuccess(centavos);
+                  const amountMatch = url.match(/[?&]amount=(\d+)/);
+                  const statusMatch = url.match(/[?&]returnStatus=([^&]+)/);
+                  const centavos = amountMatch ? parseInt(amountMatch[1], 10) : 0;
+                  const returnStatus = statusMatch ? decodeURIComponent(statusMatch[1]) : "success";
+                  if (returnStatus === "success") {
+                    void handlePaymentSuccess(centavos);
+                  } else {
+                    void (async () => {
+                      const sessionId = await getPendingCheckoutSession();
+                      if (!sessionId) return;
+                      const result = await reconcilePendingPayment(sessionId);
+                      await handleAttemptResult(result, activePaymentAmount);
+                    })().catch((error) => console.log("PAYMENT RETURN RECONCILIATION ERROR:", error));
+                  }
                 } else {
-                  handlePaymentCancel();
+                  void (async () => {
+                    const sessionId = await getPendingCheckoutSession();
+                    if (!sessionId) return;
+                    const result = await reconcilePendingPayment(sessionId);
+                    await handleAttemptResult(result, activePaymentAmount);
+                  })().catch((error) => console.log("PAYMENT RETURN RECONCILIATION ERROR:", error));
                 }
                 return false;
               }
-              // GCash hands off to its own app via a gcash:// scheme URL when
-              // installed — a WebView can't load that directly, so open it
-              // via the OS instead (PayMongo's documented fix for this).
+              // PayMongo may hand off to a supported banking or e-wallet app.
+              // A WebView cannot load custom app schemes, so open them via OS.
               if (!url.startsWith("http://") && !url.startsWith("https://")) {
                 Linking.openURL(url).catch(() => {
                   Alert.alert(
                     "App not found",
-                    "Please install the GCash or Maya app, or complete payment using the web option shown on the page.",
+                    "Please install the selected e-wallet app, or complete the PayMongo test flow in the web page.",
                   );
                 });
                 return false;
@@ -767,14 +879,7 @@ export default function PaymentsScreen() {
         </Animated.View>
       )}
 
-      {captureReceipt && (
-        <View style={styles.receiptCaptureOffscreen} pointerEvents="none">
-          <View ref={receiptShotRef} collapsable={false} style={styles.receiptCaptureCard}>
-            <ReceiptCardContent data={captureReceipt.data} billing={tenant} showActions={false} />
-          </View>
-        </View>
-      )}
-
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
       <HelpTour
         visible={tourVisible}
         steps={tourSteps}
@@ -1198,6 +1303,12 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     fontFamily: fontFamily.bold,
   },
+  webViewStatusText: {
+    marginTop: 2,
+    color: colors.emeraldSoft,
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.regular,
+  },
 
   webViewClose: {
     padding: 4,
@@ -1330,21 +1441,4 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
 
-  // Positioned within the visible viewport (not pushed off-canvas) — on real
-  // devices, views placed entirely outside the screen bounds can get skipped
-  // by Android's rendering pipeline as a clipping optimization, which made
-  // captureRef() grab a blank/failed snapshot. opacity: 0 keeps it fully
-  // rendered (so it captures correctly) while staying invisible to the user.
-  receiptCaptureOffscreen: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    opacity: 0,
-  },
-
-  receiptCaptureCard: {
-    width: 320,
-    backgroundColor: colors.white,
-    padding: spacing.xl,
-  },
 });

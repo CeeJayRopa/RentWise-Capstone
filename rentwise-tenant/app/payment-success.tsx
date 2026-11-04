@@ -1,25 +1,27 @@
 import { useEffect } from "react";
 import { View, Text, ActivityIndicator, StyleSheet, Alert } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import { doc, getDoc, collection, getDocs, query, where } from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
 import { auth } from "../shared/firebaseConfig";
 import { db } from "../shared/services/firestore";
 import { getTenantData } from "../services/tenantService";
 import { createPayment } from "../services/paymentService";
 import {
   getPendingCheckoutSession,
-  clearPendingCheckoutSession,
   getPendingPaymentMethod,
+  clearPendingCheckoutSession,
   clearPendingPaymentMethod,
 } from "../services/pendingPayment";
 import {
   computePeriodCharge,
-  chargedSinceMonthStart,
+  rollingAmountDue,
   nextPeriodStart,
   consecutivePeriodsEnding,
   periodLabel,
 } from "../services/billingSchedule";
 import { colors, fontFamily, fontSize } from "../shared/theme";
+
+const HOME_ROUTE = "/(tabs)/dashboard" as const;
 
 export default function PaymentSuccess() {
   const { amount } = useLocalSearchParams<{ amount: string }>();
@@ -29,7 +31,7 @@ export default function PaymentSuccess() {
       try {
         const user = auth.currentUser;
         if (!user) {
-          router.replace("/payments");
+          router.replace(HOME_ROUTE);
           return;
         }
 
@@ -38,7 +40,7 @@ export default function PaymentSuccess() {
 
         const tenantData = await getTenantData(user.uid);
         if (!tenantData) {
-          router.replace("/payments");
+          router.replace(HOME_ROUTE);
           return;
         }
 
@@ -50,16 +52,14 @@ export default function PaymentSuccess() {
           }
         }
 
-        const sessionId = getPendingCheckoutSession();
+        const sessionId = await getPendingCheckoutSession();
         if (!sessionId) {
           // Already recorded by the in-app WebView handler
-          router.replace("/payments");
+          router.replace(HOME_ROUTE);
           return;
         }
-        clearPendingCheckoutSession();
-        const pendingMethod = getPendingPaymentMethod();
-        clearPendingPaymentMethod();
-        const paymentMethodLabel = pendingMethod === "gcash" ? "GCash" : pendingMethod === "paymaya" ? "Maya" : "GCash/Maya";
+        const pendingMethod = await getPendingPaymentMethod();
+        const paymentMethodLabel = pendingMethod === "gcash" ? "GCash" : pendingMethod === "paymaya" ? "Maya" : "Online";
 
         const receiptNo = "RW-ONLINE-" + Date.now().toString().slice(-8);
         const tenantName = `${tenantData.firstName} ${tenantData.lastName}`;
@@ -74,30 +74,20 @@ export default function PaymentSuccess() {
         // Same split as dashboard.tsx: only the portion beyond what's
         // already owed (arrears + today) counts as genuine advance.
         const today = new Date();
-        const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-        const paymentsSnap = await getDocs(
-          query(
-            collection(db, "payments"),
-            where("userId", "==", user.uid),
-            where("status", "==", "approved"),
-          ),
-        );
-        const paidThisMonth = paymentsSnap.docs.reduce((sum, d) => {
-          const data = d.data();
-          const pd = data.date?.toDate?.();
-          if (!pd || pd < monthStart) return sum;
-          return sum + Number(data.amount || 0);
-        }, 0);
-        const chargedToDate = chargedSinceMonthStart(dailyRate, schedule, today);
-        const paymentDue = chargedToDate - paidThisMonth;
+        const billingStartedAt = tenantData.createdAt?.toDate?.()
+          ?? (tenantData.createdAt ? new Date(tenantData.createdAt) : null);
+        const storedNextDueAt = tenantData.nextDueAt?.toDate?.()
+          ?? (tenantData.nextDueAt ? new Date(tenantData.nextDueAt) : billingStartedAt);
+        const paymentDue = rollingAmountDue(dailyRate, schedule, storedNextDueAt, today);
 
         const owedAmount = Math.max(paymentDue, scheduleRent || 0);
         const periodsOwed =
           scheduleRent > 0 ? Math.max(1, Math.round(owedAmount / scheduleRent)) : 1;
         const advanceAmount = Math.max(0, paymentAmount - owedAmount);
         const periodsAdvance =
-          scheduleRent > 0 ? Math.round(advanceAmount / scheduleRent) : 0;
+          scheduleRent > 0 ? Math.floor((advanceAmount + 0.000001) / scheduleRent) : 0;
         const periodsCovered = periodsOwed + periodsAdvance;
+        const billingCredit = Math.max(0, Math.round((advanceAmount - periodsAdvance * scheduleRent) * 100) / 100);
 
         // Same itemization as the in-app WebView handler (payments.tsx) —
         // lists each specific unpaid period this payment covers.
@@ -115,6 +105,7 @@ export default function PaymentSuccess() {
           advanceCursor = nextPeriodStart(schedule, advanceCursor);
         }
         const breakdown = [...owedBreakdown, ...advanceBreakdown];
+        if (billingCredit > 0) breakdown.push({ label: "Remaining billing credit", amount: billingCredit });
 
         const receiptData = {
           receiptNo,
@@ -152,7 +143,21 @@ export default function PaymentSuccess() {
           change: 0,
         };
 
-        await createPayment(newPayment);
+        const result = await createPayment(newPayment);
+        if (result.status === "recorded") {
+          await clearPendingCheckoutSession();
+          await clearPendingPaymentMethod();
+        } else if (result.status === "processing") {
+          Alert.alert("Verification pending", "Your payment is being verified. RentWise will check it again from Payments.");
+        } else if (result.status === "expired") {
+          await clearPendingCheckoutSession();
+          await clearPendingPaymentMethod();
+          Alert.alert("Payment expired", "Payment session expired. Please try again.");
+        } else if (result.status === "failed" || result.status === "cancelled") {
+          await clearPendingCheckoutSession();
+          await clearPendingPaymentMethod();
+          Alert.alert("Payment not completed", result.status === "failed" ? "Payment failed. Please try again." : "Payment cancelled.");
+        }
       } catch (err) {
         console.log("[PaymentSuccess] error:", err);
         Alert.alert(
@@ -161,7 +166,7 @@ export default function PaymentSuccess() {
         );
       }
 
-      router.replace("/payments");
+      router.replace(HOME_ROUTE);
     })();
   }, []);
 

@@ -8,8 +8,9 @@
 //
 // PayMongo can redirect back here slightly before its own backend has
 // finished flipping the intent's status to "succeeded"/"processing" (their
-// docs push toward webhooks for exactly this reason, which this app
-// deliberately doesn't use). To avoid mistaking that timing gap for a
+// docs push toward webhooks for exactly this reason. The backend webhook and
+// authenticated app reconciliation are authoritative; this return route is
+// only a fast status hint. To avoid mistaking that timing gap for a
 // cancelled payment, this retries the status check a few times with a short
 // delay before giving up.
 
@@ -24,12 +25,28 @@ module.exports = async function handler(req, res) {
   };
 
   if (typeof pi !== "string" || !/^pi_[A-Za-z0-9_-]+$/.test(pi) || pi.length > 200) {
-    console.log("payment-return: invalid payment intent id, redirecting to cancel");
-    return redirectTo("rentwise://payment-cancel");
+    console.log("payment-return: invalid payment intent id, redirecting to pending");
+    return redirectTo("rentwise:///payment-success?returnStatus=pending&amount=0");
   }
 
-  const successUrl = `rentwise://payment-success?amount=${amount}&pi=${pi}`;
+  const safeAmount = typeof amount === "string" && /^\d+$/.test(amount) ? amount : "0";
+  // Three slashes are required here: `rentwise:///payment-success` maps to
+  // Expo Router's /payment-success path. With only two slashes, Android
+  // treats `payment-success` as the URL host and Expo opens an unmatched
+  // route. Every provider outcome goes through the same reconciliation
+  // screen; `returnStatus` is only a hint and the backend remains authoritative.
+  const appUrl = (status) =>
+    `rentwise:///payment-success?returnStatus=${encodeURIComponent(status)}` +
+    `&amount=${safeAmount}&pi=${encodeURIComponent(pi)}`;
   const secretKey = process.env.PAYMONGO_SECRET_KEY;
+  if (!secretKey) {
+    console.error("payment-return: PAYMONGO_SECRET_KEY is not configured");
+    return redirectTo(appUrl("pending"));
+  }
+  if (!secretKey.startsWith("sk_test_")) {
+    console.error("payment-return: refusing to inspect a demo payment with a non-test key");
+    return redirectTo(appUrl("pending"));
+  }
   const encoded = Buffer.from(`${secretKey}:`).toString("base64");
 
   try {
@@ -42,30 +59,35 @@ module.exports = async function handler(req, res) {
       );
 
       if (!intentRes.ok) {
-        console.log(`payment-return: status check HTTP ${intentRes.status} on attempt ${attempt}, redirecting to cancel`);
-        return redirectTo("rentwise://payment-cancel");
+        console.log(`payment-return: status check HTTP ${intentRes.status} on attempt ${attempt}`);
+        return redirectTo(appUrl("pending"));
       }
 
       const intent = await intentRes.json();
       status = intent.data.attributes.status;
       console.log(`payment-return: pi=${pi} attempt=${attempt} status=${status}`);
 
-      if (status === "succeeded" || status === "processing") {
-        return redirectTo(successUrl);
+      if (status === "succeeded") {
+        return redirectTo(appUrl("success"));
+      }
+      if (status === "processing") {
+        return redirectTo(appUrl("processing"));
+      }
+      if (status === "cancelled") {
+        return redirectTo(appUrl("cancelled"));
       }
       if (status === "awaiting_payment_method") {
-        // Definitively failed/declined — no point retrying.
-        break;
+        return redirectTo(appUrl(intent.data.attributes.last_payment_error ? "failed" : "pending"));
       }
       // status is "awaiting_next_action" (or similar transitional state) —
       // PayMongo's backend likely hasn't caught up yet, give it a moment.
       if (attempt < 4) await sleep(1500);
     }
 
-    console.log(`payment-return: pi=${pi} gave up after retries, final status=${status}, redirecting to cancel`);
-    return redirectTo("rentwise://payment-cancel");
+    console.log(`payment-return: pi=${pi} remains unresolved after retries, final status=${status}`);
+    return redirectTo(appUrl("pending"));
   } catch (err) {
     console.error("payment-return status check error:", err);
-    return redirectTo("rentwise://payment-cancel");
+    return redirectTo(appUrl("pending"));
   }
 };
