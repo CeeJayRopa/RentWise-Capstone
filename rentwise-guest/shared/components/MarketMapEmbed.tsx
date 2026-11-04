@@ -379,7 +379,7 @@ export default function MarketMapEmbed({
   const viewStallsBtn = (
     <Pressable
       key="view-stalls"
-      onPress={() => router.push("/map-loading")}
+      onPress={() => router.push("/market-map")}
       onPressIn={() => setViewStallsPressed(true)}
       onPressOut={() => setViewStallsPressed(false)}
       style={isTabletRange && { flex: 1 }}
@@ -403,7 +403,7 @@ export default function MarketMapEmbed({
       {isMobile ? (
         <>
           {mobileActionBtn("view-stalls", PRIMARY_DARK, "storefront-outline", "View Stalls", () =>
-            router.push("/map-loading")
+            router.push("/market-map")
           )}
           {mobileActionBtn("ar-view", "#8B5E3C", "cube-outline", "Launch AR Viewing", () =>
             router.push("/ar-view")

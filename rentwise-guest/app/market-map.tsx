@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   Pressable,
-  TextInput,
   Modal,
   ScrollView,
   ActivityIndicator,
@@ -101,22 +100,15 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
   const {width} = useWindowDimensions();
   const mapWidth = Math.max(296, width - 24);
   const mapHeight = mapWidth / BLUEPRINT_ASPECT_RATIO;
-  const [query, setQuery] = useState("");
-  const [category, setCategory] = useState("All");
   const [selected, setSelected] = useState<MobileMapItem | null>(null);
   const [descriptionVisible, setDescriptionVisible] = useState(false);
   const mapScale = useRef(new Animated.Value(1)).current;
   const mapX = useRef(new Animated.Value(0)).current;
   const mapY = useRef(new Animated.Value(0)).current;
+  const scrollRef = useRef<ScrollView>(null);
+  const sheetYRef = useRef(0);
 
-  const categories = ["All", "Wet Market", "Dry Market", "Home Essential"];
-  const filtered = items.filter(({stall}) => {
-    const text = `${stallCode(stall)} ${stall.name ?? ""} ${stall.buildingNumber ?? ""} ${stallCategory(stall)}`.toLowerCase();
-    const matchesQuery = text.includes(query.trim().toLowerCase());
-    const normalizedCategory = stallCategory(stall).toLowerCase().replace(/s$/, "");
-    const selectedCategory = category.toLowerCase().replace(/s$/, "");
-    return matchesQuery && (category === "All" || normalizedCategory.includes(selectedCategory));
-  });
+  const filtered = items;
 
   const animateMap = (item: MobileMapItem | null, explicitScale?: number) => {
     const targetScale = explicitScale ?? (item ? 1.7 : 1);
@@ -138,6 +130,9 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
   const selectItem = (item: MobileMapItem) => {
     setSelected(item);
     animateMap(item);
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({y: Math.max(0, sheetYRef.current - 8), animated: true});
+    });
   };
   const closeSelection = () => {
     setDescriptionVisible(false);
@@ -161,31 +156,7 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
         <View style={mobileStyles.headerButtonPlaceholder} />
       </View>
 
-      <ScrollView contentContainerStyle={mobileStyles.content} keyboardShouldPersistTaps="handled">
-        <View style={mobileStyles.searchBox}>
-          <Ionicons name="search" size={20} color="#68726D" />
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder="Search stall, category, or tenant"
-            placeholderTextColor="#7B827E"
-            style={mobileStyles.searchInput}
-          />
-          {!!query && (
-            <Pressable onPress={() => setQuery("")} accessibilityLabel="Clear search">
-              <Ionicons name="close-circle" size={19} color="#8B928E" />
-            </Pressable>
-          )}
-        </View>
-
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={mobileStyles.chips}>
-          {categories.map((item) => (
-            <Pressable key={item} onPress={() => setCategory(item)} style={[mobileStyles.chip, category === item && mobileStyles.chipActive]}>
-              <Text style={[mobileStyles.chipText, category === item && mobileStyles.chipTextActive]}>{item}</Text>
-            </Pressable>
-          ))}
-        </ScrollView>
-
+      <ScrollView ref={scrollRef} contentContainerStyle={mobileStyles.content} keyboardShouldPersistTaps="handled">
         <View style={[mobileStyles.mapCard, {width: mapWidth, height: mapHeight}]}>
           <Animated.View style={{width: mapWidth, height: mapHeight, transform: [{translateX: mapX}, {translateY: mapY}, {scale: mapScale}]}}>
             <Image source={require("../assets/market-2Dlayout.png")} style={mobileStyles.mapImage} resizeMode="contain" />
@@ -227,7 +198,7 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
           })}
         </View>
 
-        <View style={mobileStyles.sheet}>
+        <View style={mobileStyles.sheet} onLayout={(event) => { sheetYRef.current = event.nativeEvent.layout.y; }}>
           <View style={mobileStyles.sheetHandle} />
           <Text style={mobileStyles.sheetTitle}>All Stalls</Text>
 
@@ -252,7 +223,7 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
           })()}
 
           {filtered.length === 0 && !loading ? (
-            <Text style={mobileStyles.emptyText}>No stalls match your search.</Text>
+            <Text style={mobileStyles.emptyText}>No stalls are available to display.</Text>
           ) : filtered.map((item) => {
             const meta = statusMeta(item.stall.status);
             const active = selected?.hotspot.name === item.hotspot.name;
@@ -462,7 +433,7 @@ export default function MarketMap() {
   const occupiedCount = stalls.filter((s) => s.status?.toLowerCase() === "occupied").length;
   const vacantCount = stalls.length - occupiedCount;
 
-  if (isMobile) {
+  if (isMobile || isTabletRange) {
     const mobileItems: MobileMapItem[] = MARKET_LAYOUT.map((hotspot) => ({
       hotspot,
       stall: stallsByName.get(hotspot.name) ?? {
@@ -1091,10 +1062,10 @@ const styles = StyleSheet.create({
 const mobileStyles = StyleSheet.create({
   screen: {flex: 1, backgroundColor: MOBILE_BG},
   header: {
-    minHeight: 112,
-    paddingTop: 48,
+    minHeight: 92,
+    paddingTop: 34,
     paddingHorizontal: 16,
-    paddingBottom: 18,
+    paddingBottom: 12,
     backgroundColor: MOBILE_PRIMARY,
     borderBottomLeftRadius: 28,
     borderBottomRightRadius: 28,
@@ -1106,13 +1077,6 @@ const mobileStyles = StyleSheet.create({
   headerButtonPlaceholder: {width: 42},
   headerTitle: {fontSize: 24, fontWeight: "800", color: "#fff"},
   content: {padding: 12, paddingBottom: 36},
-  searchBox: {height: 52, paddingHorizontal: 15, borderRadius: 18, backgroundColor: "#fff", flexDirection: "row", alignItems: "center", gap: 10, shadowColor: "#102A20", shadowOpacity: 0.1, shadowRadius: 10, shadowOffset: {width: 0, height: 4}, elevation: 3},
-  searchInput: {flex: 1, fontSize: 15, color: "#17211D", paddingVertical: 0},
-  chips: {gap: 8, paddingVertical: 12},
-  chip: {paddingHorizontal: 15, paddingVertical: 9, borderRadius: 18, borderWidth: 1, borderColor: "#A8D1C1", backgroundColor: "#F6FBF8"},
-  chipActive: {backgroundColor: MOBILE_PRIMARY, borderColor: MOBILE_PRIMARY},
-  chipText: {fontSize: 13, fontWeight: "700", color: "#23483B"},
-  chipTextActive: {color: "#fff"},
   mapCard: {position: "relative", overflow: "hidden", borderRadius: 18, backgroundColor: "#DDE8E2", borderWidth: 1, borderColor: "#CBD8D1"},
   mapImage: {width: "100%", height: "100%"},
   hotspot: {position: "absolute", borderRadius: 2},
@@ -1126,7 +1090,7 @@ const mobileStyles = StyleSheet.create({
   sheet: {marginTop: 12, padding: 12, borderRadius: 22, backgroundColor: "#fff", shadowColor: "#14251E", shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: {width: 0, height: 5}, elevation: 3},
   sheetHandle: {alignSelf: "center", width: 48, height: 5, borderRadius: 3, backgroundColor: "#A7AAA8", marginBottom: 10},
   sheetTitle: {fontSize: 22, fontWeight: "800", color: "#123D2F", marginBottom: 10},
-  selectedCard: {position: "relative", borderRadius: 16, borderWidth: 1.5, borderColor: "#70C5A5", backgroundColor: "#EFFAF5", padding: 14, marginBottom: 10},
+  selectedCard: {position: "relative", borderRadius: 16, backgroundColor: "#EFFAF5", padding: 14, marginBottom: 10},
   selectedClose: {position: "absolute", right: 10, top: 10, zIndex: 2},
   selectedCode: {fontSize: 24, fontWeight: "900", color: "#14231D", paddingRight: 34},
   selectedCategory: {fontSize: 13, fontWeight: "700", color: "#16845F", marginTop: 2},
@@ -1136,8 +1100,8 @@ const mobileStyles = StyleSheet.create({
   statusText: {fontSize: 11, fontWeight: "800"},
   descriptionButton: {marginTop: 12, height: 42, borderRadius: 13, backgroundColor: MOBILE_PRIMARY, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8},
   descriptionButtonText: {fontSize: 13, fontWeight: "800", color: "#fff"},
-  stallRow: {minHeight: 70, paddingHorizontal: 8, paddingVertical: 9, borderTopWidth: 1, borderTopColor: "#ECEEEB", flexDirection: "row", alignItems: "center", gap: 9},
-  stallRowActive: {backgroundColor: "#EFFAF5", borderRadius: 13, borderTopColor: "transparent"},
+  stallRow: {minHeight: 70, paddingHorizontal: 8, paddingVertical: 9, flexDirection: "row", alignItems: "center", gap: 9},
+  stallRowActive: {backgroundColor: "#EFFAF5", borderRadius: 13},
   stallIcon: {width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "#DFF4EB"},
   stallInfo: {flex: 1, minWidth: 0},
   stallCode: {fontSize: 16, fontWeight: "800", color: "#17211D"},
