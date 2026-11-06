@@ -105,6 +105,7 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
   const [selected, setSelected] = useState<MobileMapItem | null>(null);
   const [descriptionVisible, setDescriptionVisible] = useState(false);
   const [page, setPage] = useState(0);
+  const [mapGestureActive, setMapGestureActive] = useState(false);
   const mapScale = useRef(new Animated.Value(1)).current;
   const mapX = useRef(new Animated.Value(0)).current;
   const mapY = useRef(new Animated.Value(0)).current;
@@ -143,6 +144,7 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
       onMoveShouldSetPanResponderCapture: (_event, gesture) =>
         mapScaleValue.current > 1 && (Math.abs(gesture.dx) > 8 || Math.abs(gesture.dy) > 8),
       onPanResponderGrant: () => {
+        setMapGestureActive(true);
         mapX.stopAnimation((value) => {
           mapXValue.current = value;
           dragStart.current.x = value;
@@ -163,6 +165,8 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
         mapY.setValue(next.y);
       },
       onPanResponderTerminationRequest: () => false,
+      onPanResponderRelease: () => setMapGestureActive(false),
+      onPanResponderTerminate: () => setMapGestureActive(false),
     }),
   ).current;
 
@@ -215,9 +219,19 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
         <View style={mobileStyles.headerButtonPlaceholder} />
       </View>
 
-      <ScrollView ref={scrollRef} contentContainerStyle={mobileStyles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={mobileStyles.content}
+        keyboardShouldPersistTaps="handled"
+        scrollEnabled={!mapGestureActive}
+      >
         <View
           style={[mobileStyles.mapCard, {width: mapWidth, height: mapHeight}]}
+          onTouchStart={() => {
+            if (mapScaleValue.current > 1) setMapGestureActive(true);
+          }}
+          onTouchEnd={() => setMapGestureActive(false)}
+          onTouchCancel={() => setMapGestureActive(false)}
           {...mapPanResponder.panHandlers}
         >
           <Animated.View style={{width: mapWidth, height: mapHeight, transform: [{translateX: mapX}, {translateY: mapY}, {scale: mapScale}]}}>
