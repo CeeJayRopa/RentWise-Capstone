@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   useWindowDimensions,
   Animated,
+  PanResponder,
   Platform,
 } from "react-native";
 import { useEffect, useRef, useState } from "react";
@@ -107,7 +108,63 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
   const mapScale = useRef(new Animated.Value(1)).current;
   const mapX = useRef(new Animated.Value(0)).current;
   const mapY = useRef(new Animated.Value(0)).current;
+  const mapScaleValue = useRef(1);
+  const mapXValue = useRef(0);
+  const mapYValue = useRef(0);
+  const dragStart = useRef({x: 0, y: 0});
   const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    const scaleListener = mapScale.addListener(({value}) => { mapScaleValue.current = value; });
+    const xListener = mapX.addListener(({value}) => { mapXValue.current = value; });
+    const yListener = mapY.addListener(({value}) => { mapYValue.current = value; });
+    return () => {
+      mapScale.removeListener(scaleListener);
+      mapX.removeListener(xListener);
+      mapY.removeListener(yListener);
+    };
+  }, [mapScale, mapX, mapY]);
+
+  const clampMapPosition = (x: number, y: number, scale = mapScaleValue.current) => {
+    // Translation is applied before scale below, so divide the visible
+    // overflow by scale to keep every edge of the blueprint reachable.
+    const maxX = Math.max(0, (mapWidth * (scale - 1)) / (2 * scale));
+    const maxY = Math.max(0, (mapHeight * (scale - 1)) / (2 * scale));
+    return {
+      x: Math.max(-maxX, Math.min(maxX, x)),
+      y: Math.max(-maxY, Math.min(maxY, y)),
+    };
+  };
+
+  const mapPanResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_event, gesture) =>
+        mapScaleValue.current > 1 && (Math.abs(gesture.dx) > 5 || Math.abs(gesture.dy) > 5),
+      onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+        mapScaleValue.current > 1 && (Math.abs(gesture.dx) > 8 || Math.abs(gesture.dy) > 8),
+      onPanResponderGrant: () => {
+        mapX.stopAnimation((value) => {
+          mapXValue.current = value;
+          dragStart.current.x = value;
+        });
+        mapY.stopAnimation((value) => {
+          mapYValue.current = value;
+          dragStart.current.y = value;
+        });
+      },
+      onPanResponderMove: (_event, gesture) => {
+        const scale = Math.max(1, mapScaleValue.current);
+        const next = clampMapPosition(
+          dragStart.current.x + gesture.dx / scale,
+          dragStart.current.y + gesture.dy / scale,
+          scale,
+        );
+        mapX.setValue(next.x);
+        mapY.setValue(next.y);
+      },
+      onPanResponderTerminationRequest: () => false,
+    }),
+  ).current;
 
   const filtered = items;
   const totalPages = Math.max(1, Math.ceil(filtered.length / MOBILE_STALLS_PER_PAGE));
@@ -159,7 +216,10 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
       </View>
 
       <ScrollView ref={scrollRef} contentContainerStyle={mobileStyles.content} keyboardShouldPersistTaps="handled">
-        <View style={[mobileStyles.mapCard, {width: mapWidth, height: mapHeight}]}>
+        <View
+          style={[mobileStyles.mapCard, {width: mapWidth, height: mapHeight}]}
+          {...mapPanResponder.panHandlers}
+        >
           <Animated.View style={{width: mapWidth, height: mapHeight, transform: [{translateX: mapX}, {translateY: mapY}, {scale: mapScale}]}}>
             <Image source={require("../assets/market-2Dlayout.png")} style={mobileStyles.mapImage} resizeMode="contain" />
             {items.map((item, index) => {
