@@ -237,7 +237,7 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
                       left: `${hotspot.xPct}%`, top: `${hotspot.yPct}%`,
                       width: `${hotspot.widthPct}%`, height: `${hotspot.heightPct}%`,
                       backgroundColor: `${meta.color}55`, borderColor: active ? "#00D68F" : meta.color,
-                      borderWidth: active ? 2.5 : 0.8,
+                      borderWidth: active ? 1.5 : 0.8,
                       transform: hotspot.rotationDeg ? [{rotate: `${hotspot.rotationDeg}deg`}] : undefined,
                     },
                   ]}
