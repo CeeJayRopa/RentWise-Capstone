@@ -256,6 +256,8 @@ function cloneWithOwnMaterials(source: THREE.Object3D): THREE.Group {
 }
 
 export class ARSessionScene {
+  private disposed = false;
+  private sessionEnding = false;
   private renderer: THREE.WebGLRenderer | null = null;
   private camera = new THREE.PerspectiveCamera(70, 1, 0.01, 20);
   private scene = new THREE.Scene();
@@ -411,6 +413,7 @@ export class ARSessionScene {
         userYawDeg: number;
       }
   > = [];
+  private static readonly MAX_HISTORY_ENTRIES = 75;
   // A pinch produces many touch-move updates. Keep its original transform here and commit
   // a single undo step when the gesture finishes.
   private transformGestureStart: Extract<(typeof this.history)[number], { type: "transform" }> | null = null;
@@ -560,6 +563,8 @@ export class ARSessionScene {
 
   async startSession(overlayRoot: HTMLElement): Promise<void> {
     const nav = navigator as any;
+    if (this.disposed) throw new Error("AR scene is no longer available.");
+    if (this.session || this.sessionEnding) return;
     if (!this.renderer || !nav.xr) throw new Error("AR is not available in this browser.");
 
     const session = await nav.xr.requestSession("immersive-ar", {
@@ -572,7 +577,12 @@ export class ARSessionScene {
       domOverlay: { root: overlayRoot },
     });
 
+    if (this.disposed) {
+      await session.end().catch(() => {});
+      throw new Error("AR scene closed while the session was starting.");
+    }
     this.session = session;
+    this.sessionEnding = false;
     this.hitTestSource = null;
     this.hitTestSourceRequested = false;
     this.latestHitTestResult = null;
@@ -587,8 +597,15 @@ export class ARSessionScene {
   }
 
   async endSession() {
-    if (this.session) {
+    if (!this.session || this.sessionEnding) return;
+    this.sessionEnding = true;
+    try {
       await this.session.end();
+    } finally {
+      // Chrome normally fires `end` before this promise settles. Keeping the
+      // fallback here prevents a rejected/partial shutdown from permanently
+      // locking every control.
+      if (!this.session) this.sessionEnding = false;
     }
   }
 
@@ -651,6 +668,7 @@ export class ARSessionScene {
 
   private onSessionEnd() {
     this.session = null;
+    this.sessionEnding = false;
     this.hitTestSource = null;
     this.hitTestSourceRequested = false;
     this.reticleHasTarget = false;
@@ -922,7 +940,7 @@ export class ARSessionScene {
     this.attachAnchor(placedObject, this.latestHitTestResult);
     this.selected = placedObject;
     this.updateSelectionOutline();
-    this.history.push({ type: "place", object: placedObject });
+    this.pushHistory({ type: "place", object: placedObject });
 
     // Consume the armed item: without this, it stays armed forever, meaning every future
     // tap keeps placing new copies instead of ever falling through to tap-to-select an
@@ -1085,14 +1103,26 @@ export class ARSessionScene {
     if (this.transformGestureStart) return;
     const snapshot = this.captureSelectedTransform();
     if (!snapshot) return;
-    this.history.push(snapshot);
+    this.pushHistory(snapshot);
     this.notifyPlacedChange();
+  }
+
+  private pushHistory(entry: (typeof this.history)[number]) {
+    this.history.push(entry);
+    if (this.history.length > ARSessionScene.MAX_HISTORY_ENTRIES) {
+      this.history.splice(0, this.history.length - ARSessionScene.MAX_HISTORY_ENTRIES);
+    }
+  }
+
+  private hasMutableSelection(): boolean {
+    return !this.disposed && !this.sessionEnding && !!this.session &&
+      !!this.selected && this.placed.includes(this.selected);
   }
 
   // Called by the DOM pinch handler. Unlike sliders/buttons, a pinch fires a continuous
   // stream of scale updates and must remain one reversible user action.
   beginTransformGesture() {
-    if (this.transformGestureStart) return;
+    if (!this.hasMutableSelection() || this.transformGestureStart) return;
     this.transformGestureStart = this.captureSelectedTransform();
   }
 
@@ -1110,12 +1140,12 @@ export class ARSessionScene {
       snapshot.userYawDeg !== this.selected.userYawDeg;
     if (!changed) return;
 
-    this.history.push(snapshot);
+    this.pushHistory(snapshot);
     this.notifyPlacedChange();
   }
 
   rotateSelected(deltaDeg: number) {
-    if (!this.selected || !Number.isFinite(deltaDeg) || deltaDeg === 0) return;
+    if (!this.hasMutableSelection() || !this.selected || !Number.isFinite(deltaDeg) || deltaDeg === 0) return;
     this.recordTransformBeforeChange();
     this.selected.group.rotateY(THREE.MathUtils.degToRad(deltaDeg));
     this.selected.userYawDeg += deltaDeg;
@@ -1124,7 +1154,7 @@ export class ARSessionScene {
   // Scales a single axis independently — "width" (x), "height" (y), or "depth" (z) — so an
   // item can be stretched/squashed to fit a spot rather than only resized uniformly.
   scaleSelectedAxis(axis: ScaleAxis, factor: number) {
-    if (!this.selected) return;
+    if (!this.hasMutableSelection() || !this.selected || !Number.isFinite(factor) || factor <= 0) return;
     this.setAxisScale(axis, this.selected.scale[axis] * factor);
   }
 
@@ -1132,7 +1162,7 @@ export class ARSessionScene {
   // keeps its current proportions even when one axis reaches the global size limit first.
   // Keep the visible floor-center fixed even when the exported origin is offset.
   scaleSelectedUniform(factor: number) {
-    if (!this.selected || !Number.isFinite(factor) || factor <= 0) return;
+    if (!this.hasMutableSelection() || !this.selected || !Number.isFinite(factor) || factor <= 0) return;
 
     const current = this.selected.scale;
     const minFactor = Math.max(
@@ -1197,7 +1227,7 @@ export class ARSessionScene {
   }
 
   moveSelectedToReticle() {
-    if (!this.selected || !this.reticle.visible || !this.isPlacementConfident) return;
+    if (!this.hasMutableSelection() || !this.selected || !this.reticle.visible || !this.isPlacementConfident) return;
     this.recordTransformBeforeChange();
     const floorY = this.reticlePosition.y;
     this.selected.group.position.setFromMatrixPosition(this.reticle.matrix);
@@ -1218,19 +1248,20 @@ export class ARSessionScene {
   }
 
   deleteSelected() {
-    if (!this.selected) return;
+    if (!this.hasMutableSelection() || !this.selected) return;
     const toRemove = this.selected;
     const index = this.placed.findIndex((p) => p.id === toRemove.id);
     this.selected = null;
     this.updateSelectionOutline(); // detaches the outline from toRemove.group before it's removed
     this.placedGroup.remove(toRemove.group);
     this.placed = this.placed.filter((p) => p.id !== toRemove.id);
-    this.history.push({ type: "delete", object: toRemove, index });
+    this.pushHistory({ type: "delete", object: toRemove, index });
     this.notifyPlacedChange();
   }
 
   // Reverses the most recent place, delete, rotate, resize, or move action.
   undo() {
+    if (this.disposed || this.sessionEnding || !this.session) return;
     const last = this.history.pop();
     if (!last) return;
 
@@ -1792,6 +1823,9 @@ export class ARSessionScene {
   }
 
   dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.sessionEnding = true;
     window.removeEventListener("resize", this.resizeHandler);
     if (this.uiInteractionClearTimer) clearTimeout(this.uiInteractionClearTimer);
     if (this.session) {
@@ -1802,5 +1836,11 @@ export class ARSessionScene {
     this.renderer?.setAnimationLoop(null);
     this.renderer?.dispose();
     this.renderer = null;
+    this.onPlacedChange = () => {};
+    this.onReticleVisible = () => {};
+    this.onMeasurementChange = () => {};
+    this.onSurfaceIssue = () => {};
+    this.onLightLevelChange = () => {};
+    this.onCameraAngleChange = () => {};
   }
 }

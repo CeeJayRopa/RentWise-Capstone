@@ -163,6 +163,72 @@ export default function ARView() {
   const canvasContainerRef = useRef<View>(null);
   const overlayRef = useRef<View>(null);
   const sceneRef = useRef<ARSessionScene | null>(null);
+  const rotateValueRef = useRef(0);
+  const scaleValuesRef = useRef<Record<ScaleAxis, number>>({ x: 100, y: 100, z: 100 });
+  const pendingRotationRef = useRef(0);
+  const pendingScaleRef = useRef<Record<ScaleAxis, number>>({ x: 1, y: 1, z: 1 });
+  const transformFrameRef = useRef<number | null>(null);
+
+  const flushPendingTransforms = () => {
+    if (transformFrameRef.current !== null) {
+      cancelAnimationFrame(transformFrameRef.current);
+      transformFrameRef.current = null;
+    }
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const rotation = pendingRotationRef.current;
+    const scale = pendingScaleRef.current;
+    pendingRotationRef.current = 0;
+    pendingScaleRef.current = { x: 1, y: 1, z: 1 };
+    try {
+      if (rotation !== 0) scene.rotateSelected(rotation);
+      (Object.keys(scale) as ScaleAxis[]).forEach((axis) => {
+        if (scale[axis] !== 1) scene.scaleSelectedAxis(axis, scale[axis]);
+      });
+    } catch (err) {
+      console.error("[AR] transform control failed safely:", err);
+      setError("That adjustment couldn't be applied. The AR session is still active.");
+    }
+  };
+
+  const scheduleTransformFlush = () => {
+    if (transformFrameRef.current !== null) return;
+    transformFrameRef.current = requestAnimationFrame(() => {
+      transformFrameRef.current = null;
+      flushPendingTransforms();
+    });
+  };
+
+  const beginSliderInteraction = () => {
+    suppressPressIn();
+    sceneRef.current?.beginTransformGesture();
+  };
+
+  const endSliderInteraction = () => {
+    // Flush before closing the gesture so even the final input event belongs
+    // to the same single undo record.
+    flushPendingTransforms();
+    sceneRef.current?.endTransformGesture();
+    suppressPressOut();
+  };
+
+  const runSceneControl = (action: (scene: ARSessionScene) => void) => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    try {
+      action(scene);
+    } catch (err) {
+      console.error("[AR] control failed safely:", err);
+      setError("That control couldn't be applied. You can continue arranging your scene.");
+    }
+  };
+
+  useEffect(() => () => {
+    if (transformFrameRef.current !== null) cancelAnimationFrame(transformFrameRef.current);
+    transformFrameRef.current = null;
+    pendingRotationRef.current = 0;
+    pendingScaleRef.current = { x: 1, y: 1, z: 1 };
+  }, []);
 
   useEffect(() => {
     if (Platform.OS !== "web") return;
@@ -286,15 +352,21 @@ export default function ARView() {
   };
 
   const setRotationFromSlider = (nextValue: number) => {
-    const delta = nextValue - rotateValue;
-    if (delta !== 0) sceneRef.current?.rotateSelected(delta);
+    const delta = nextValue - rotateValueRef.current;
+    rotateValueRef.current = nextValue;
+    if (delta !== 0) {
+      pendingRotationRef.current += delta;
+      scheduleTransformFlush();
+    }
     setRotateValue(nextValue);
   };
 
   const setScaleFromSlider = (axis: ScaleAxis, nextValue: number) => {
-    const previousValue = scaleValues[axis];
+    const previousValue = scaleValuesRef.current[axis];
+    scaleValuesRef.current = { ...scaleValuesRef.current, [axis]: nextValue };
     if (previousValue > 0 && nextValue !== previousValue) {
-      sceneRef.current?.scaleSelectedAxis(axis, nextValue / previousValue);
+      pendingScaleRef.current[axis] *= nextValue / previousValue;
+      scheduleTransformFlush();
     }
     setScaleValues((previous) => ({ ...previous, [axis]: nextValue }));
   };
@@ -549,7 +621,7 @@ export default function ARView() {
             {sessionActive && placedState.canUndo && (
               <TouchableOpacity
                 style={styles.topAction}
-                onPress={() => sceneRef.current?.undo()}
+                onPress={() => runSceneControl((scene) => scene.undo())}
                 onPressIn={suppressPressIn}
                 onPressOut={suppressPressOut}
               >
@@ -832,7 +904,7 @@ export default function ARView() {
                   <Text style={styles.sliderTitle}>Rotate object</Text>
                   <Text style={styles.sliderValue}>{rotateValue}°</Text>
                 </View>
-                <input aria-label="Rotate selected object" type="range" min={-180} max={180} value={rotateValue} onPointerDown={suppressPressIn} onPointerUp={suppressPressOut} onPointerCancel={suppressPressOut} onChange={(event) => setRotationFromSlider(Number(event.target.value))} style={styles.webSlider as any} />
+                <input aria-label="Rotate selected object" type="range" min={-180} max={180} value={rotateValue} onPointerDown={beginSliderInteraction} onPointerUp={endSliderInteraction} onPointerCancel={endSliderInteraction} onChange={(event) => setRotationFromSlider(Number(event.target.value))} style={styles.webSlider as any} />
                 <View style={styles.sliderMarks}><Text style={styles.sliderMark}>−180°</Text><Text style={styles.sliderMark}>0°</Text><Text style={styles.sliderMark}>180°</Text></View>
               </View>
             ) : toolMode === "resize" ? (
@@ -848,15 +920,15 @@ export default function ARView() {
                     </TouchableOpacity>
                   ))}
                 </View>
-                <input aria-label="Resize selected object" type="range" min={50} max={150} value={scaleValues[resizeAxis]} onPointerDown={suppressPressIn} onPointerUp={suppressPressOut} onPointerCancel={suppressPressOut} onChange={(event) => setScaleFromSlider(resizeAxis, Number(event.target.value))} style={styles.webSlider as any} />
+                <input aria-label="Resize selected object" type="range" min={50} max={150} value={scaleValues[resizeAxis]} onPointerDown={beginSliderInteraction} onPointerUp={endSliderInteraction} onPointerCancel={endSliderInteraction} onChange={(event) => setScaleFromSlider(resizeAxis, Number(event.target.value))} style={styles.webSlider as any} />
                 <View style={styles.sliderMarks}><Text style={styles.sliderMark}>50%</Text><Text style={styles.sliderMark}>100%</Text><Text style={styles.sliderMark}>150%</Text></View>
               </View>
             ) : (
               <View style={styles.actionRow}>
-                <TouchableOpacity style={styles.actionButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => { setRotateValue(0); setToolMode("rotate"); }}><Text style={styles.actionIcon}>⟳</Text><Text style={styles.actionText}>Rotate</Text></TouchableOpacity>
+                <TouchableOpacity style={styles.actionButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => { rotateValueRef.current = 0; setRotateValue(0); setToolMode("rotate"); }}><Text style={styles.actionIcon}>⟳</Text><Text style={styles.actionText}>Rotate</Text></TouchableOpacity>
                 <TouchableOpacity style={styles.actionButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => setToolMode("resize")}><Text style={styles.actionIcon}>⛶</Text><Text style={styles.actionText}>Resize</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.actionButton, !reticleVisible && styles.controlBtnDisabled]} disabled={!reticleVisible} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => sceneRef.current?.moveSelectedToReticle()}><Text style={styles.actionIcon}>✥</Text><Text style={styles.actionText}>Move</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.actionButton, styles.deleteBtn]} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => sceneRef.current?.deleteSelected()}><Text style={styles.actionIcon}>🗑</Text><Text style={styles.actionText}>Delete</Text></TouchableOpacity>
+                <TouchableOpacity style={[styles.actionButton, !reticleVisible && styles.controlBtnDisabled]} disabled={!reticleVisible} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => runSceneControl((scene) => scene.moveSelectedToReticle())}><Text style={styles.actionIcon}>✥</Text><Text style={styles.actionText}>Move</Text></TouchableOpacity>
+                <TouchableOpacity style={[styles.actionButton, styles.deleteBtn]} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => runSceneControl((scene) => scene.deleteSelected())}><Text style={styles.actionIcon}>🗑</Text><Text style={styles.actionText}>Delete</Text></TouchableOpacity>
               </View>
             )}
             {false && <ScrollView
@@ -900,9 +972,7 @@ export default function ARView() {
                     onPressIn={suppressPressIn}
                     onPressOut={suppressPressOut}
                     onPress={() => {
-                      sceneRef.current?.scaleSelectedAxis("x", 0.9);
-                      sceneRef.current?.scaleSelectedAxis("y", 0.9);
-                      sceneRef.current?.scaleSelectedAxis("z", 0.9);
+                      runSceneControl((scene) => scene.scaleSelectedUniform(0.9));
                     }}
                   >
                     <Text style={styles.controlBtnText}>▼</Text>
@@ -912,9 +982,7 @@ export default function ARView() {
                     onPressIn={suppressPressIn}
                     onPressOut={suppressPressOut}
                     onPress={() => {
-                      sceneRef.current?.scaleSelectedAxis("x", 1.1);
-                      sceneRef.current?.scaleSelectedAxis("y", 1.1);
-                      sceneRef.current?.scaleSelectedAxis("z", 1.1);
+                      runSceneControl((scene) => scene.scaleSelectedUniform(1.1));
                     }}
                   >
                     <Text style={styles.controlBtnText}>▲</Text>
