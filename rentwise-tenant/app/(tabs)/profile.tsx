@@ -1213,7 +1213,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: colors.mist,
+    backgroundColor: "transparent",
     borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: colors.mist,
@@ -1257,7 +1257,7 @@ const styles = StyleSheet.create({
   },
 
   input: {
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
     borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: colors.border,
@@ -1274,7 +1274,7 @@ const styles = StyleSheet.create({
   },
 
   inputReadOnly: {
-    backgroundColor: colors.mist,
+    backgroundColor: "transparent",
     borderColor: colors.mist,
     color: colors.textSecondary,
   },
@@ -1344,7 +1344,7 @@ const styles = StyleSheet.create({
   phoneRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
     borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: colors.border,
@@ -1357,17 +1357,17 @@ const styles = StyleSheet.create({
   },
 
   phoneRowReadOnly: {
-    backgroundColor: colors.mist,
+    backgroundColor: "transparent",
     borderColor: colors.mist,
   },
 
   phonePrefixReadOnly: {
-    backgroundColor: colors.border,
+    backgroundColor: "transparent",
     borderRightColor: colors.border,
   },
 
   phonePrefix: {
-    backgroundColor: colors.emeraldSoft,
+    backgroundColor: "transparent",
     paddingHorizontal: spacing.md + 2,
     paddingVertical: spacing.sm + 2,
     borderRightWidth: 1,

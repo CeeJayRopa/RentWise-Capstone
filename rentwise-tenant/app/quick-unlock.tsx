@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { router } from "expo-router";
 import { User, Lock, Eye, EyeOff } from "lucide-react-native";
 import {
@@ -34,6 +34,8 @@ export default function QuickUnlock() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [unlocking, setUnlocking] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const signingOutRef = useRef(false);
   useEffect(() => {
     const user = auth.currentUser;
     // No active session (e.g. someone deep-linked here directly) — this
@@ -111,9 +113,17 @@ export default function QuickUnlock() {
   }
 
   async function handleSignOut() {
-    await signOut(auth).catch(() => {});
-    await setRememberMe(false);
-    router.replace("/login");
+    if (signingOutRef.current) return;
+    signingOutRef.current = true;
+    setSigningOut(true);
+    try {
+      await signOut(auth).catch(() => {});
+      await setRememberMe(false);
+      router.replace("/login");
+    } finally {
+      signingOutRef.current = false;
+      setSigningOut(false);
+    }
   }
 
   if (checkingSession) {
@@ -190,8 +200,10 @@ export default function QuickUnlock() {
           }
         </Pressable>
 
-        <Pressable style={styles.signOutLink} onPress={handleSignOut}>
-          <Text style={styles.signOutLinkText}>Not you? Sign out</Text>
+        <Pressable style={styles.signOutLink} onPress={handleSignOut} disabled={signingOut || unlocking}>
+          {signingOut ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}><ActivityIndicator size="small" color={colors.textSecondary} /><Text style={styles.signOutLinkText}>Signing out...</Text></View>
+          ) : <Text style={styles.signOutLinkText}>Not you? Sign out</Text>}
         </Pressable>
       </View>
     </KeyboardAvoidingView>

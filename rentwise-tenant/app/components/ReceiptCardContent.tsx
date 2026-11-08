@@ -1,4 +1,5 @@
-import { View, Text, Image, StyleSheet, Pressable, Alert, Platform } from "react-native";
+import { useRef, useState } from "react";
+import { View, Text, Image, StyleSheet, Pressable, Alert, Platform, ActivityIndicator } from "react-native";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import * as FileSystem from "expo-file-system/legacy";
@@ -221,10 +222,15 @@ async function confirmReceiptFolderAccess(): Promise<boolean> {
 // caller can render the buttons OUTSIDE a ScrollView (fixed at the bottom
 // of a modal) while the content itself scrolls independently.
 function useReceiptDerived(data: any, billing: any) {
+  const [downloading, setDownloading] = useState(false);
+  const downloadingRef = useRef(false);
   const { amountPaid } = getReceiptAmounts(data);
   const breakdown = completeBreakdown(data, billing, amountPaid);
 
   async function handleDownloadPdf() {
+    if (downloadingRef.current) return;
+    downloadingRef.current = true;
+    setDownloading(true);
     try {
       if (Platform.OS === "android" && !(await confirmReceiptFolderAccess())) return;
 
@@ -257,10 +263,13 @@ function useReceiptDerived(data: any, billing: any) {
     } catch (err) {
       console.log("[receipt pdf] error:", err);
       Alert.alert("Error", "Couldn't generate the PDF. Please try again.");
+    } finally {
+      downloadingRef.current = false;
+      setDownloading(false);
     }
   }
 
-  return { breakdown, amountPaid, handleDownloadPdf };
+  return { breakdown, amountPaid, handleDownloadPdf, downloading };
 }
 
 // Standalone Close/PDF action bar -- render this as a sibling AFTER a
@@ -276,23 +285,27 @@ export function ReceiptActionsBar({
   billing?: any;
   onClose?: () => void;
 }) {
-  const { handleDownloadPdf } = useReceiptDerived(data, billing);
+  const { handleDownloadPdf, downloading } = useReceiptDerived(data, billing);
 
   return (
     <View style={styles.actionsRow}>
       <Pressable
-        style={({ pressed }) => [styles.closeBtn, pressed && styles.closeBtnPressed]}
+        style={({ pressed }) => [styles.closeBtn, downloading && { opacity: 0.55 }, pressed && !downloading && styles.closeBtnPressed]}
         onPress={onClose}
+        disabled={downloading}
       >
         {({ pressed }) => (
           <Text style={[styles.closeBtnText, pressed && styles.closeBtnTextPressed]}>Close</Text>
         )}
       </Pressable>
       <Pressable
-        style={({ pressed }) => [styles.pdfBtn, pressed && styles.pdfBtnPressed]}
+        style={({ pressed }) => [styles.pdfBtn, downloading && { opacity: 0.7 }, pressed && !downloading && styles.pdfBtnPressed]}
         onPress={handleDownloadPdf}
+        disabled={downloading}
       >
-        {({ pressed }) => (
+        {({ pressed }) => downloading ? (
+          <><ActivityIndicator size="small" color={colors.white} /><Text style={styles.pdfBtnText}>Downloading...</Text></>
+        ) : (
           <>
             <Download size={16} color={pressed ? colors.emerald : colors.white} />
             <Text style={[styles.pdfBtnText, pressed && styles.pdfBtnTextPressed]}>Download PDF</Text>
@@ -316,7 +329,7 @@ export default function ReceiptCardContent({
 }) {
   const receiptDate = data.date ? new Date(data.date) : new Date();
 
-  const { breakdown, amountPaid, handleDownloadPdf } = useReceiptDerived(data, billing);
+  const { breakdown, amountPaid, handleDownloadPdf, downloading } = useReceiptDerived(data, billing);
   const { cashTendered, change } = getReceiptAmounts(data);
 
   const info = statusInfo(data.status);
@@ -427,18 +440,22 @@ export default function ReceiptCardContent({
       {showActions && (
         <View style={styles.actionsRow}>
           <Pressable
-            style={({ pressed }) => [styles.closeBtn, pressed && styles.closeBtnPressed]}
+            style={({ pressed }) => [styles.closeBtn, downloading && { opacity: 0.55 }, pressed && !downloading && styles.closeBtnPressed]}
             onPress={onClose}
+            disabled={downloading}
           >
             {({ pressed }) => (
               <Text style={[styles.closeBtnText, pressed && styles.closeBtnTextPressed]}>Close</Text>
             )}
           </Pressable>
           <Pressable
-            style={({ pressed }) => [styles.pdfBtn, pressed && styles.pdfBtnPressed]}
+            style={({ pressed }) => [styles.pdfBtn, downloading && { opacity: 0.7 }, pressed && !downloading && styles.pdfBtnPressed]}
             onPress={handleDownloadPdf}
+            disabled={downloading}
           >
-            {({ pressed }) => (
+            {({ pressed }) => downloading ? (
+              <><ActivityIndicator size="small" color={colors.white} /><Text style={styles.pdfBtnText}>Downloading...</Text></>
+            ) : (
               <>
                 <Download size={16} color={pressed ? colors.emerald : colors.white} />
                 <Text style={[styles.pdfBtnText, pressed && styles.pdfBtnTextPressed]}>Download PDF</Text>

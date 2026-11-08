@@ -228,6 +228,13 @@ export default function Financials() {
   const [selectedProfile, setSelectedProfile] = useState<any>(null);
   const [profilePayments, setProfilePayments] = useState<any[]>([]);
   const [processing, setProcessing] = useState(false);
+  const [openingPaymentId, setOpeningPaymentId] = useState<string | null>(null);
+  const [approvingOnline, setApprovingOnline] = useState(false);
+  const [downloadingReceipt, setDownloadingReceipt] = useState(false);
+  const openingPaymentRef = useRef(false);
+  const approvingOnlineRef = useRef(false);
+  const downloadingReceiptRef = useRef(false);
+  const cashProcessingRef = useRef(false);
   const [cashReceived, setCashReceived] = useState("");
   const [paymentQuantity, setPaymentQuantity] = useState("0");
   const paymentKeyboardVisibleRef = useRef(false);
@@ -662,8 +669,10 @@ export default function Financials() {
   );
 
   const downloadReceipt = async () => {
-    if (!receiptData) return;
+    if (!receiptData || downloadingReceiptRef.current) return;
 
+    downloadingReceiptRef.current = true;
+    setDownloadingReceipt(true);
     try {
       if (!(await confirmReceiptFolderAccess())) return;
 
@@ -717,14 +726,19 @@ export default function Financials() {
     } catch (error) {
       console.log("PDF ERROR", error);
       Alert.alert("Error", "Failed to generate or download the receipt.");
+    } finally {
+      downloadingReceiptRef.current = false;
+      setDownloadingReceipt(false);
     }
   };
 
   const confirmOnlinePayment = async (row: TenantRow) => {
-    if (!row.paymentId) return;
-    if (!(await requireOnlineAction("Acknowledging an online payment"))) return;
+    if (!row.paymentId || openingPaymentRef.current) return;
 
+    openingPaymentRef.current = true;
+    setOpeningPaymentId(row.paymentId);
     try {
+      if (!(await requireOnlineAction("Acknowledging an online payment"))) return;
       const paymentRef = doc(db, "payments", row.paymentId);
 
       const paymentSnap = await getDoc(paymentRef);
@@ -803,6 +817,10 @@ export default function Financials() {
       setOnlineConfirmModal(true);
     } catch (error) {
       console.log("OPEN RECEIPT ERROR:", error);
+      Alert.alert("Unable to open payment", "Please try again.");
+    } finally {
+      openingPaymentRef.current = false;
+      setOpeningPaymentId(null);
     }
   };
 
@@ -1084,8 +1102,10 @@ export default function Financials() {
                           style={({ pressed }) => [
                             styles.setPaidBtn,
                             item.status === "online" && styles.setPaidBtnOnline,
-                            pressed && (item.status === "online" ? styles.setPaidBtnOnlinePressed : styles.setPaidBtnPressed),
+                            openingPaymentId === item.paymentId && { opacity: 0.65 },
+                            pressed && openingPaymentId !== item.paymentId && (item.status === "online" ? styles.setPaidBtnOnlinePressed : styles.setPaidBtnPressed),
                           ]}
+                          disabled={openingPaymentId !== null}
                           onPress={async () => {
                             if (item.status === "online") {
                               await confirmOnlinePayment(item);
@@ -1097,7 +1117,9 @@ export default function Financials() {
                             }
                           }}
                         >
-                          {({ pressed }) => (
+                          {({ pressed }) => openingPaymentId === item.paymentId ? (
+                            <ActivityIndicator size="small" color={colors.warning} />
+                          ) : (
                             <>
                               <CheckCircle2
                                 size={14}
@@ -1272,7 +1294,7 @@ export default function Financials() {
                 style={({ pressed }) => [styles.payModalBtnPrimary, pressed && !processing && styles.payModalBtnPrimaryPressed]}
                 disabled={processing}
                 onPress={async () => {
-                  if (!selectedTenant) return;
+                  if (!selectedTenant || cashProcessingRef.current) return;
                   const payment = Number(cashReceived);
                   if (!cashReceived || payment === 0) {
                     Alert.alert("Please enter payment amount");
@@ -1287,6 +1309,7 @@ export default function Financials() {
                     Alert.alert("Insufficient payment");
                     return;
                   }
+                  cashProcessingRef.current = true;
                   setProcessing(true);
                   try {
                     const recordPayment = httpsCallable(getFunctions(firebaseApp), "adminRecordCashPayment");
@@ -1325,13 +1348,19 @@ export default function Financials() {
                     console.log("PAYMENT ERROR", error);
                     Alert.alert("Error", "Failed to save payment. Try again.");
                   } finally {
+                    cashProcessingRef.current = false;
                     setProcessing(false);
                   }
                 }}
               >
-                {({ pressed }) => (
-                  <Text style={[styles.payModalBtnPrimaryText, pressed && !processing && styles.payModalBtnPrimaryTextPressed]}>
-                    {processing ? "Saving..." : "Generate Receipt"}
+                {({ pressed }) => processing ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <ActivityIndicator size="small" color={colors.white} />
+                    <Text style={styles.payModalBtnPrimaryText}>Saving...</Text>
+                  </View>
+                ) : (
+                  <Text style={[styles.payModalBtnPrimaryText, pressed && styles.payModalBtnPrimaryTextPressed]}>
+                    Generate Receipt
                   </Text>
                 )}
               </Pressable>
@@ -1452,7 +1481,14 @@ export default function Financials() {
         </View>
       </Modal>
 
-      <Modal visible={onlineConfirmModal} transparent animationType="fade">
+      <Modal
+        visible={onlineConfirmModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!approvingOnline) setOnlineConfirmModal(false);
+        }}
+      >
         <View style={styles.modalBg}>
           <View style={styles.receiptBox}>
             <ScrollView style={styles.confirmScrollArea} showsVerticalScrollIndicator={false}>
@@ -1565,12 +1601,13 @@ export default function Financials() {
 
             <View style={styles.confirmButtonsRow}>
               <Pressable
-                style={({ pressed }) => [styles.confirmCloseBtn, pressed && styles.confirmCloseBtnPressed]}
+                style={({ pressed }) => [styles.confirmCloseBtn, approvingOnline && { opacity: 0.55 }, pressed && !approvingOnline && styles.confirmCloseBtnPressed]}
                 onPress={() => {
                   setOnlineConfirmModal(false);
                   setSelectedOnlinePayment(null);
                   setLegacyPaymentIntentId("");
                 }}
+                disabled={approvingOnline}
               >
                 {({ pressed }) => (
                   <Text style={[styles.confirmCloseBtnText, pressed && styles.confirmCloseBtnTextPressed]}>Close</Text>
@@ -1578,10 +1615,13 @@ export default function Financials() {
               </Pressable>
 
               <Pressable
-                style={({ pressed }) => [styles.confirmPrimaryBtn, pressed && styles.confirmPrimaryBtnPressed]}
+                style={({ pressed }) => [styles.confirmPrimaryBtn, approvingOnline && { opacity: 0.7 }, pressed && !approvingOnline && styles.confirmPrimaryBtnPressed]}
+                disabled={approvingOnline}
                 onPress={async () => {
-                  if (!selectedTenant?.paymentId) return;
+                  if (!selectedTenant?.paymentId || approvingOnlineRef.current) return;
 
+                  approvingOnlineRef.current = true;
+                  setApprovingOnline(true);
                   try {
                     if (!selectedOnlinePayment?.checkoutSessionId && !/^pi_[A-Za-z0-9_-]+$/.test(legacyPaymentIntentId.trim())) {
                       Alert.alert("Provider reference required", "Enter the successful PayMongo Payment Intent ID from the Dashboard.");
@@ -1600,6 +1640,9 @@ export default function Financials() {
                   } catch (error: any) {
                     Alert.alert("Approval failed", error?.message || "Unable to approve this payment.");
                     return;
+                  } finally {
+                    approvingOnlineRef.current = false;
+                    setApprovingOnline(false);
                   }
 
                   void logDetailedUpdate({
@@ -1621,7 +1664,12 @@ export default function Financials() {
                   setLegacyPaymentIntentId("");
                 }}
               >
-                {({ pressed }) => (
+                {({ pressed }) => approvingOnline ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <ActivityIndicator size="small" color={colors.white} />
+                    <Text style={styles.confirmPrimaryBtnText}>Confirming...</Text>
+                  </View>
+                ) : (
                   <Text style={[styles.confirmPrimaryBtnText, pressed && styles.confirmPrimaryBtnTextPressed]}>
                     Confirm Payment
                   </Text>
@@ -1693,10 +1741,11 @@ export default function Financials() {
 
               <View style={styles.payModalButtons}>
                 <Pressable
-                  style={({ pressed }) => [styles.payModalBtnSecondary, pressed && styles.payModalBtnSecondaryPressed]}
+                  style={({ pressed }) => [styles.payModalBtnSecondary, downloadingReceipt && { opacity: 0.55 }, pressed && !downloadingReceipt && styles.payModalBtnSecondaryPressed]}
                   onPress={() => {
                     setReceiptModal(false);
                   }}
+                  disabled={downloadingReceipt}
                 >
                   {({ pressed }) => (
                     <Text style={[styles.payModalBtnSecondaryText, pressed && styles.payModalBtnSecondaryTextPressed]}>Close</Text>
@@ -1704,10 +1753,16 @@ export default function Financials() {
                 </Pressable>
 
                 <Pressable
-                  style={({ pressed }) => [styles.payModalBtnPrimary, pressed && styles.payModalBtnPrimaryPressed]}
+                  style={({ pressed }) => [styles.payModalBtnPrimary, downloadingReceipt && { opacity: 0.7 }, pressed && !downloadingReceipt && styles.payModalBtnPrimaryPressed]}
                   onPress={downloadReceipt}
+                  disabled={downloadingReceipt}
                 >
-                  {({ pressed }) => (
+                  {({ pressed }) => downloadingReceipt ? (
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                      <ActivityIndicator size="small" color={colors.white} />
+                      <Text style={styles.payModalBtnPrimaryText}>Downloading...</Text>
+                    </View>
+                  ) : (
                     <Text style={[styles.payModalBtnPrimaryText, pressed && styles.payModalBtnPrimaryTextPressed]}>Download Receipt</Text>
                   )}
                 </Pressable>

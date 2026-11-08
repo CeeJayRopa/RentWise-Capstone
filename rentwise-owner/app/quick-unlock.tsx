@@ -35,6 +35,8 @@ export default function QuickUnlock() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [unlocking, setUnlocking] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const signingOutRef = useRef(false);
   const attemptsRef = useRef(0);
 
   useEffect(() => {
@@ -100,9 +102,17 @@ export default function QuickUnlock() {
   }
 
   async function handleSignOut() {
-    await signOut(auth).catch(() => {});
-    await setRememberMe(false);
-    router.replace("/login");
+    if (signingOutRef.current) return;
+    signingOutRef.current = true;
+    setSigningOut(true);
+    try {
+      await signOut(auth).catch(() => {});
+      await setRememberMe(false);
+      router.replace("/login");
+    } finally {
+      signingOutRef.current = false;
+      setSigningOut(false);
+    }
   }
 
   if (checkingSession) {
@@ -179,8 +189,10 @@ export default function QuickUnlock() {
           }
         </Pressable>
 
-        <Pressable style={styles.signOutLink} onPress={handleSignOut}>
-          {({ pressed }) => (
+        <Pressable style={styles.signOutLink} onPress={handleSignOut} disabled={signingOut || unlocking}>
+          {({ pressed }) => signingOut ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}><ActivityIndicator size="small" color={colors.textSecondary} /><Text style={styles.signOutLinkText}>Signing out...</Text></View>
+          ) : (
             <Text style={[styles.signOutLinkText, pressed && styles.signOutLinkTextPressed]}>Not you? Sign out</Text>
           )}
         </Pressable>

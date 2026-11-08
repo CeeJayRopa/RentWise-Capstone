@@ -1244,9 +1244,9 @@ const styles = StyleSheet.create({
   questionNumberText: { fontSize: 10, color: colors.emeraldSoft, fontFamily: fontFamily.bold },
   recoveryQuestionTitle: { fontSize: 14, color: colors.ink, fontFamily: fontFamily.semibold },
   recoveryFieldLabel: { fontSize: 9, color: colors.ink, fontFamily: fontFamily.medium, marginBottom: 5 },
-  recoverySelect: { minHeight: 37, flexDirection: "row", alignItems: "center", borderRadius: 6, backgroundColor: colors.mist, paddingHorizontal: 11, marginBottom: 9 },
+  recoverySelect: { minHeight: 37, flexDirection: "row", alignItems: "center", borderRadius: 6, backgroundColor: "transparent", paddingHorizontal: 11, marginBottom: 9 },
   recoverySelectText: { flex: 1, fontSize: 11, color: colors.ink, fontFamily: fontFamily.regular, marginRight: 8 },
-  recoveryAnswerField: { minHeight: 37, flexDirection: "row", alignItems: "center", gap: 7, borderRadius: 6, backgroundColor: colors.mist, paddingHorizontal: 11 },
+  recoveryAnswerField: { minHeight: 37, flexDirection: "row", alignItems: "center", gap: 7, borderRadius: 6, backgroundColor: "transparent", paddingHorizontal: 11 },
   recoveryAnswerInput: { flex: 1, paddingVertical: 8, fontSize: 12, color: colors.ink, fontFamily: fontFamily.medium },
   recoveryEditButton: { minHeight: 46, paddingVertical: 11, marginTop: 7 },
   recoveryEditButtonText: { fontSize: 13 },
@@ -1263,7 +1263,7 @@ const styles = StyleSheet.create({
 
   input: {
     width: "100%",
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
     borderRadius: 12,
     borderWidth: 0,
     paddingHorizontal: 16,
@@ -1278,11 +1278,11 @@ const styles = StyleSheet.create({
 
   inputFocused: {
     borderColor: colors.emeraldBright,
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
   },
 
   inputReadOnly: {
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
     borderRadius: 12,
     color: colors.ink,
   },
@@ -1300,7 +1300,7 @@ const styles = StyleSheet.create({
     minHeight: 54,
     borderRadius: 12,
     borderWidth: 0,
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
     overflow: "hidden",
     marginBottom: 16,
     ...shadow.card,
@@ -1308,11 +1308,11 @@ const styles = StyleSheet.create({
 
   rowFieldFocused: {
     borderColor: colors.emeraldBright,
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
   },
 
   rowFieldReadOnly: {
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
     borderRadius: 12,
   },
 
@@ -1346,14 +1346,14 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     minHeight: 54,
     padding: 5,
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
     borderRadius: 12,
     ...shadow.card,
   },
 
   phonePrefix: {
     minHeight: 44,
-    backgroundColor: colors.mist,
+    backgroundColor: "transparent",
     borderRadius: 8,
     paddingHorizontal: 13,
     paddingVertical: 10,
@@ -1362,7 +1362,7 @@ const styles = StyleSheet.create({
   },
 
   phonePrefixReadOnly: {
-    backgroundColor: colors.mist,
+    backgroundColor: "transparent",
   },
 
   phonePrefixText: {
@@ -1377,7 +1377,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderRadius: 8,
     borderWidth: 0,
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
     overflow: "hidden",
   },
   phoneVerifiedIcon: { marginRight: 10 },
@@ -1391,7 +1391,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderRadius: 7,
     borderWidth: 0,
-    backgroundColor: colors.mist,
+    backgroundColor: "transparent",
     marginBottom: 10,
   },
 

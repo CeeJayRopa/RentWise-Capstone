@@ -745,7 +745,7 @@ const styles = StyleSheet.create({
 
   input: {
     width: "100%",
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
     borderRadius: 12,
     borderWidth: 0,
     paddingHorizontal: 16,
@@ -760,11 +760,11 @@ const styles = StyleSheet.create({
 
   inputFocused: {
     borderColor: colors.emeraldBright,
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
   },
 
   inputReadOnly: {
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
     borderRadius: 12,
     color: colors.ink,
   },
@@ -775,13 +775,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     minHeight: 54,
     borderRadius: 12,
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
     overflow: "hidden",
     marginBottom: 16,
     ...shadow.card,
   },
-  rowFieldFocused: { borderColor: colors.emeraldBright, backgroundColor: colors.white },
-  rowFieldReadOnly: { backgroundColor: colors.white, borderRadius: 12 },
+  rowFieldFocused: { borderColor: colors.emeraldBright, backgroundColor: "transparent" },
+  rowFieldReadOnly: { backgroundColor: "transparent", borderRadius: 12 },
   rowInput: { flex: 1, paddingHorizontal: spacing.md + 2, paddingVertical: spacing.md + 1, fontSize: fontSize.base, fontFamily: fontFamily.medium, color: colors.ink },
   rowInputReadOnly: { color: colors.ink, fontFamily: fontFamily.bold },
 
@@ -794,7 +794,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     minHeight: 54,
     padding: 5,
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
     borderRadius: 12,
     ...shadow.card,
   },
@@ -805,17 +805,17 @@ const styles = StyleSheet.create({
 
   phoneRowFocused: {
     borderColor: colors.emeraldBright,
-    backgroundColor: colors.white,
+    backgroundColor: "transparent",
   },
 
   phoneRowReadOnly: {
-    backgroundColor: colors.mist,
+    backgroundColor: "transparent",
     borderColor: colors.border,
   },
 
   phonePrefix: {
     minHeight: 44,
-    backgroundColor: colors.mist,
+    backgroundColor: "transparent",
     borderRadius: 8,
     paddingHorizontal: 13,
     paddingVertical: 10,
@@ -823,7 +823,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
 
-  phonePrefixReadOnly: { backgroundColor: colors.mist },
+  phonePrefixReadOnly: { backgroundColor: "transparent" },
 
   phonePrefixText: {
     fontSize: fontSize.base,
