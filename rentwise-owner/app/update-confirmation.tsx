@@ -12,25 +12,23 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
-  getDocs,
-  query,
-  serverTimestamp,
-  updateDoc,
-  where,
-  writeBatch,
 } from "firebase/firestore";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, HelpCircle, ArrowRight } from "lucide-react-native";
+import { ArrowLeft, HelpCircle, ArrowRight, ShieldCheck, LockKeyhole, CheckCircle2, Banknote, Store, UserRound, CalendarDays } from "lucide-react-native";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
+import { firebaseApp } from "../shared/firebaseConfig";
 import HelpTour, { HelpStep } from "./components/HelpTour";
+import HelpSupportModal from "./components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
+import { requireOnlineAction } from "../shared/services/networkStatus";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
+const cloudFunctions = getFunctions(firebaseApp);
 
 type UpdateDoc = {
   id: string;
@@ -63,22 +61,13 @@ type UpdateDoc = {
 // charge is derived by multiplying that daily rate by however many days
 // fall in the period containing `date`. Mirrors rentwise-admin/app/financials.tsx.
 function computePeriodCharge(dailyRate: number, schedule: string, date: Date): number {
-  if (schedule === "daily") return dailyRate;
-  if (schedule === "weekly") return dailyRate * 7;
-  const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
-  if (schedule === "semi-monthly") {
-    const daysInHalf = date.getDate() <= 15 ? 15 : daysInMonth - 15;
-    return dailyRate * daysInHalf;
-  }
-  return dailyRate * daysInMonth; // monthly
+  const days = schedule === "daily" ? 1 : schedule === "weekly" ? 7 : schedule === "semi-monthly" ? 15 : 30;
+  return dailyRate * days;
 }
 
 function periodUnitLabel(schedule: string, count: number): string {
-  const plural = count !== 1;
-  if (schedule === "daily") return plural ? "days" : "day";
-  if (schedule === "weekly") return plural ? "weeks" : "week";
-  if (schedule === "semi-monthly") return plural ? "cutoffs" : "cutoff";
-  return plural ? "months" : "month";
+  const days = schedule === "daily" ? 1 : schedule === "weekly" ? 7 : schedule === "semi-monthly" ? 15 : 30;
+  return `${days}-day interval${count === 1 ? "" : "s"}`;
 }
 
 function categoryLabel(cat: string): string {
@@ -100,24 +89,9 @@ function formatDate(ts: any): string {
   });
 }
 
-async function markLinkedNotifications(
-  updateId: string,
-  status: "Acknowledged" | "Rejected",
-) {
-  const snap = await getDocs(
-    query(collection(db, "notifications"), where("updateId", "==", updateId)),
-  );
-  const batch = writeBatch(db);
-  snap.docs.forEach((d) =>
-    batch.update(doc(db, "notifications", d.id), { status }),
-  );
-  await batch.commit();
-}
-
 export default function UpdateConfirmation() {
   const insets = useSafeAreaInsets();
-  const { id, source } = useLocalSearchParams<{ id: string; source?: string }>();
-  const showHeaderBack = source === "notifications";
+  const { id } = useLocalSearchParams<{ id: string; source?: string }>();
   const [update, setUpdate] = useState<UpdateDoc | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -127,6 +101,7 @@ export default function UpdateConfirmation() {
   const [periodsOwed, setPeriodsOwed] = useState(0);
   const [schedule, setSchedule] = useState("monthly");
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
   const beforeAfterRef = useRef<View>(null);
   const amountRef = useRef<View>(null);
   const approveRef = useRef<View>(null);
@@ -160,18 +135,17 @@ export default function UpdateConfirmation() {
       if (data.paymentAmount != null && data.tenantId) {
         try {
           const userSnap = await getDoc(doc(db, "users", data.tenantId));
-          const stallId = userSnap.exists() ? (userSnap.data().stallId as string) : null;
-          if (stallId) {
-            const stallSnap = await getDoc(doc(db, "stalls", stallId));
-            if (stallSnap.exists()) {
-              const sd = stallSnap.data();
-              const dailyRate = Number(sd.price ?? 0);
-              const sched = String(sd.paymentSchedule ?? "monthly");
-              const charge = computePeriodCharge(dailyRate, sched, new Date());
-              setSchedule(sched);
-              setPeriodCharge(charge);
-              setPeriodsOwed(charge > 0 ? Math.max(1, Math.round(Number(data.paymentAmount) / charge)) : 1);
-            }
+          if (userSnap.exists()) {
+            const tenant = userSnap.data();
+            // Tenant price is the authoritative combined daily rate for all
+            // assigned stalls. Reading only the primary stall understates a
+            // multi-stall tenant's payment breakdown.
+            const dailyRate = Number(tenant.price ?? 0);
+            const sched = String(tenant.paymentSchedule ?? "monthly");
+            const charge = computePeriodCharge(dailyRate, sched, new Date());
+            setSchedule(sched);
+            setPeriodCharge(charge);
+            setPeriodsOwed(charge > 0 ? Math.max(1, Math.round(Number(data.paymentAmount) / charge)) : 1);
           }
         } catch {
           // Non-fatal — the Amount just shows without a breakdown.
@@ -186,40 +160,17 @@ export default function UpdateConfirmation() {
 
   const approveOne = async () => {
     if (!update || !auth.currentUser) return;
+    if (!(await requireOnlineAction("Acknowledging a report"))) return;
     setSaving(true);
     try {
-      await updateDoc(doc(db, "updates", update.id), {
-        approvalStatus: "approved",
-      });
-      await markLinkedNotifications(update.id, "Acknowledged");
-      if (update.changedBy) {
-        const label =
-          update.type ?? update.module ?? categoryLabel(update.category ?? "archive");
-        await addDoc(collection(db, "notifications"), {
-          userId: update.changedBy,
-          message: `Your "${label}" update was acknowledged by the owner.`,
-          read: false,
-          fromOwner: true,
-          createdAt: serverTimestamp(),
-        });
-      }
-      await addDoc(collection(db, "dailyReports"), {
-        type: update.module
-          ? (update.type ?? update.module ?? "Update")
-          : categoryLabel(update.category ?? "archive"),
-        updateId: update.id,
-        spaceNo: update.spaceNo ?? null,
-        tenantName: update.tenantName ?? null,
-        approvedBy: "Owner",
-        date: serverTimestamp(),
-        createdAt: serverTimestamp(),
-      });
+      const acknowledge = httpsCallable(cloudFunctions, "ownerAcknowledgeUpdates");
+      await acknowledge({updateIds: [update.id]});
       Alert.alert("Acknowledged", "Update has been acknowledged.", [
         { text: "OK", onPress: () => router.back() },
       ]);
     } catch (err) {
       console.error(err);
-      Alert.alert("Error", "Failed to approve. Please try again.");
+      Alert.alert("Error", "Failed to acknowledge. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -246,9 +197,10 @@ export default function UpdateConfirmation() {
     );
   }
 
-  const isAlreadyDecided =
+  const isAcknowledged =
     update.approvalStatus === "approved" ||
-    update.approvalStatus === "rejected";
+    update.approvalStatus === "acknowledged";
+  const isAlreadyDecided = isAcknowledged;
 
   const isNewSchema = !!update.module;
   const updateTitle = isNewSchema
@@ -313,20 +265,18 @@ export default function UpdateConfirmation() {
         style={styles.headerGradient}
       >
         <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-          {showHeaderBack ? (
-            <TouchableOpacity
-              onPress={() => router.back()}
-              style={styles.headerIconBtn}
-              activeOpacity={0.7}
-            >
-              <ArrowLeft size={22} color={colors.emeraldSoft} />
-            </TouchableOpacity>
-          ) : (
-            <View style={styles.backBtn} />
-          )}
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.headerIconBtn}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
+            <ArrowLeft size={22} color={colors.emeraldSoft} />
+          </TouchableOpacity>
           <Text style={styles.headerTitle}>Update Reports</Text>
           {tourSteps.length > 0 ? (
-            <TouchableOpacity onPress={() => setTourVisible(true)} style={styles.headerIconBtn} activeOpacity={0.7}>
+            <TouchableOpacity onPress={() => setHelpSupportVisible(true)} style={styles.headerIconBtn} activeOpacity={0.7}>
               <HelpCircle size={22} color={colors.emeraldSoft} />
             </TouchableOpacity>
           ) : (
@@ -341,103 +291,93 @@ export default function UpdateConfirmation() {
           { paddingBottom: insets.bottom + 32 },
         ]}
       >
-        <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <View>
-              <Text style={styles.statusCaption}>Status</Text>
-              <Text style={styles.statusHeading}>
-                {update.approvalStatus === "approved"
-                  ? "Acknowledged"
-                  : update.approvalStatus === "rejected"
-                    ? "Rejected"
-                    : "Pending"}
-              </Text>
-            </View>
+        <View style={styles.statusCard}>
+          <View style={styles.statusCardHeader}>
+            <Text style={styles.sectionEyebrow}>Acknowledgment Status</Text>
             <View
               style={[
                 styles.statusChip,
-                update.approvalStatus === "approved"
-                  ? styles.chipApproved
-                  : update.approvalStatus === "rejected"
-                    ? styles.chipRejected
-                    : styles.chipPending,
+                isAcknowledged ? styles.chipApproved : styles.chipPending,
               ]}
             >
-              <View
-                style={[
-                  styles.chipDot,
-                  update.approvalStatus === "approved"
-                    ? styles.chipDotApproved
-                    : update.approvalStatus === "rejected"
-                      ? styles.chipDotRejected
-                      : styles.chipDotPending,
-                ]}
-              />
+              {isAcknowledged ? <CheckCircle2 size={12} color={colors.emerald} /> : <View style={[styles.chipDot, styles.chipDotPending]} />}
               <Text
                 style={[
                   styles.chipText,
-                  update.approvalStatus === "approved"
-                    ? styles.chipTextApproved
-                    : update.approvalStatus === "rejected"
-                      ? styles.chipTextRejected
-                      : styles.chipTextPending,
+                  isAcknowledged ? styles.chipTextApproved : styles.chipTextPending,
                 ]}
               >
-                {update.approvalStatus === "approved"
-                  ? "Confirmed"
-                  : update.approvalStatus === "rejected"
-                    ? "Declined"
-                    : "Pending"}
+                {isAcknowledged ? "Acknowledged" : "Pending Review"}
               </Text>
             </View>
           </View>
-
-          {details.map((row, i) => (
-            <View key={row.label}>
-              <View style={styles.row}>
-                <Text style={styles.rowLabel}>{row.label}</Text>
-                <Text style={styles.rowValue}>{row.value}</Text>
-              </View>
-              {i < details.length - 1 && <View style={styles.divider} />}
-            </View>
-          ))}
-        </View>
-
-        {hasBeforeAfter && (
-          <View style={styles.beforeAfterRow} ref={beforeAfterRef} collapsable={false}>
-            <View style={[styles.beforeAfterCard, styles.beforeCard]}>
-              <Text style={styles.beforeAfterLabel}>Previous</Text>
-              <Text style={styles.beforeAfterValue}>{update.oldValue || "—"}</Text>
-              {!!update.fieldChanged && (
-                <Text style={styles.beforeAfterSubtext}>{update.fieldChanged}</Text>
-              )}
-            </View>
-            <View style={styles.beforeAfterArrowButton}>
-              <ArrowRight size={16} color={colors.white} />
-            </View>
-            <View style={[styles.beforeAfterCard, styles.afterCard]}>
-              <Text style={[styles.beforeAfterLabel, styles.afterLabel]}>Updated</Text>
-              <Text style={[styles.beforeAfterValue, styles.afterValue]}>{update.newValue || "—"}</Text>
-              {!!update.fieldChanged && (
-                <Text style={[styles.beforeAfterSubtext, styles.afterSubtext]}>{update.fieldChanged}</Text>
-              )}
-            </View>
+          <View style={styles.statusDescriptionRow}>
+            <ShieldCheck size={14} color={colors.emerald} />
+            <Text style={styles.statusDescription}>Administrative update recorded • {isAcknowledged ? "Reviewed by owner" : "Awaiting owner review"}</Text>
           </View>
-        )}
+        </View>
 
         {hasAmount && (
           <View style={styles.amountCard} ref={amountRef} collapsable={false}>
+            <View style={styles.amountDecoration} />
             <Text style={styles.amountLabel}>Amount</Text>
-            <Text style={styles.amountValue}>
-              ₱{Number(update.paymentAmount).toLocaleString()}
-            </Text>
+            <Text style={styles.amountValue}>₱{Number(update.paymentAmount).toLocaleString()}</Text>
             {periodsOwed > 1 && (
-              <Text style={styles.amountBreakdown}>
-                {periodsOwed} {periodUnitLabel(schedule, periodsOwed)} × ₱{periodCharge.toLocaleString()}
-              </Text>
+              <View style={styles.amountBreakdownPill}>
+                <Banknote size={12} color={colors.emerald} />
+                <Text style={styles.amountBreakdown}>{periodsOwed} {periodUnitLabel(schedule, periodsOwed)} × ₱{periodCharge.toLocaleString()}</Text>
+              </View>
             )}
           </View>
         )}
+
+        {hasBeforeAfter && (
+          <View style={styles.auditCard} ref={beforeAfterRef} collapsable={false}>
+            <View style={styles.auditHeader}>
+              <Text style={styles.sectionEyebrow}>Status Transition Audit</Text>
+              <View style={styles.ledgerBadge}>
+                <LockKeyhole size={11} color={colors.textSecondary} />
+                <Text style={styles.ledgerBadgeText}>Ledger Record</Text>
+              </View>
+            </View>
+            <View style={styles.beforeAfterRow}>
+              <View style={[styles.beforeAfterCard, styles.beforeCard]}>
+                <Text style={styles.beforeAfterLabel}>Previous</Text>
+                <Text style={[styles.beforeAfterValue, styles.previousValue]}>● {update.oldValue || "—"}</Text>
+              </View>
+              <View style={styles.beforeAfterArrowButton}><ArrowRight size={15} color={colors.textSecondary} /></View>
+              <View style={[styles.beforeAfterCard, styles.afterCard]}>
+                <Text style={[styles.beforeAfterLabel, styles.afterLabel]}>Updated</Text>
+                <Text style={[styles.beforeAfterValue, styles.afterValue]}>✓ {update.newValue || "—"}</Text>
+              </View>
+            </View>
+          </View>
+        )}
+
+        <View style={styles.detailsCard}>
+          <View style={styles.detailsHeader}>
+            <Text style={styles.detailsHeaderTitle}>Transaction Details</Text>
+            <Text style={styles.detailsHeaderBadge}>Audited Entry</Text>
+          </View>
+          {details.map((row) => (
+            <View key={row.label} style={styles.detailRow}>
+              <Text style={styles.rowLabel}>{row.label}</Text>
+              <View style={[
+                styles.detailValueWrap,
+                row.label === "Type" && styles.typeValueWrap,
+                row.label === "Space" && styles.spaceValueWrap,
+                row.label === "Changed By" && styles.adminValueWrap,
+              ]}>
+                {row.label === "Type" && <Banknote size={12} color={colors.emerald} />}
+                {row.label === "Space" && <Store size={12} color={colors.white} />}
+                {row.label === "Payment Method" && <Banknote size={12} color={colors.emerald} />}
+                {row.label === "Changed By" && <UserRound size={12} color={colors.ink} />}
+                {row.label === "Date" && <CalendarDays size={12} color={colors.ink} />}
+                <Text style={[styles.rowValue, row.label === "Space" && styles.spaceValueText]}>{row.value}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
 
         {!isAlreadyDecided && (
           <View style={styles.actionRow} ref={approveRef} collapsable={false}>
@@ -455,25 +395,20 @@ export default function UpdateConfirmation() {
                 saving ? (
                   <ActivityIndicator color={colors.white} size="small" />
                 ) : (
-                  <Text style={[styles.actionBtnText, pressed && styles.actionBtnTextPressed]}>Acknowledge</Text>
+                  <View style={styles.acknowledgeContent}>
+                    <CheckCircle2 size={17} color={pressed ? colors.emerald : colors.white} />
+                    <Text style={[styles.actionBtnText, pressed && styles.actionBtnTextPressed]}>Acknowledge</Text>
+                  </View>
                 )
               }
             </Pressable>
+            <Text style={styles.actionHint}>Acknowledging confirms review of this administrative transaction update.</Text>
           </View>
         )}
 
-        {isAlreadyDecided && (
-          <Pressable
-            style={({ pressed }) => [styles.backBtnBottom, pressed && styles.backBtnBottomPressed]}
-            onPress={() => router.back()}
-          >
-            {({ pressed }) => (
-              <Text style={[styles.backBtnBottomText, pressed && styles.backBtnBottomTextPressed]}>Go Back</Text>
-            )}
-          </Pressable>
-        )}
       </ScrollView>
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
     </View>
   );
 }
@@ -517,6 +452,40 @@ const styles = StyleSheet.create({
 
   content: { padding: spacing.lg, paddingTop: spacing.xl },
 
+  statusCard: {
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+    ...shadow.card,
+  },
+  statusCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+  },
+  sectionEyebrow: {
+    fontSize: 10,
+    fontFamily: fontFamily.semibold,
+    color: colors.ink,
+    textTransform: "uppercase",
+    letterSpacing: 0.45,
+  },
+  statusDescriptionRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  statusDescription: {
+    flex: 1,
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+    lineHeight: 16,
+  },
+
   card: {
     backgroundColor: colors.white,
     borderRadius: radius.lg,
@@ -553,16 +522,29 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   chipApproved: { backgroundColor: colors.successSoft },
-  chipRejected: { backgroundColor: colors.errorSoft },
-  chipPending: { backgroundColor: colors.mist },
+  chipPending: { backgroundColor: colors.warningSoft },
   chipDot: { width: 6, height: 6, borderRadius: 3 },
   chipDotApproved: { backgroundColor: colors.emerald },
-  chipDotRejected: { backgroundColor: colors.error },
-  chipDotPending: { backgroundColor: colors.textSecondary },
+  chipDotPending: { backgroundColor: colors.warning },
   chipText: { fontSize: fontSize.xs, fontFamily: fontFamily.bold },
   chipTextApproved: { color: colors.emerald },
-  chipTextRejected: { color: colors.error },
-  chipTextPending: { color: colors.textSecondary },
+  chipTextPending: { color: colors.warning },
+
+  auditCard: {
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+    ...shadow.card,
+  },
+  auditHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.md,
+  },
+  ledgerBadge: { flexDirection: "row", alignItems: "center", gap: 4 },
+  ledgerBadgeText: { fontSize: 9, fontFamily: fontFamily.medium, color: colors.textSecondary },
 
   row: {
     flexDirection: "row",
@@ -571,50 +553,48 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   rowLabel: {
-    fontSize: fontSize.sm,
+    fontSize: fontSize.xs,
     color: colors.textSecondary,
     fontFamily: fontFamily.medium,
-    flex: 1,
+    width: 92,
   },
   rowValue: {
-    fontSize: fontSize.sm,
+    fontSize: fontSize.xs,
     color: colors.ink,
     fontFamily: fontFamily.semibold,
-    flex: 2,
-    textAlign: "right",
+    flexShrink: 1,
+    textAlign: "left",
   },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
 
   beforeAfterRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: spacing.xxl,
+    marginBottom: 0,
     gap: spacing.sm,
   },
   beforeAfterCard: {
     flex: 1,
-    borderRadius: radius.lg,
-    padding: spacing.md + 2,
-    borderWidth: 0.5,
+    borderRadius: radius.md,
+    padding: spacing.md,
   },
   beforeCard: {
-    backgroundColor: colors.mist,
-    borderColor: colors.border,
+    backgroundColor: colors.errorSoft,
   },
   afterCard: {
     backgroundColor: colors.successSoft,
     borderColor: colors.emeraldSoft,
   },
   beforeAfterArrowButton: {
-    width: 32,
-    height: 32,
+    width: 26,
+    height: 26,
     borderRadius: radius.pill,
-    backgroundColor: colors.emerald,
+    backgroundColor: colors.mist,
     alignItems: "center",
     justifyContent: "center",
   },
   beforeAfterLabel: {
-    fontSize: fontSize.xs,
+    fontSize: 9,
     fontFamily: fontFamily.bold,
     color: colors.textSecondary,
     textTransform: "uppercase",
@@ -627,6 +607,7 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.bold,
     color: colors.textSecondary,
   },
+  previousValue: { color: colors.error },
   afterValue: { color: colors.emerald },
   beforeAfterSubtext: {
     fontSize: fontSize.xs,
@@ -639,9 +620,10 @@ const styles = StyleSheet.create({
   amountCard: {
     backgroundColor: colors.white,
     borderRadius: radius.lg,
-    padding: spacing.lg,
-    marginBottom: spacing.xxl,
+    padding: spacing.xl,
+    marginBottom: spacing.md,
     alignItems: "center",
+    overflow: "hidden",
     ...shadow.card,
   },
   amountLabel: {
@@ -653,19 +635,92 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   amountValue: {
-    fontSize: fontSize.xxl + 2,
-    fontFamily: fontFamily.bold,
+    fontSize: 31,
+    fontFamily: fontFamily.extrabold,
     color: colors.ink,
   },
   amountBreakdown: {
-    fontSize: fontSize.sm,
-    color: colors.emeraldBright,
+    fontSize: fontSize.xs,
+    color: colors.ink,
     fontFamily: fontFamily.medium,
-    marginTop: 6,
+  },
+  amountBreakdownPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: colors.mist,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+    marginTop: spacing.sm,
+  },
+  amountDecoration: {
+    position: "absolute",
+    right: -22,
+    top: -22,
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: "#D9FAEF",
+  },
+
+  detailsCard: {
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    overflow: "hidden",
+    marginBottom: spacing.md,
+    ...shadow.card,
+  },
+  detailsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: colors.mist,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+  },
+  detailsHeaderTitle: { fontSize: 9, fontFamily: fontFamily.semibold, color: colors.ink },
+  detailsHeaderBadge: { fontSize: 8, fontFamily: fontFamily.medium, color: colors.ink, textTransform: "uppercase" },
+  detailRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 34,
+    paddingHorizontal: spacing.md,
+    gap: spacing.sm,
+  },
+  detailValueWrap: {
+    maxWidth: "72%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    gap: 5,
+    marginLeft: "auto",
+  },
+  typeValueWrap: {
+    backgroundColor: colors.mist,
+    borderRadius: radius.sm,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+  },
+  spaceValueWrap: {
+    backgroundColor: colors.ink,
+    borderRadius: radius.sm,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  adminValueWrap: {
+    backgroundColor: colors.mist,
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  spaceValueText: {
+    color: colors.white,
   },
 
   actionRow: {
-    flexDirection: "row",
+    flexDirection: "column",
     gap: spacing.sm + 2,
     marginBottom: spacing.sm + 2,
   },
@@ -677,27 +732,17 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     minHeight: 48,
   },
-  approveBtn: { backgroundColor: colors.emerald, ...shadow.button },
+  approveBtn: { backgroundColor: colors.ink, ...shadow.button },
   approveBtnPressed: { backgroundColor: colors.white },
   actionBtnText: { color: colors.white, fontSize: fontSize.base, fontFamily: fontFamily.semibold },
   actionBtnTextPressed: { color: colors.emerald },
-
-  backBtnBottom: {
-    backgroundColor: colors.emerald,
-    borderRadius: radius.pill,
-    paddingVertical: spacing.md + 2,
-    alignItems: "center",
-  },
-  backBtnBottomPressed: {
-    backgroundColor: colors.white,
-  },
-  backBtnBottomText: {
-    color: colors.white,
-    fontSize: fontSize.base,
-    fontFamily: fontFamily.bold,
-  },
-  backBtnBottomTextPressed: {
-    color: colors.emerald,
+  acknowledgeContent: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  actionHint: {
+    fontSize: 9,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+    textAlign: "center",
+    lineHeight: 14,
   },
 
   btnDisabled: { opacity: 0.5 },

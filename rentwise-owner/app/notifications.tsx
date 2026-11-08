@@ -9,29 +9,33 @@ import {
   ActivityIndicator,
   Alert,
   Platform,
+  Modal,
+  TextInput,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
-import { ArrowLeft, HelpCircle, KeyRound, Bell, ChevronDown, Check, CreditCard, Store, UserRound } from "lucide-react-native";
+import { ArrowLeft, HelpCircle, KeyRound, Bell, ChevronDown, Check, Store, SlidersHorizontal, CheckCheck, Trash2, WalletCards, ContactRound, ArrowRight, Search, X } from "lucide-react-native";
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
   getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
-  serverTimestamp,
   updateDoc,
   where,
   writeBatch,
 } from "firebase/firestore";
+import { getFunctions, httpsCallable } from "firebase/functions";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
+import { firebaseApp } from "../shared/firebaseConfig";
 import HelpTour, { HelpStep } from "./components/HelpTour";
+import HelpSupportModal from "./components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
@@ -45,10 +49,12 @@ type OwnerNotification = {
   createdAt?: any;
   updateId?: string;
   reportCategory?: ReportCategory;
+  reportData?: Record<string, any>;
 };
 
 type ReportCategory = "finance" | "building" | "archive";
 type CategoryFilter = "all" | ReportCategory;
+const cloudFunctions = getFunctions(firebaseApp);
 
 const CATEGORY_OPTIONS: { value: CategoryFilter; label: string }[] = [
   { value: "all", label: "All Categories" },
@@ -98,17 +104,16 @@ function categoryColor(cat?: ReportCategory): string {
   return colors.warning;
 }
 
-// Notifications created before the "Approve" → "Acknowledge" wording change
-// still have the old status string in Firestore — treat both as pending.
+// Legacy pending and rejected records remain reviewable under the two-state flow.
 function isPendingStatus(status?: string): boolean {
-  return status === "To be Acknowledged" || status === "To be Approved";
+  return status === "To be Acknowledged" || status === "To be Approved" || status === "Rejected" || status === "Pending";
 }
 
 // Displays legacy "Approved" / "To be Approved" statuses under the new wording
 // without needing to rewrite the old Firestore records.
 function displayStatus(status?: string): string {
-  if (status === "To be Approved") return "To be Acknowledged";
-  if (status === "Approved") return "Acknowledged";
+  if (isPendingStatus(status)) return "Pending";
+  if (status === "Approved" || status === "Acknowledged") return "Acknowledged";
   return status ?? "";
 }
 
@@ -116,23 +121,48 @@ export default function Notifications() {
   const insets = useSafeAreaInsets();
   const [notifications, setNotifications] = useState<OwnerNotification[]>([]);
   const [adminResets, setAdminResets] = useState<AdminPasswordReset[]>([]);
-  const [resolvingResetId, setResolvingResetId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
+  const [searchQuery, setSearchQuery] = useState("");
   const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
+  const [acknowledgeModalVisible, setAcknowledgeModalVisible] = useState(false);
+  const [displayLimit, setDisplayLimit] = useState(50);
+  const [showAllNotifications, setShowAllNotifications] = useState(false);
   const unsubRef = useRef<(() => void) | null>(null);
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
   const actionRowRef = useRef<View>(null);
   const cardRef = useRef<View>(null);
   const checkReportRef = useRef<View>(null);
   const categoryRef = useRef<View>(null);
 
-  const filteredNotifications = categoryFilter === "all"
+  const categoryFilteredNotifications = categoryFilter === "all"
     ? notifications
     : notifications.filter((notification) => notification.reportCategory === categoryFilter);
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const filteredNotifications = normalizedSearch
+    ? categoryFilteredNotifications.filter((notification) => {
+        const report = notification.reportData ?? {};
+        const searchableText = [
+          notification.title,
+          notification.message,
+          notification.status,
+          categoryLabel(notification.reportCategory ?? "archive"),
+          ...Object.values(report).map((value) => String(value ?? "")),
+        ].join(" ").toLowerCase();
+        return searchableText.includes(normalizedSearch);
+      })
+    : categoryFilteredNotifications;
+  const visibleNotifications = showAllNotifications
+    ? filteredNotifications
+    : filteredNotifications.slice(0, 10);
   const firstPendingIndex = filteredNotifications.findIndex((n) => isPendingStatus(n.status) && n.updateId);
+
+  useEffect(() => {
+    setShowAllNotifications(false);
+  }, [categoryFilter, searchQuery]);
 
   const tourSteps: HelpStep[] = [
     { key: "actions", ref: actionRowRef, title: "Acknowledge All / Clear All", description: "Acknowledge All records that you reviewed every pending report. Clear All removes reports already acknowledged.", edgeInset: "top" },
@@ -160,21 +190,6 @@ export default function Notifications() {
     }
   }, []);
 
-  const resolveAdminReset = async (item: AdminPasswordReset) => {
-    setResolvingResetId(item.id);
-    try {
-      await updateDoc(doc(db, "passwordResetRequests", item.id), {
-        status: "resolved",
-      });
-      setAdminResets((prev) => prev.filter((r) => r.id !== item.id));
-    } catch (err) {
-      console.log("ADMIN RESET RESOLVE ERROR:", err);
-      Alert.alert("Error", "Failed to update request.");
-    } finally {
-      setResolvingResetId(null);
-    }
-  };
-
   const goResetAdminPassword = () => {
     router.push("/manage-admin");
   };
@@ -187,6 +202,7 @@ export default function Notifications() {
       collection(db, "notifications"),
       where("userId", "==", user.uid),
       orderBy("createdAt", "desc"),
+      limit(displayLimit),
     );
 
     const unsub = onSnapshot(q, async (snap) => {
@@ -203,6 +219,7 @@ export default function Notifications() {
             return {
               ...notification,
               reportCategory: updateSnap.exists() ? resolveReportCategory(updateSnap.data()) : undefined,
+              reportData: updateSnap.exists() ? updateSnap.data() : undefined,
             };
           }),
         );
@@ -212,10 +229,14 @@ export default function Notifications() {
       } finally {
         setLoading(false);
       }
+    }, (error) => {
+      if (!auth.currentUser) return;
+      console.error("OWNER NOTIFICATIONS LISTENER ERROR:", error);
+      setLoading(false);
     });
 
     unsubRef.current = unsub;
-  }, []);
+  }, [displayLimit]);
 
   useFocusEffect(
     useCallback(() => {
@@ -265,47 +286,10 @@ export default function Notifications() {
   const doApproveAll = async (pending: OwnerNotification[]) => {
     setApproving(true);
     try {
-      const batch = writeBatch(db);
-      for (const item of pending) {
-        batch.update(doc(db, "notifications", item.id), {
-          status: "Acknowledged",
-          read: true,
-        });
-        if (item.updateId) {
-          batch.update(doc(db, "updates", item.updateId), {
-            approvalStatus: "approved",
-          });
-        }
-      }
-      await batch.commit();
-
-      for (const item of pending) {
-        if (!item.updateId) continue;
-        try {
-          const snap = await getDoc(doc(db, "updates", item.updateId));
-          const data = snap.exists() ? snap.data() : {};
-          if (data.changedBy) {
-            const label = data.module ?? categoryLabel(data.category ?? "archive");
-            await addDoc(collection(db, "notifications"), {
-              userId: data.changedBy,
-              message: `Your "${label}" update was acknowledged by the owner.`,
-              read: false,
-              fromOwner: true,
-              createdAt: serverTimestamp(),
-            });
-          }
-          await addDoc(collection(db, "dailyReports"), {
-            type: data.module ?? categoryLabel(data.category ?? "archive"),
-            updateId: item.updateId,
-            spaceNo: data.spaceNo ?? null,
-            tenantName: data.tenantName ?? null,
-            approvedBy: "Owner",
-            date: serverTimestamp(),
-            createdAt: serverTimestamp(),
-          });
-        } catch {
-          // skip individual dailyReport failure silently
-        }
+      const updateIds = [...new Set(pending.map((item) => item.updateId).filter((id): id is string => !!id))];
+      const acknowledge = httpsCallable(cloudFunctions, "ownerAcknowledgeUpdates");
+      for (let index = 0; index < updateIds.length; index += 50) {
+        await acknowledge({updateIds: updateIds.slice(index, index + 50)});
       }
     } catch (err) {
       console.error("approveAll error:", err);
@@ -318,11 +302,13 @@ export default function Notifications() {
   const doClearAll = async (items: OwnerNotification[]) => {
     setClearing(true);
     try {
-      const batch = writeBatch(db);
-      for (const item of items) {
-        batch.delete(doc(db, "notifications", item.id));
+      for (let index = 0; index < items.length; index += 400) {
+        const batch = writeBatch(db);
+        for (const item of items.slice(index, index + 400)) {
+          batch.delete(doc(db, "notifications", item.id));
+        }
+        await batch.commit();
       }
-      await batch.commit();
     } catch (err) {
       console.error("clearAll error:", err);
       Alert.alert("Error", "Failed to clear notifications. Please try again.");
@@ -337,14 +323,7 @@ export default function Notifications() {
       Alert.alert("Nothing Pending", "There are no pending notifications to acknowledge.");
       return;
     }
-    Alert.alert(
-      "Acknowledge All",
-      `Acknowledge all ${pending.length} pending update(s)?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Acknowledge All", onPress: () => doApproveAll(pending) },
-      ],
-    );
+    setAcknowledgeModalVisible(true);
   };
 
   const handleClearAll = () => {
@@ -395,16 +374,12 @@ export default function Notifications() {
           >
             <ArrowLeft size={22} color={colors.emeraldSoft} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>RentWise</Text>
-          <TouchableOpacity onPress={() => setTourVisible(true)} style={styles.backBtn} activeOpacity={0.7}>
+          <Text style={styles.headerTitle}>Notifications</Text>
+          <TouchableOpacity onPress={() => setHelpSupportVisible(true)} style={styles.backBtn} activeOpacity={0.7}>
             <HelpCircle size={22} color={colors.emeraldSoft} />
           </TouchableOpacity>
         </View>
 
-        {/* Sub-header */}
-        <View style={styles.subHeader}>
-          <Text style={styles.subHeaderText}>Notifications</Text>
-        </View>
       </LinearGradient>
 
       <ScrollView
@@ -450,26 +425,6 @@ export default function Notifications() {
                       </Text>
                     )}
                   </Pressable>
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.resolveResetBtn,
-                      styles.resetActionBtn,
-                      resolvingResetId === item.id && styles.btnDisabled,
-                      pressed && resolvingResetId !== item.id && styles.resolveResetBtnPressed,
-                    ]}
-                    onPress={() => resolveAdminReset(item)}
-                    disabled={resolvingResetId === item.id}
-                  >
-                    {({ pressed }) =>
-                      resolvingResetId === item.id ? (
-                        <ActivityIndicator color={colors.emerald} size="small" />
-                      ) : (
-                        <Text style={[styles.resolveResetBtnText, pressed && styles.resolveResetBtnTextPressed]}>
-                          Mark resolved
-                        </Text>
-                      )
-                    }
-                  </Pressable>
                 </View>
               </View>
             ))}
@@ -477,13 +432,42 @@ export default function Notifications() {
         )}
 
         {notifications.length > 0 && (
+          <View style={styles.searchBox}>
+            <Search size={19} color={colors.textSecondary} />
+            <TextInput
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search notifications"
+              placeholderTextColor={colors.textMuted}
+              style={styles.searchInput}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+              accessibilityLabel="Search notifications"
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity
+                onPress={() => setSearchQuery("")}
+                style={styles.searchClearButton}
+                accessibilityRole="button"
+                accessibilityLabel="Clear notification search"
+              >
+                <X size={17} color={colors.textSecondary} />
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
+        {notifications.length > 0 && (
           <View ref={categoryRef} collapsable={false} style={styles.categorySection}>
-            <Text style={styles.categoryLabel}>Category</Text>
             <Pressable
               style={({ pressed }) => [styles.categorySelect, pressed && styles.categorySelectPressed]}
               onPress={() => setCategoryMenuOpen((open) => !open)}
             >
-              <Text style={styles.categorySelectText}>{selectedCategoryLabel}</Text>
+              <View style={styles.categorySelectLabelRow}>
+                <SlidersHorizontal size={18} color={colors.ink} />
+                <Text style={styles.categorySelectText}>{selectedCategoryLabel}</Text>
+              </View>
               <View style={styles.categorySelectRight}>
                 <Text style={styles.categoryCount}>{filteredNotifications.length}</Text>
                 <ChevronDown
@@ -541,9 +525,13 @@ export default function Notifications() {
                   approving ? (
                     <ActivityIndicator color={colors.white} size="small" />
                   ) : (
-                    <Text style={[styles.approveAllText, pressed && styles.approveAllTextPressed]}>
-                      Acknowledge All ({pendingCount})
-                    </Text>
+                    <View style={styles.approveAllContent}>
+                      <CheckCheck size={18} color={pressed ? colors.emerald : colors.white} />
+                      <Text style={[styles.approveAllText, pressed && styles.approveAllTextPressed]}>Acknowledge All</Text>
+                      <View style={styles.pendingCountBadge}>
+                        <Text style={styles.pendingCountBadgeText}>{pendingCount}</Text>
+                      </View>
+                    </View>
                   )
                 }
               </Pressable>
@@ -562,7 +550,10 @@ export default function Notifications() {
                 clearing ? (
                   <ActivityIndicator color={colors.error} size="small" />
                 ) : (
-                  <Text style={[styles.clearText, pressed && styles.clearTextPressed]}>Clear All</Text>
+                  <View style={styles.clearContent}>
+                    <Trash2 size={16} color={pressed ? colors.white : colors.error} />
+                    <Text style={[styles.clearText, pressed && styles.clearTextPressed]}>Clear All</Text>
+                  </View>
                 )
               }
             </Pressable>
@@ -572,28 +563,41 @@ export default function Notifications() {
         {filteredNotifications.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyText}>
-              {notifications.length === 0 ? "No notifications yet." : `No ${selectedCategoryLabel} reports found.`}
+              {notifications.length === 0
+                ? "No notifications yet."
+                : normalizedSearch
+                  ? "No notifications match your search."
+                  : `No ${selectedCategoryLabel} reports found.`}
             </Text>
           </View>
         ) : (
-          filteredNotifications.map((item, index) => {
+          visibleNotifications.map((item, index) => {
             const isPending = isPendingStatus(item.status);
-            const isRejected = item.status === "Rejected";
+            const category = item.reportCategory ?? "archive";
+            const report = item.reportData ?? {};
+            const title = report.type || item.title || `${categoryLabel(category)} Update`;
+            const messageAmountMatch = item.message.match(/₱\s*([\d,]+(?:\.\d+)?)/);
+            const messageTenantMatch = item.message.match(/:\s*(.*?)\s*(?:·|•|-|\.)\s*₱/);
+            const tenantName = String(report.tenantName || messageTenantMatch?.[1] || "Tenant").trim();
+            const amount = Number(
+              report.paymentAmount ?? messageAmountMatch?.[1]?.replace(/,/g, "") ?? 0,
+            );
+            const amountText = `₱${amount.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
             return (
               <View
                 key={item.id}
                 ref={index === 0 ? cardRef : undefined}
                 collapsable={false}
-                style={[styles.card, !item.read && styles.cardUnread]}
+                style={[styles.card, isPending ? styles.cardPending : styles.cardAcknowledged]}
               >
                 <View style={styles.cardRow}>
-                  <View style={[styles.bellCircle, { backgroundColor: `${categoryColor(item.reportCategory)}18` }]}>
-                    {item.reportCategory === "finance" ? (
-                      <CreditCard size={20} color={categoryColor(item.reportCategory)} />
-                    ) : item.reportCategory === "building" ? (
-                      <Store size={20} color={categoryColor(item.reportCategory)} />
-                    ) : item.reportCategory === "archive" ? (
-                      <UserRound size={20} color={categoryColor(item.reportCategory)} />
+                  <View style={[styles.reportIconBox, category === "finance" && styles.reportIconBoxPayment]}>
+                    {category === "finance" ? (
+                      <WalletCards size={18} color={colors.emerald} />
+                    ) : category === "building" ? (
+                      <Store size={18} color={colors.ink} />
+                    ) : category === "archive" ? (
+                      <ContactRound size={18} color={colors.ink} />
                     ) : (
                       <Bell size={20} color={colors.emerald} />
                     )}
@@ -601,41 +605,42 @@ export default function Notifications() {
 
                   <View style={styles.cardContent}>
                     <View style={styles.topRow}>
-                      <View style={styles.titleBlock}>
-                        <Text style={styles.reportTitle}>
-                          {item.title || `${categoryLabel(item.reportCategory ?? "archive")} Update`}
-                        </Text>
-                        <Text style={[styles.categoryText, { color: categoryColor(item.reportCategory) }]}>
-                          {categoryLabel(item.reportCategory ?? "archive")}
-                        </Text>
+                      <View style={styles.reportMetaRow}>
+                        <View style={[styles.categoryPill, category === "finance" && styles.categoryPillPayment]}>
+                          <Text style={styles.categoryPillText}>{categoryLabel(category)}</Text>
+                        </View>
+                        <Text style={styles.metaDot}>•</Text>
+                        <Text style={styles.timeText}>{relativeTime(item.createdAt)}</Text>
                       </View>
-                      <Text style={styles.timeText}>
-                        {relativeTime(item.createdAt)}
-                      </Text>
-                    </View>
-
-                    <Text style={styles.messageText}>{item.message}</Text>
-
-                    {item.status ? (
-                      <Text style={styles.statusLine}>
-                        <Text style={styles.statusLabel}>Status:  </Text>
-                        <Text
-                          style={[
-                            styles.statusValue,
-                            isPending
-                              ? styles.statusPending
-                              : isRejected
-                                ? styles.statusRejected
-                                : styles.statusApproved,
-                          ]}
-                        >
+                      <View style={[styles.statusPill, isPending ? styles.statusPillPending : styles.statusPillAcknowledged]}>
+                        {!isPending && <Check size={11} color={colors.emerald} />}
+                        <Text style={[styles.statusPillText, !isPending && styles.statusPillTextAcknowledged]}>
                           {displayStatus(item.status)}
                         </Text>
-                      </Text>
-                    ) : null}
-
+                      </View>
+                    </View>
+                    <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.88} style={styles.reportTitle}>
+                      {title}
+                    </Text>
                   </View>
                 </View>
+
+                {category === "finance" ? (
+                  <View style={styles.paymentDetailsBox}>
+                    <View style={styles.paymentDetailColumn}>
+                      <Text style={styles.paymentDetailLabel}>Tenant</Text>
+                      <Text style={styles.paymentDetailValue}>{tenantName}</Text>
+                    </View>
+                    <View style={[styles.paymentDetailColumn, styles.paymentAmountColumn]}>
+                      <Text style={styles.paymentDetailLabel}>{String(report.paymentMethod ?? "").toLowerCase() === "online" ? "Settled Amount" : "Amount Received"}</Text>
+                      <Text style={styles.paymentAmountValue}>{amountText}</Text>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={styles.updateMessageBox}>
+                    <Text style={styles.updateMessageText}>{item.message}</Text>
+                  </View>
+                )}
 
                 {isPending && item.updateId ? (
                   <Pressable
@@ -648,7 +653,10 @@ export default function Notifications() {
                     onPress={() => handleCheckReport(item)}
                   >
                     {({ pressed }) => (
-                      <Text style={[styles.checkReportText, pressed && styles.checkReportTextPressed]}>View Details</Text>
+                      <View style={styles.viewDetailsContent}>
+                        <Text style={[styles.checkReportText, pressed && styles.checkReportTextPressed]}>View Details</Text>
+                        <ArrowRight size={14} color={pressed ? colors.emerald : colors.white} />
+                      </View>
                     )}
                   </Pressable>
                 ) : null}
@@ -656,8 +664,78 @@ export default function Notifications() {
             );
           })
         )}
+
+        {!showAllNotifications && filteredNotifications.length > 10 && (
+          <Pressable
+            style={({ pressed }) => [styles.viewAllButton, pressed && styles.viewAllButtonPressed]}
+            onPress={() => setShowAllNotifications(true)}
+            accessibilityRole="button"
+            accessibilityLabel={`View all ${filteredNotifications.length} notifications`}
+          >
+            <Text style={styles.viewAllButtonText}>View all</Text>
+          </Pressable>
+        )}
+
+        {showAllNotifications && notifications.length >= displayLimit && (
+          <Pressable
+            style={({pressed}) => [styles.checkReportBtn, styles.checkReportBtnCentered, styles.loadOlderButton, pressed && styles.checkReportBtnPressed]}
+            onPress={() => setDisplayLimit((value) => value + 50)}
+          >
+            <Text style={styles.checkReportText}>Load older notifications</Text>
+          </Pressable>
+        )}
       </ScrollView>
+
+      <Modal
+        visible={acknowledgeModalVisible}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => !approving && setAcknowledgeModalVisible(false)}
+      >
+        <Pressable
+          style={styles.confirmOverlay}
+          onPress={() => !approving && setAcknowledgeModalVisible(false)}
+        >
+          <Pressable style={styles.confirmCard} onPress={(event) => event.stopPropagation()}>
+            <View style={styles.confirmIcon}>
+              <CheckCheck size={25} color={colors.emerald} strokeWidth={2.4} />
+            </View>
+            <Text style={styles.confirmTitle}>Acknowledge All</Text>
+            <Text style={styles.confirmMessage}>
+              Confirm that you reviewed all {pendingCount} pending update{pendingCount !== 1 ? "s" : ""}.
+            </Text>
+
+            <View style={styles.confirmActions}>
+              <Pressable
+                style={({ pressed }) => [styles.confirmCancelBtn, pressed && styles.confirmCancelBtnPressed]}
+                onPress={() => setAcknowledgeModalVisible(false)}
+                disabled={approving}
+              >
+                <Text style={styles.confirmCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.confirmPrimaryBtn, pressed && styles.confirmPrimaryBtnPressed]}
+                onPress={async () => {
+                  const pending = filteredNotifications.filter((notification) => isPendingStatus(notification.status));
+                  await doApproveAll(pending);
+                  setAcknowledgeModalVisible(false);
+                }}
+                disabled={approving}
+              >
+                {approving ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <Text style={styles.confirmPrimaryText}>Acknowledge All</Text>
+                )}
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
     </View>
   );
 }
@@ -680,7 +758,7 @@ const styles = StyleSheet.create({
 
   header: {
     paddingHorizontal: spacing.xl,
-    paddingBottom: spacing.md + 2,
+    paddingBottom: spacing.lg,
     flexDirection: "row",
     alignItems: "center",
   },
@@ -701,57 +779,69 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.bold,
   },
 
-  subHeader: {
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.md + 2,
-  },
-  subHeaderText: {
-    color: colors.white,
-    fontSize: fontSize.md,
-    fontFamily: fontFamily.semibold,
-    textAlign: "center",
-  },
-
   body: { flex: 1 },
 
-  categorySection: {
-    marginBottom: spacing.lg,
-    zIndex: 20,
-  },
-  categoryLabel: {
-    fontSize: fontSize.xs,
-    fontFamily: fontFamily.semibold,
-    color: colors.textSecondary,
-    marginBottom: spacing.xs + 1,
-  },
-  categorySelect: {
-    minHeight: 46,
+  searchBox: {
+    minHeight: 48,
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
+    backgroundColor: colors.white,
+    ...shadow.card,
+  },
+  searchInput: {
+    flex: 1,
+    paddingVertical: 10,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    color: colors.ink,
+  },
+  searchClearButton: {
+    width: 30,
+    height: 30,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 15,
+    backgroundColor: colors.mist,
+  },
+
+  categorySection: {
+    marginBottom: spacing.sm,
+    zIndex: 20,
+  },
+  categorySelect: {
+    minHeight: 48,
+    borderRadius: radius.lg,
     backgroundColor: colors.white,
     paddingHorizontal: spacing.lg,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    ...shadow.card,
   },
-  categorySelectPressed: { borderColor: colors.emerald },
-  categorySelectText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.ink },
+  categorySelectPressed: { opacity: 0.78 },
+  categorySelectLabelRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  categorySelectText: { fontSize: fontSize.md, fontFamily: fontFamily.semibold, color: colors.ink },
   categorySelectRight: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   categoryCount: {
     minWidth: 24,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: radius.pill,
-    backgroundColor: colors.emeraldSoft,
-    color: colors.emerald,
+    backgroundColor: colors.ink,
+    color: colors.white,
     fontSize: fontSize.xs,
     fontFamily: fontFamily.bold,
     textAlign: "center",
   },
   categoryMenu: {
     position: "absolute",
-    top: 70,
+    top: 54,
     left: 0,
     right: 0,
     zIndex: 30,
@@ -783,9 +873,9 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   approveAllBtn: {
-    flex: 1,
-    backgroundColor: colors.emerald,
-    borderRadius: radius.sm,
+    flex: 2.35,
+    backgroundColor: colors.ink,
+    borderRadius: radius.md,
     paddingVertical: 11,
     alignItems: "center",
     justifyContent: "center",
@@ -795,22 +885,42 @@ const styles = StyleSheet.create({
   approveAllBtnPressed: {
     backgroundColor: colors.white,
   },
+  approveAllContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
   approveAllText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
     color: colors.white,
   },
   approveAllTextPressed: {
-    color: colors.emerald,
+    color: colors.ink,
+  },
+  pendingCountBadge: {
+    minWidth: 19,
+    height: 19,
+    paddingHorizontal: 4,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#75F1C5",
+  },
+  pendingCountBadgeText: {
+    fontSize: 10,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
   },
   clearBtn: {
     flex: 1,
-    borderRadius: radius.sm,
+    borderRadius: radius.md,
     paddingVertical: 11,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1.5,
-    borderColor: colors.error,
+    borderWidth: 1,
+    borderColor: colors.border,
     backgroundColor: colors.white,
     minHeight: 42,
   },
@@ -825,31 +935,62 @@ const styles = StyleSheet.create({
   clearTextPressed: {
     color: colors.white,
   },
+  clearContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
   btnDisabled: { opacity: 0.5 },
+
+  viewAllButton: {
+    minHeight: 46,
+    marginTop: spacing.sm,
+    marginBottom: spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.emerald,
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
+  },
+  viewAllButtonPressed: { backgroundColor: colors.emeraldSoft, opacity: 0.82 },
+  viewAllButtonText: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.emerald },
 
   card: {
     backgroundColor: colors.white,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: spacing.md + 2,
-    marginBottom: spacing.sm + 2,
+    borderLeftWidth: 5,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
     // Android elevation can render a rectangular layer behind rounded
     // corners. Keep the soft shadow on iOS and use the clean border on
     // Android so the card silhouette stays properly rounded.
     ...(Platform.OS === "ios" ? shadow.card : {}),
   },
-  cardUnread: {
-    borderLeftWidth: 3,
-    borderLeftColor: colors.emeraldBright,
-  },
+  cardPending: { borderLeftColor: "#D8DFDC" },
+  cardAcknowledged: { borderLeftColor: colors.emerald },
 
   cardRow: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: spacing.md,
+    gap: 7,
   },
 
+  reportIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.md,
+    backgroundColor: "#E9ECEA",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  reportIconBoxPayment: { backgroundColor: "#CFF9EA" },
   bellCircle: {
     width: 44,
     height: 44,
@@ -867,10 +1008,26 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "flex-start",
     marginBottom: 4,
-    gap: spacing.sm,
+    gap: 5,
   },
   titleBlock: { flex: 1 },
-  reportTitle: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.ink },
+  reportMetaRow: { flexDirection: "row", alignItems: "center", gap: 3, marginBottom: 2 },
+  categoryPill: {
+    paddingHorizontal: 7,
+    paddingVertical: 1,
+    borderRadius: radius.pill,
+    backgroundColor: "#E7E9E8",
+  },
+  categoryPillPayment: { backgroundColor: "#BDF5DE" },
+  categoryPillText: {
+    fontSize: 8,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+  },
+  metaDot: { fontSize: 10, color: colors.textSecondary },
+  reportTitle: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.ink, lineHeight: 17 },
   categoryText: {
     fontSize: fontSize.xs,
     fontFamily: fontFamily.semibold,
@@ -879,14 +1036,57 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   senderName: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.ink },
-  timeText: { fontSize: fontSize.xs + 1, color: colors.textSecondary, fontFamily: fontFamily.regular },
+  timeText: { fontSize: 9, color: colors.textSecondary, fontFamily: fontFamily.regular },
+
+  statusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+    flexShrink: 0,
+  },
+  statusPillPending: { backgroundColor: "#E4E6E5" },
+  statusPillAcknowledged: { backgroundColor: "#CFF7E8" },
+  statusPillText: { fontSize: 9, fontFamily: fontFamily.medium, color: colors.ink },
+  statusPillTextAcknowledged: { color: colors.emerald },
+
+  paymentDetailsBox: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+    backgroundColor: colors.mist,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.sm,
+    marginTop: 5,
+  },
+  paymentDetailColumn: { flex: 1 },
+  paymentAmountColumn: { alignItems: "flex-end" },
+  paymentDetailLabel: { fontSize: 8, fontFamily: fontFamily.regular, color: colors.textPrimary },
+  paymentDetailValue: { fontSize: fontSize.xs, fontFamily: fontFamily.semibold, color: colors.ink, marginTop: 1 },
+  paymentAmountValue: { fontSize: fontSize.md, fontFamily: fontFamily.extrabold, color: colors.emerald, marginTop: 1 },
+
+  updateMessageBox: {
+    backgroundColor: colors.mist,
+    borderRadius: radius.md,
+    padding: spacing.sm + 2,
+    marginTop: 5,
+  },
+  updateMessageText: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.regular,
+    color: colors.ink,
+    lineHeight: 16,
+  },
 
   messageText: {
-    fontSize: fontSize.sm,
+    fontSize: fontSize.xs,
     color: colors.textSecondary,
     fontFamily: fontFamily.regular,
-    lineHeight: 18,
-    marginBottom: 6,
+    lineHeight: 16,
+    marginTop: 6,
   },
 
   statusLine: { fontSize: fontSize.sm, marginBottom: spacing.sm },
@@ -894,27 +1094,28 @@ const styles = StyleSheet.create({
   statusValue: { fontFamily: fontFamily.semibold },
   statusPending: { color: colors.warning },
   statusApproved: { color: colors.emerald },
-  statusRejected: { color: colors.error },
 
   checkReportBtn: {
-    alignSelf: "flex-start",
-    backgroundColor: colors.emerald,
-    paddingHorizontal: spacing.md + 2,
-    paddingVertical: 6,
+    alignSelf: "flex-end",
+    backgroundColor: colors.ink,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
     borderRadius: radius.pill,
     borderWidth: 1,
     borderColor: "transparent",
   },
   checkReportBtnCentered: {
-    alignSelf: "center",
-    marginTop: spacing.sm + 2,
+    alignSelf: "flex-end",
+    marginTop: spacing.sm,
   },
+  loadOlderButton: { alignSelf: "center" },
   checkReportBtnPressed: {
     backgroundColor: colors.white,
     borderColor: colors.emerald,
   },
-  checkReportText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.white },
+  checkReportText: { fontSize: fontSize.xs, fontFamily: fontFamily.semibold, color: colors.white },
   checkReportTextPressed: { color: colors.emerald },
+  viewDetailsContent: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
 
   sectionTitle: {
     fontSize: fontSize.sm,
@@ -939,6 +1140,79 @@ const styles = StyleSheet.create({
   },
   resetPrimaryActionBtn: {
     flex: 1.45,
+  },
+  confirmOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(2, 31, 24, 0.58)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: spacing.xl,
+  },
+  confirmCard: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: colors.white,
+    borderRadius: radius.xl,
+    padding: spacing.xl,
+    alignItems: "center",
+    ...shadow.card,
+  },
+  confirmIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: colors.emeraldSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.md,
+  },
+  confirmTitle: {
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    textAlign: "center",
+  },
+  confirmMessage: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+    lineHeight: 20,
+    textAlign: "center",
+    marginTop: spacing.sm,
+  },
+  confirmActions: {
+    width: "100%",
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginTop: spacing.xl,
+  },
+  confirmCancelBtn: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: radius.md,
+    backgroundColor: colors.mist,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  confirmCancelBtnPressed: { opacity: 0.7 },
+  confirmCancelText: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.ink,
+  },
+  confirmPrimaryBtn: {
+    flex: 1.55,
+    minHeight: 46,
+    borderRadius: radius.md,
+    backgroundColor: colors.ink,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  confirmPrimaryBtnPressed: { opacity: 0.82 },
+  confirmPrimaryText: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.white,
   },
   resolveResetBtn: {
     alignSelf: "flex-start",

@@ -1,4 +1,4 @@
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 
 import { db, firebaseApp, auth } from "../shared/firebaseConfig";
@@ -18,6 +18,13 @@ export interface Tenant {
   role?: string;
 
   stallId?: string;
+  primaryStallId?: string;
+  stallIds?: string[];
+  stallAssignments?: Array<{
+    stallId: string;
+    dailyRate: number;
+    assignedAt?: any;
+  }>;
 
   firstName?: string;
 
@@ -37,15 +44,27 @@ export interface Tenant {
   // copy for the guest app). Travels with the tenant if they relocate.
   price?: number;
   paymentSchedule?: string;
+  paymentIntervalDays?: number;
   category?: string;
+  createdAt?: any;
+  billingStartedAt?: any;
+  lastApprovedPaymentAt?: any;
+  paidThroughAt?: any;
+  nextDueAt?: any;
 
   stall?: any;
 }
 
 export async function updateTenantProfile(userId: string, data: any) {
-  const ref = doc(db, "users", userId);
+  if (auth.currentUser?.uid !== userId) throw new Error("Not authenticated.");
+  const updateProfile = httpsCallable(cloudFunctions, "tenantUpdateOwnProfile");
+  await updateProfile(data);
+}
 
-  await updateDoc(ref, data);
+export async function finalizeTenantPasswordChange(): Promise<void> {
+  if (!auth.currentUser?.uid) throw new Error("Not authenticated.");
+  const finalize = httpsCallable(cloudFunctions, "tenantFinalizePasswordChange");
+  await finalize({});
 }
 
 // Adds/updates the tenant's real email — this both changes their Firebase
@@ -68,16 +87,21 @@ export async function getTenantData(uid: string): Promise<Tenant | null> {
     if (!userSnap.exists()) return null;
 
   const userData = userSnap.data() as Tenant;
+  const primaryStallId = userData.primaryStallId || userData.stallId || userData.stallIds?.[0];
+  const stallIds = Array.from(new Set([
+    ...(userData.stallIds ?? []),
+    ...(primaryStallId ? [primaryStallId] : []),
+  ].filter(Boolean)));
 
   let stallData = null;
 
-  if (userData.stallId) {
+  if (primaryStallId) {
     const stallRef = doc(
       db,
 
       "stalls",
 
-      userData.stallId,
+      primaryStallId,
     );
 
     const stallSnap = await getDoc(stallRef);
@@ -91,7 +115,14 @@ export async function getTenantData(uid: string): Promise<Tenant | null> {
     }
   }
 
-    const tenant = {...userData, id: userSnap.id, stall: stallData};
+    const tenant = {
+      ...userData,
+      id: userSnap.id,
+      stallId: primaryStallId,
+      primaryStallId,
+      stallIds,
+      stall: stallData,
+    };
     await saveLocalCache(cacheKey, tenant);
     return tenant;
   } catch (error) {

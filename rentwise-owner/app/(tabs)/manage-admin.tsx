@@ -22,17 +22,20 @@ import { onAuthStateChanged } from "firebase/auth";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { House, HelpCircle, Eye, EyeOff, CheckCircle2 } from "lucide-react-native";
+import { House, HelpCircle, Eye, EyeOff, CheckCircle2, Pencil, LockKeyhole, KeyRound } from "lucide-react-native";
 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
 import { firebaseApp } from "../../shared/firebaseConfig";
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import HelpSupportModal from "../components/HelpSupportModal";
 import OwnerBellIcon from "../components/OwnerBellIcon";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { Avatar, Card } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import { readLocalCache, saveLocalCache } from "../../shared/services/localCache";
+import { requireOnlineAction } from "../../shared/services/networkStatus";
+import { RENTWISE_ADMIN_USERNAME } from "../../../shared/utils/username";
 
 const cloudFunctions = getFunctions(firebaseApp);
 
@@ -84,6 +87,7 @@ export default function ManageAdmin() {
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
   const homeRef = useRef<View>(null);
   const bellRef = useRef<View>(null);
   const profileFieldsRef = useRef<View>(null);
@@ -109,7 +113,7 @@ export default function ManageAdmin() {
       targetRef.current.measureLayout(
         scrollNode as any,
         (_x: number, y: number) => {
-          scrollRef.current?.scrollTo({ y: Math.max(0, y - 100), animated: true });
+          scrollRef.current?.scrollTo({ y: Math.max(0, y - 170), animated: true });
           setTimeout(resolve, 400);
         },
         () => resolve(),
@@ -179,7 +183,7 @@ export default function ManageAdmin() {
         const fn = data.firstName ?? "";
         const mn = data.middleName ?? "";
         const ln = data.lastName ?? "";
-        const un = data.username ?? "";
+        const un = RENTWISE_ADMIN_USERNAME;
         const cn = data.contactNo ?? "";
         setFirstName(fn);
         setMiddleName(mn);
@@ -200,7 +204,7 @@ export default function ManageAdmin() {
           firstName: data.firstName ?? "",
           middleName: data.middleName ?? "",
           lastName: data.lastName ?? "",
-          username: data.username ?? "",
+          username: RENTWISE_ADMIN_USERNAME,
           contactNo: data.contactNo ?? "",
         };
         setFirstName(loadedProfile.firstName);
@@ -280,6 +284,7 @@ export default function ManageAdmin() {
   // if Cancel had been pressed on it.
   function handleStartEditProfile() {
     handleCancelPasswordEdit();
+    setUsername(RENTWISE_ADMIN_USERNAME);
     setIsEditing(true);
   }
 
@@ -307,16 +312,18 @@ export default function ManageAdmin() {
   const handleSave = async () => {
     if (!admin) return;
     if (!auth.currentUser?.uid) return;
+    if (!(await requireOnlineAction("Updating the admin profile"))) return;
     const fn = firstName.trim();
     const mn = middleName.trim();
     const ln = lastName.trim();
-    const un = username.trim();
+    const un = RENTWISE_ADMIN_USERNAME;
     const cn = contactNo.trim();
     if (!validateProfileFields(fn, ln, un, cn)) return;
     setSaving(true);
     try {
       const updateFn = httpsCallable(cloudFunctions, "ownerUpdateAdminProfile");
       await updateFn({ uid: admin.uid, firstName: fn, middleName: mn, lastName: ln, username: un, contactNo: cn });
+      setUsername(un);
       const savedProfile = { firstName: fn, middleName: mn, lastName: ln, username: un, contactNo: cn };
       originalRef.current = savedProfile;
       setOriginal(savedProfile);
@@ -335,6 +342,7 @@ export default function ManageAdmin() {
   };
 
   const handleChangePassword = async () => {
+    if (!(await requireOnlineAction("Changing the admin password"))) return;
     if (!admin) return;
 
     const pwRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
@@ -417,7 +425,7 @@ export default function ManageAdmin() {
             <View ref={bellRef} collapsable={false}>
               <OwnerBellIcon />
             </View>
-            <TouchableOpacity style={styles.headerBtn} onPress={() => setTourVisible(true)} activeOpacity={0.7}>
+            <TouchableOpacity style={styles.headerBtn} onPress={() => setHelpSupportVisible(true)} activeOpacity={0.7}>
               <HelpCircle size={22} color={colors.emeraldSoft} />
             </TouchableOpacity>
           </View>
@@ -440,24 +448,68 @@ export default function ManageAdmin() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* IDENTITY CARD */}
+          {/* ADMIN IDENTITY */}
           <Card style={styles.identityCard}>
             <View style={styles.identityInner}>
-              <Avatar name={`${firstName} ${middleName} ${lastName}`} size={90} />
-              <Text style={styles.identityName}>{[firstName, middleName, lastName].filter(Boolean).join(" ")}</Text>
-              <Text style={styles.identityRole}>Market Admin</Text>
+              <Avatar name={`${firstName} ${lastName}`} size={48} />
+              <View style={styles.identityCopy}>
+                <View style={styles.roleBadge}>
+                  <View style={styles.roleDot} />
+                  <Text style={styles.identityRole}>Market Admin</Text>
+                </View>
+                <Text style={styles.identityName} numberOfLines={1} ellipsizeMode="tail">
+                  {[firstName, lastName].filter(Boolean).join(" ")}
+                </Text>
+              </View>
             </View>
           </Card>
 
-          {/* FIELDS CARD */}
+          <View style={styles.sectionHeadingRow}>
+            <Text style={styles.informationTitle}>Administrator Information</Text>
+            {!isEditing && (
+              <Pressable style={styles.editProfileBtn} onPress={handleStartEditProfile}>
+                <Pencil size={13} color={colors.emerald} />
+                <Text style={styles.editProfileText}>Edit Profile</Text>
+              </Pressable>
+            )}
+          </View>
+
+          {/* ADMIN INFORMATION */}
           <View ref={profileFieldsRef} collapsable={false} style={{ width: "100%" }}>
           <Card style={styles.fieldsCard}>
+            <View style={styles.nameFieldsRow}>
+            <View style={styles.nameFieldColumn}>
+            <Text style={styles.fieldLabel}>First name</Text>
+            <TextInput
+              style={[
+                styles.compactInput,
+                isEditing && styles.compactInputEditing,
+                focusedField === "firstName" && isEditing && styles.inputFocused,
+                !isEditing && styles.compactInputReadOnly,
+                !!firstNameError && styles.inputErrorBorder,
+              ]}
+              value={firstName}
+              onChangeText={(t) => {
+                setFirstName(t);
+                setUsername(RENTWISE_ADMIN_USERNAME);
+                if (firstNameError) setFirstNameError("");
+              }}
+              placeholder="First name"
+              placeholderTextColor={colors.textMuted}
+              onFocus={() => { setFocusedField("firstName"); scrollFieldIntoView(profileFieldsRef); }}
+              onBlur={() => setFocusedField(null)}
+              editable={isEditing}
+            />
+            {!!firstNameError && <Text style={styles.fieldError}>{firstNameError}</Text>}
+            </View>
+            <View style={styles.nameFieldColumn}>
             <Text style={styles.fieldLabel}>Last name</Text>
             <TextInput
               style={[
-                styles.input,
+                styles.compactInput,
+                isEditing && styles.compactInputEditing,
                 focusedField === "lastName" && isEditing && styles.inputFocused,
-                !isEditing && styles.inputReadOnly,
+                !isEditing && styles.compactInputReadOnly,
                 !!lastNameError && styles.inputErrorBorder,
               ]}
               value={lastName}
@@ -469,80 +521,57 @@ export default function ManageAdmin() {
               editable={isEditing}
             />
             {!!lastNameError && <Text style={styles.fieldError}>{lastNameError}</Text>}
+            </View>
+            </View>
 
-            <Text style={styles.fieldLabel}>First name</Text>
-            <TextInput
-              style={[
-                styles.input,
-                focusedField === "firstName" && isEditing && styles.inputFocused,
-                !isEditing && styles.inputReadOnly,
-                !!firstNameError && styles.inputErrorBorder,
-              ]}
-              value={firstName}
-              onChangeText={(t) => { setFirstName(t); if (firstNameError) setFirstNameError(""); }}
-              placeholder="First name"
-              placeholderTextColor={colors.textMuted}
-              onFocus={() => { setFocusedField("firstName"); scrollFieldIntoView(profileFieldsRef); }}
-              onBlur={() => setFocusedField(null)}
-              editable={isEditing}
-            />
-            {!!firstNameError && <Text style={styles.fieldError}>{firstNameError}</Text>}
-
+            <View style={styles.infoDivider} />
             <Text style={styles.fieldLabel}>Middle name</Text>
             <TextInput
               style={[
-                styles.input,
+                styles.compactInput,
+                isEditing && styles.compactInputEditing,
                 focusedField === "middleName" && isEditing && styles.inputFocused,
-                !isEditing && styles.inputReadOnly,
+                !isEditing && styles.compactInputReadOnly,
+                !middleName && styles.optionalText,
               ]}
               value={middleName}
               onChangeText={setMiddleName}
-              placeholder="Middle name (optional)"
+              placeholder="Not provided"
               placeholderTextColor={colors.textMuted}
               onFocus={() => { setFocusedField("middleName"); scrollFieldIntoView(profileFieldsRef); }}
               onBlur={() => setFocusedField(null)}
               editable={isEditing}
             />
 
+            <View style={styles.infoDivider} />
             <Text style={styles.fieldLabel}>Username</Text>
-            <View
-              style={[
-                styles.rowField,
-                focusedField === "username" && isEditing && styles.rowFieldFocused,
-                !isEditing && styles.profileFieldReadOnly,
-                !!usernameError && styles.inputErrorBorder,
-              ]}
-            >
+            <View style={styles.compactRowField}>
               <TextInput
-                style={[styles.rowInput, !isEditing && styles.rowInputReadOnly]}
+                style={styles.compactRowInput}
                 value={username}
-                onChangeText={(t) => { setUsername(t); if (usernameError) setUsernameError(""); }}
                 placeholder="username"
                 placeholderTextColor={colors.textMuted}
                 autoCapitalize="none"
                 onFocus={() => { setFocusedField("username"); scrollFieldIntoView(profileFieldsRef); }}
                 onBlur={() => setFocusedField(null)}
-                editable={isEditing}
+                editable={false}
               />
-              <Text style={styles.suffix}>@rentwise.app</Text>
             </View>
             {!!usernameError && <Text style={styles.fieldError}>{usernameError}</Text>}
 
-            <Text style={styles.fieldLabel}>Contact no.</Text>
-            <View style={styles.phoneRow}>
-              <View style={[styles.phonePrefix, !isEditing && styles.phonePrefixReadOnly]}>
-                <Text style={styles.phonePrefixText}>+63</Text>
-              </View>
+            <View style={styles.infoDivider} />
+            <Text style={styles.fieldLabel}>Contact number</Text>
+            <View style={styles.contactLine}>
+              <Text style={styles.phonePrefixText}>+63</Text>
               <View
                 style={[
-                  styles.phoneInputWrap,
+                  styles.compactPhoneInputWrap,
                   focusedField === "contactNo" && isEditing && styles.rowFieldFocused,
-                  !isEditing && styles.profileFieldReadOnly,
                   !!contactNoError && styles.inputErrorBorder,
                 ]}
               >
                 <TextInput
-                  style={[styles.rowInput, !isEditing && styles.rowInputReadOnly]}
+                  style={[styles.rowInput, styles.contactInput, !isEditing && styles.rowInputReadOnly]}
                   value={contactNo}
                   onChangeText={(t) => { setContactNo(t.replace(/\D/g, "").slice(0, 10)); if (contactNoError) setContactNoError(""); }}
                   placeholder="9XXXXXXXXX"
@@ -592,25 +621,22 @@ export default function ManageAdmin() {
                   }
                 </Pressable>
               </View>
-            ) : (
-              <Pressable
-                style={({ pressed }) => [styles.saveBtn, pressed && styles.saveBtnPressed]}
-                onPress={handleStartEditProfile}
-              >
-                {({ pressed }) => (
-                  <Text style={[styles.saveBtnText, pressed && styles.saveBtnTextPressed]}>Edit Profile</Text>
-                )}
-              </Pressable>
-            )}
+            ) : null}
           </View>
 
           {/* PASSWORD CARD */}
           <Card style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Change Password</Text>
+            <View style={styles.securityHeading}>
+              <View style={styles.securityIcon}><LockKeyhole size={17} color={colors.emerald} /></View>
+              <View>
+                <Text style={styles.sectionTitle}>Account Security</Text>
+                <Text style={styles.securitySubtitle}>Change Password</Text>
+              </View>
+            </View>
 
             <View ref={pwFieldsRef} collapsable={false} style={{ width: "100%" }}>
-            <Text style={styles.fieldLabel}>New password</Text>
-            <View style={[styles.pwField, !pwEditing && styles.rowFieldReadOnly, !!pwError && styles.inputErrorBorder]}>
+            <Text style={[styles.fieldLabel, styles.passwordLabel]}>New password</Text>
+            <View style={[styles.pwField, !!pwError && styles.inputErrorBorder]}>
               <TextInput
                 style={styles.rowInput}
                 value={newPassword}
@@ -624,14 +650,13 @@ export default function ManageAdmin() {
                 editable={pwEditing}
               />
               <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowNewPass((v) => !v)} activeOpacity={0.7}>
-                {showNewPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+                {showNewPass ? <EyeOff size={19} color={colors.textSecondary} /> : <Eye size={19} color={colors.textSecondary} />}
               </TouchableOpacity>
             </View>
             {!!pwError && <Text style={styles.fieldError}>{pwError}</Text>}
-            <Text style={styles.hint}>Min. 8 characters with a capital letter, a number, and a special character.</Text>
 
-            <Text style={styles.fieldLabel}>Confirm password</Text>
-            <View style={[styles.pwField, !pwEditing && styles.rowFieldReadOnly, !!confirmError && styles.inputErrorBorder]}>
+            <Text style={[styles.fieldLabel, styles.passwordLabel]}>Confirm password</Text>
+            <View style={[styles.pwField, !!confirmError && styles.inputErrorBorder]}>
               <TextInput
                 style={styles.rowInput}
                 value={confirmPassword}
@@ -645,10 +670,14 @@ export default function ManageAdmin() {
                 editable={pwEditing}
               />
               <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowConfirmPass((v) => !v)} activeOpacity={0.7}>
-                {showConfirmPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+                {showConfirmPass ? <EyeOff size={19} color={colors.textSecondary} /> : <Eye size={19} color={colors.textSecondary} />}
               </TouchableOpacity>
             </View>
             {!!confirmError && <Text style={styles.fieldError}>{confirmError}</Text>}
+            <View style={styles.passwordHintRow}>
+              <View style={styles.hintIcon}><Text style={styles.hintIconText}>i</Text></View>
+              <Text style={styles.hint}>Min. 8 characters with a capital letter, a number, and a special character.</Text>
+            </View>
             </View>
 
             {/* Change Password / Cancel + Update Password */}
@@ -697,7 +726,10 @@ export default function ManageAdmin() {
                   onPress={handleStartEditPassword}
                 >
                   {({ pressed }) => (
-                    <Text style={[styles.saveBtnText, pressed && styles.saveBtnTextPressed]}>Change Password</Text>
+                    <View style={styles.buttonContent}>
+                      <KeyRound size={14} color={pressed ? colors.ink : colors.white} />
+                      <Text style={[styles.saveBtnText, pressed && styles.saveBtnTextPressed]}>Change Password</Text>
+                    </View>
                   )}
                 </Pressable>
               )}
@@ -726,6 +758,7 @@ export default function ManageAdmin() {
           scrollRef.current?.scrollTo({ y: 0, animated: true });
         }}
       />
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
 
       {/* UPDATE PASSWORD CONFIRMATION MODAL */}
       <Modal
@@ -820,36 +853,75 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: {
     alignItems: "center",
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xxl,
+    paddingHorizontal: 10,
+    paddingTop: 10,
   },
 
   // ── Identity card ─────────────────────────────────────────────────────────────
 
   identityCard: {
     width: "100%",
-    marginBottom: spacing.lg,
+    marginBottom: 14,
   },
 
   identityInner: {
-    flex: 1,
+    flexDirection: "row",
     alignItems: "center",
-    paddingVertical: spacing.sm,
+    gap: 14,
   },
 
+  identityCopy: { flex: 1, alignItems: "flex-start" },
+
+  roleBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: colors.emeraldSoft,
+    borderRadius: radius.pill,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    marginBottom: 4,
+  },
+
+  roleDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: colors.emerald },
+
   identityName: {
-    fontSize: fontSize.xl,
+    fontSize: 20,
     fontFamily: fontFamily.extrabold,
     color: colors.ink,
-    marginTop: spacing.lg,
+    lineHeight: 22,
   },
 
   identityRole: {
-    fontSize: fontSize.base,
-    fontFamily: fontFamily.medium,
+    fontSize: 9,
+    fontFamily: fontFamily.bold,
     color: colors.emerald,
-    marginTop: 2,
+    textTransform: "uppercase",
   },
+
+  sectionHeadingRow: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 7,
+    paddingHorizontal: 2,
+  },
+
+  informationTitle: { fontSize: 14, fontFamily: fontFamily.semibold, color: colors.ink },
+
+  editProfileBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 10,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: colors.white,
+    ...shadow.card,
+  },
+
+  editProfileText: { fontSize: 11, fontFamily: fontFamily.semibold, color: colors.emerald },
 
   // ── Fields card / sections ───────────────────────────────────────────────────
 
@@ -857,17 +929,55 @@ const styles = StyleSheet.create({
     width: "100%",
   },
 
+  nameFieldsRow: { flexDirection: "row", gap: 14 },
+  nameFieldColumn: { flex: 1 },
+  infoDivider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginVertical: 10 },
+
+  compactInput: {
+    width: "100%",
+    minHeight: 28,
+    paddingHorizontal: 0,
+    paddingVertical: 3,
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: fontFamily.semibold,
+    color: colors.ink,
+    borderWidth: 0,
+    textAlignVertical: "center",
+  },
+
+  compactInputReadOnly: { backgroundColor: "transparent" },
+  compactInputEditing: {
+    minHeight: 38,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    backgroundColor: colors.white,
+  },
+  optionalText: { color: colors.textMuted, fontFamily: fontFamily.regular, fontStyle: "italic" },
+  compactRowField: { minHeight: 25, justifyContent: "center" },
+  compactRowInput: { padding: 0, fontSize: 12, fontFamily: fontFamily.semibold, color: colors.ink },
+  contactLine: { flexDirection: "row", alignItems: "center", minHeight: 25 },
+  compactPhoneInputWrap: { flex: 1 },
+  contactInput: { paddingVertical: 0, paddingHorizontal: 5, fontSize: 13 },
+
   sectionCard: {
     width: "100%",
-    marginTop: spacing.lg,
+    marginTop: 14,
+    backgroundColor: "#F5F6F4",
   },
 
   sectionTitle: {
-    fontSize: fontSize.base,
-    fontFamily: fontFamily.bold,
+    fontSize: 18,
+    fontFamily: fontFamily.semibold,
     color: colors.ink,
-    marginBottom: spacing.lg,
   },
+
+  securityHeading: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 18 },
+  securityIcon: { width: 40, height: 40, borderRadius: 8, backgroundColor: colors.white, alignItems: "center", justifyContent: "center" },
+  securitySubtitle: { fontSize: 12, color: colors.ink, fontFamily: fontFamily.regular, marginTop: 1 },
 
   fieldLabel: {
     alignSelf: "flex-start",
@@ -876,7 +986,7 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     textTransform: "uppercase",
     letterSpacing: 0.6,
-    marginBottom: spacing.sm - 2,
+    marginBottom: 2,
   },
 
   input: {
@@ -984,7 +1094,7 @@ const styles = StyleSheet.create({
   },
 
   phonePrefixText: {
-    fontSize: fontSize.base,
+    fontSize: 13,
     fontFamily: fontFamily.bold,
     color: colors.ink,
   },
@@ -1004,16 +1114,24 @@ const styles = StyleSheet.create({
 
   pwField: {
     width: "100%",
+    minHeight: 58,
     flexDirection: "row",
     alignItems: "center",
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderRadius: 10,
+    borderWidth: 0,
+    borderColor: colors.white,
     backgroundColor: colors.white,
-    marginBottom: spacing.xs,
+    marginBottom: 16,
   },
 
-  eyeBtn: { paddingHorizontal: spacing.md, paddingVertical: spacing.md },
+  eyeBtn: { paddingHorizontal: 16, paddingVertical: spacing.md },
+
+  passwordLabel: {
+    color: colors.ink,
+    fontSize: 12,
+    letterSpacing: 0.2,
+    marginBottom: 6,
+  },
 
   fieldError: {
     alignSelf: "flex-start",
@@ -1025,12 +1143,33 @@ const styles = StyleSheet.create({
   },
 
   hint: {
-    alignSelf: "flex-start",
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 16,
+    color: colors.ink,
     fontFamily: fontFamily.regular,
-    marginBottom: spacing.lg,
   },
+
+  passwordHintRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 9,
+    paddingHorizontal: 6,
+    marginBottom: 17,
+  },
+
+  hintIcon: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 1.5,
+    borderColor: colors.emerald,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 1,
+  },
+
+  hintIconText: { fontSize: 9, lineHeight: 10, color: colors.emerald, fontFamily: fontFamily.bold },
 
   // ── Buttons ───────────────────────────────────────────────────────────────────
 
@@ -1064,12 +1203,13 @@ const styles = StyleSheet.create({
 
   updatePwBtn: {
     width: "100%",
-    borderRadius: radius.pill,
+    borderRadius: 12,
     backgroundColor: colors.ink,
-    paddingVertical: 16,
+    minHeight: 56,
+    paddingVertical: 14,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: spacing.md,
+    marginTop: 0,
     ...shadow.button,
   },
 
@@ -1112,6 +1252,8 @@ const styles = StyleSheet.create({
   pwUpdateBtnText: {
     fontSize: fontSize.sm,
   },
+
+  buttonContent: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7 },
 
   overlay: {
     position: "absolute",

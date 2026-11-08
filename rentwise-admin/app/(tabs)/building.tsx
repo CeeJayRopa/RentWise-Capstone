@@ -13,15 +13,16 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, getDocs, onSnapshot, query, where } from "firebase/firestore";
+import { collection, getDocs, onSnapshot } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { House, HelpCircle, ChevronDown, Building2 } from "lucide-react-native";
+import { House, HelpCircle, ChevronDown, Building2, Store, UserRound, UserRoundPlus, SlidersHorizontal, Building as BuildingIcon } from "lucide-react-native";
 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import HelpSupportModal from "../components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
-import { Badge, EmptyState } from "../../shared/components/ui";
+import { EmptyState } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import { readLocalCache, saveLocalCache } from "../../shared/services/localCache";
 
@@ -34,12 +35,7 @@ type StallDoc = {
   paymentSchedule: string;
   status: "occupied" | "unoccupied" | "maintenance";
   tenantId: string | null;
-};
-
-type TenantInfo = {
-  firstName: string;
-  middleName: string;
-  lastName: string;
+  tenantName: string;
 };
 
 export default function Building() {
@@ -51,10 +47,6 @@ export default function Building() {
 
   const [allStalls, setAllStalls] = useState<StallDoc[]>([]);
 
-  const [tenantMap, setTenantMap] = useState<Map<string, TenantInfo>>(
-    new Map(),
-  );
-
   const [selectedBuilding, setSelectedBuilding] = useState<number | null>(null);
 
   const [filter, setFilter] = useState<"All" | "Unoccupied" | "Occupied">(
@@ -64,6 +56,7 @@ export default function Building() {
 
   const [sheetVisible, setSheetVisible] = useState(false);
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
 
   const homeRef = useRef<View>(null);
   const helpRef = useRef<View>(null);
@@ -109,9 +102,8 @@ export default function Building() {
   useEffect(() => {
     if (checking || !auth.currentUser) return;
     let stallsReady = false;
-    let usersReady = false;
     const finishInitialLoad = () => {
-      if (stallsReady && usersReady) setLoading(false);
+      if (stallsReady) setLoading(false);
     };
 
     const unsubscribeStalls = onSnapshot(collection(db, "stalls"), (snapshot) => {
@@ -126,6 +118,7 @@ export default function Building() {
           paymentSchedule: data.paymentSchedule ?? "",
           status: data.status ?? "unoccupied",
           tenantId: data.tenantId ?? null,
+          tenantName: String(data.tenantName ?? "").trim(),
         };
       }));
       stallsReady = true;
@@ -135,31 +128,8 @@ export default function Building() {
       setLoading(false);
     });
 
-    const unsubscribeUsers = onSnapshot(
-      query(collection(db, "users"), where("role", "==", "tenant")),
-      (snapshot) => {
-        const map = new Map<string, TenantInfo>();
-        snapshot.docs.forEach((userDoc) => {
-          const data = userDoc.data();
-          map.set(userDoc.id, {
-            firstName: data.firstName ?? "",
-            middleName: data.middleName ?? "",
-            lastName: data.lastName ?? "",
-          });
-        });
-        setTenantMap(map);
-        usersReady = true;
-        finishInitialLoad();
-      },
-      (error) => {
-        console.log("STALL TENANTS LISTENER ERROR:", error);
-        setLoading(false);
-      },
-    );
-
     return () => {
       unsubscribeStalls();
-      unsubscribeUsers();
     };
   }, [checking]);
 
@@ -181,11 +151,7 @@ export default function Building() {
     setLoading(true);
 
     try {
-      const [stallsSnap, usersSnap] = await Promise.all([
-        getDocs(collection(db, "stalls")),
-
-        getDocs(query(collection(db, "users"), where("role", "==", "tenant"))),
-      ]);
+      const stallsSnap = await getDocs(collection(db, "stalls"));
 
       const stalls: StallDoc[] = stallsSnap.docs.map((doc) => {
         const data = doc.data();
@@ -206,33 +172,17 @@ export default function Building() {
           status: data.status ?? "unoccupied",
 
           tenantId: data.tenantId ?? null,
+          tenantName: String(data.tenantName ?? "").trim(),
         };
       });
 
       setAllStalls(stalls);
-
-      const map = new Map<string, TenantInfo>();
-
-      usersSnap.docs.forEach((doc) => {
-        const data = doc.data();
-
-        map.set(doc.id, {
-          firstName: data.firstName ?? "",
-
-          middleName: data.middleName ?? "",
-
-          lastName: data.lastName ?? "",
-        });
-      });
-
-      setTenantMap(map);
-      await saveLocalCache("admin:stalls", {stalls, tenants: Array.from(map.entries())});
+      await saveLocalCache("admin:stalls", {stalls});
     } catch (error) {
       console.log("BUILDING ERROR:", error);
-      const cached = await readLocalCache<{stalls: StallDoc[]; tenants: Array<[string, TenantInfo]>}>("admin:stalls");
+      const cached = await readLocalCache<{stalls: StallDoc[]}>("admin:stalls");
       if (cached) {
         setAllStalls(cached.stalls);
-        setTenantMap(new Map(cached.tenants));
       }
     } finally {
       setLoading(false);
@@ -331,7 +281,7 @@ export default function Building() {
           <Text style={styles.headerTitle}>RentWise</Text>
 
           <View ref={helpRef} collapsable={false}>
-            <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
+            <TouchableOpacity onPress={() => setHelpSupportVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
               <HelpCircle size={22} color={colors.emeraldSoft} />
             </TouchableOpacity>
           </View>
@@ -365,14 +315,12 @@ export default function Building() {
               }}
               activeOpacity={0.8}
             >
-              <Text
-                style={styles.dropdownTriggerText}
-                numberOfLines={1}
-              >
-                {selectedBuilding !== null
-                  ? `Building ${selectedBuilding}`
-                  : "All Buildings"}
-              </Text>
+              <View style={styles.dropdownLabelRow}>
+                <Building2 size={12} color={colors.ink} />
+                <Text style={styles.dropdownTriggerText} numberOfLines={1}>
+                  {selectedBuilding !== null ? `Building ${selectedBuilding}` : "All Buildings"}
+                </Text>
+              </View>
               <ChevronDown size={14} color={colors.emerald} />
             </TouchableOpacity>
 
@@ -439,9 +387,10 @@ export default function Building() {
               }}
               activeOpacity={0.8}
             >
-              <Text style={styles.dropdownTriggerText} numberOfLines={1}>
-                {filter}
-              </Text>
+              <View style={styles.dropdownLabelRow}>
+                <SlidersHorizontal size={12} color={colors.ink} />
+                <Text style={styles.dropdownTriggerText} numberOfLines={1}>{filter}</Text>
+              </View>
               <ChevronDown size={14} color={colors.emerald} />
             </TouchableOpacity>
 
@@ -505,7 +454,6 @@ export default function Building() {
                 <StallRow
                   key={item.id}
                   stall={item}
-                  tenantMap={tenantMap}
                   manageRef={idx === firstOccupiedIndex ? manageBtnRef : undefined}
                   editRentalRef={idx === firstOccupiedIndex ? editRentalBtnRef : undefined}
                   registerRef={idx === firstUnoccupiedIndex ? registerBtnRef : undefined}
@@ -529,6 +477,7 @@ export default function Building() {
       )}
 
 
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
       <HelpTour
         visible={tourVisible}
         steps={tourSteps}
@@ -541,12 +490,6 @@ export default function Building() {
   );
 }
 
-const STATUS_TONE: Record<StallDoc["status"], "success" | "warning" | "error"> = {
-  occupied: "success",
-  unoccupied: "warning",
-  maintenance: "error",
-};
-
 const STATUS_LABEL: Record<StallDoc["status"], string> = {
   occupied: "Occupied",
   unoccupied: "Unoccupied",
@@ -555,39 +498,42 @@ const STATUS_LABEL: Record<StallDoc["status"], string> = {
 
 function StallRow({
   stall,
-  tenantMap,
   manageRef,
   editRentalRef,
   registerRef,
 }: {
   stall: StallDoc;
-  tenantMap: Map<string, TenantInfo>;
   manageRef?: React.RefObject<View | null>;
   editRentalRef?: React.RefObject<View | null>;
   registerRef?: React.RefObject<View | null>;
 }) {
-  const tenant = stall.tenantId ? tenantMap.get(stall.tenantId) : undefined;
-  const tenantName = tenant ? [tenant.firstName, tenant.middleName, tenant.lastName].filter(Boolean).join(" ") : "";
-
   return (
     <View style={styles.row}>
+      <View style={styles.stallHeaderRow}>
+        <View style={styles.stallIconBox}><Store size={17} color={colors.emerald} /></View>
       <View style={styles.rowInfo}>
-        <View style={styles.rowSpaceLine}>
-          <Text style={styles.rowSpace}>{stall.spaceId}</Text>
-          <Badge label={STATUS_LABEL[stall.status]} tone={STATUS_TONE[stall.status]} />
-        </View>
-        <Text style={styles.rowBuilding}>Building {stall.buildingNumber}</Text>
-        {tenantName && (
-          <Text style={styles.rowTenantName}>{tenantName}</Text>
+        <Text style={styles.rowSpace}>{stall.spaceId}</Text>
+        <View style={styles.buildingLine}><BuildingIcon size={10} color={colors.textMuted} /><Text style={styles.rowBuilding}>Building {stall.buildingNumber}</Text></View>
+        {stall.status === "occupied" && (
+          <View style={styles.occupantLine}>
+            <UserRound size={10} color={colors.emerald} />
+            <Text style={[styles.occupantName, !stall.tenantName && styles.occupantNameMissing]} numberOfLines={1}>
+              {stall.tenantName || "Occupant not recorded"}
+            </Text>
+          </View>
         )}
       </View>
+        <View style={[styles.statusPill, stall.status === "occupied" ? styles.statusPillOccupied : stall.status === "maintenance" ? styles.statusPillMaintenance : styles.statusPillUnoccupied]}>
+          <View style={[styles.statusDot, stall.status === "occupied" ? styles.statusDotOccupied : stall.status === "maintenance" ? styles.statusDotMaintenance : styles.statusDotUnoccupied]} />
+          <Text style={styles.statusPillText}>{STATUS_LABEL[stall.status]}</Text>
+        </View>
+      </View>
 
-      <View style={styles.rowRight}>
-        <View style={styles.stallBtns}>
+      <View style={styles.stallBtns}>
         {/* UNOCCUPIED */}
         {stall.status === "unoccupied" && (
           <>
-            <View ref={registerRef} collapsable={false}>
+            <View ref={registerRef} collapsable={false} style={styles.buttonWrap}>
               <Pressable
                 style={({ pressed }) => [
                   styles.btnRegister,
@@ -604,11 +550,12 @@ function StallRow({
                 }
               >
                 {({ pressed }) => (
-                  <Text style={[styles.btnText, pressed && styles.btnRegisterTextPressed]}>Register</Text>
+                  <View style={styles.buttonContent}><UserRoundPlus size={13} color={pressed ? colors.emerald : colors.white} /><Text style={[styles.btnText, pressed && styles.btnRegisterTextPressed]}>Register</Text></View>
                 )}
               </Pressable>
             </View>
 
+            <View style={styles.buttonWrap}>
             <Pressable
               style={({ pressed }) => [
                 styles.btnEditRental,
@@ -624,9 +571,10 @@ function StallRow({
               }
             >
               {({ pressed }) => (
-                <Text style={[styles.btnTextOutline, pressed && styles.btnEditRentalTextPressed]}>Edit Rental</Text>
+                <View style={styles.buttonContent}><SlidersHorizontal size={13} color={pressed ? colors.white : colors.ink} /><Text style={[styles.btnTextOutline, pressed && styles.btnEditRentalTextPressed]}>Edit Rental</Text></View>
               )}
             </Pressable>
+            </View>
           </>
         )}
 
@@ -634,7 +582,7 @@ function StallRow({
         {stall.status === "occupied" && (
           <>
             {/* MANAGE ACCOUNT */}
-            <View ref={manageRef} collapsable={false}>
+            <View ref={manageRef} collapsable={false} style={styles.buttonWrap}>
             <Pressable
               style={({ pressed }) => [
                 styles.btnManage,
@@ -651,13 +599,13 @@ function StallRow({
               }
             >
               {({ pressed }) => (
-                <Text style={[styles.btnText, pressed && styles.btnManageTextPressed]}>Manage</Text>
+                <View style={styles.buttonContent}><SlidersHorizontal size={13} color={pressed ? colors.emerald : colors.white} /><Text style={[styles.btnText, pressed && styles.btnManageTextPressed]}>Manage</Text></View>
               )}
             </Pressable>
             </View>
 
             {/* EDIT RENTAL INFO */}
-            <View ref={editRentalRef} collapsable={false}>
+            <View ref={editRentalRef} collapsable={false} style={styles.buttonWrap}>
             <Pressable
               style={({ pressed }) => [
                 styles.btnEditRental,
@@ -673,13 +621,12 @@ function StallRow({
               }
             >
               {({ pressed }) => (
-                <Text style={[styles.btnTextOutline, pressed && styles.btnEditRentalTextPressed]}>Edit Rental</Text>
+                <View style={styles.buttonContent}><SlidersHorizontal size={13} color={pressed ? colors.white : colors.ink} /><Text style={[styles.btnTextOutline, pressed && styles.btnEditRentalTextPressed]}>Edit Rental</Text></View>
               )}
             </Pressable>
             </View>
           </>
         )}
-        </View>
       </View>
     </View>
   );
@@ -763,7 +710,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: spacing.sm,
-    marginBottom: spacing.lg,
+    marginBottom: 10,
   },
 
   // ── Building dropdown ─────────────────────────────────────────────────────────
@@ -779,16 +726,24 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     backgroundColor: colors.white,
-    borderRadius: radius.sm,
-    borderWidth: 1.5,
+    minHeight: 36,
+    borderRadius: 9,
+    borderWidth: 1,
     borderColor: colors.border,
     paddingHorizontal: spacing.sm + 2,
-    paddingVertical: spacing.sm,
+    paddingVertical: 7,
+    ...shadow.subtle,
+  },
+
+  dropdownLabelRow: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
   },
 
   dropdownTriggerText: {
-    flex: 1,
-    fontSize: fontSize.sm,
+    fontSize: 10,
     fontFamily: fontFamily.medium,
     color: colors.textPrimary,
   },
@@ -863,33 +818,65 @@ const styles = StyleSheet.create({
   // ── Stall row ─────────────────────────────────────────────────────────────────
 
   row: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
     backgroundColor: colors.white,
-    borderRadius: radius.lg,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: spacing.xl - 2,
-    paddingVertical: spacing.lg,
-    marginBottom: spacing.sm + 2,
+    borderColor: "#EEF0ED",
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    marginBottom: 8,
+    overflow: "hidden",
+  },
+
+  stallHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+
+  stallIconBox: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    backgroundColor: colors.mist,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 9,
   },
 
   rowInfo: {
     flex: 1,
   },
 
-  rowSpaceLine: {
+  buildingLine: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
-    marginBottom: 3,
+    gap: 3,
   },
 
   rowBuilding: {
-    fontSize: fontSize.xs,
+    fontSize: 9,
     fontFamily: fontFamily.medium,
     color: colors.textMuted,
+  },
+
+  occupantLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    marginTop: 2,
+  },
+
+  occupantName: {
+    flexShrink: 1,
+    fontSize: 9,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
+  },
+
+  occupantNameMissing: {
+    color: colors.textMuted,
+    fontFamily: fontFamily.medium,
   },
 
   rowSpace: {
@@ -898,49 +885,68 @@ const styles = StyleSheet.create({
     color: colors.ink,
   },
 
-  rowTenantName: {
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.regular,
-    color: colors.textSecondary,
-    marginTop: 3,
+  statusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
   },
-
-  rowRight: {
-    alignItems: "flex-end",
-    gap: spacing.sm,
-    marginLeft: spacing.md,
+  statusPillOccupied: { backgroundColor: "#79EDC4" },
+  statusPillUnoccupied: { backgroundColor: "#E8EAE9" },
+  statusPillMaintenance: { backgroundColor: colors.errorSoft },
+  statusDot: { width: 5, height: 5, borderRadius: 3 },
+  statusDotOccupied: { backgroundColor: colors.emerald },
+  statusDotUnoccupied: { backgroundColor: "#F2B6AA" },
+  statusDotMaintenance: { backgroundColor: colors.error },
+  statusPillText: {
+    fontSize: 9,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
   },
 
   stallBtns: {
-    flexDirection: "column",
+    flexDirection: "row",
     alignItems: "stretch",
-    gap: spacing.sm,
-    width: 128,
-    flexShrink: 0,
+    gap: 7,
+    width: "100%",
+  },
+
+  buttonWrap: {
+    flex: 1,
+  },
+
+  buttonContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
   },
 
   // ── Action buttons ────────────────────────────────────────────────────────────
 
   btnText: {
-    fontSize: fontSize.sm,
+    fontSize: 10,
     fontFamily: fontFamily.semibold,
     color: colors.white,
     textAlign: "center",
   },
 
   btnTextOutline: {
-    fontSize: fontSize.sm,
+    fontSize: 10,
     fontFamily: fontFamily.semibold,
-    color: colors.emerald,
+    color: colors.ink,
     textAlign: "center",
   },
 
   btnManage: {
-    backgroundColor: colors.emerald,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    width: "100%",
+    minHeight: 32,
+    backgroundColor: colors.ink,
+    borderRadius: 8,
     alignItems: "center",
+    justifyContent: "center",
     transform: [{ scale: 1 }],
   },
 
@@ -954,13 +960,12 @@ const styles = StyleSheet.create({
   },
 
   btnEditRental: {
-    backgroundColor: colors.white,
-    borderRadius: radius.pill,
-    borderWidth: 1.5,
-    borderColor: colors.border,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    width: "100%",
+    minHeight: 32,
+    backgroundColor: colors.mist,
+    borderRadius: 8,
     alignItems: "center",
+    justifyContent: "center",
     transform: [{ scale: 1 }],
   },
 
@@ -975,12 +980,12 @@ const styles = StyleSheet.create({
   },
 
   btnRegister: {
-    backgroundColor: colors.emeraldBright,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    width: "100%",
+    minHeight: 32,
+    backgroundColor: colors.emerald,
+    borderRadius: 8,
     alignItems: "center",
-    marginTop: spacing.sm,
+    justifyContent: "center",
     transform: [{ scale: 1 }],
   },
 

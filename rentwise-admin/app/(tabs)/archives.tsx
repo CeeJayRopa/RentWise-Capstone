@@ -17,7 +17,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { collection, doc, getDoc, getDocs, onSnapshot } from "firebase/firestore";
 import type { Timestamp } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { House, HelpCircle, Archive as ArchiveIcon, RotateCcw, Trash2, Search, Building2, DoorOpen } from "lucide-react-native";
+import { House, HelpCircle, Archive as ArchiveIcon, ArchiveRestore, Trash2, Search, Store, RefreshCw } from "lucide-react-native";
 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
@@ -26,9 +26,11 @@ import {
   deleteArchivedTenant,
 } from "../../shared/services/accountServices";
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import HelpSupportModal from "../components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import { readLocalCache, saveLocalCache } from "../../shared/services/localCache";
+import { requireOnlineAction } from "../../shared/services/networkStatus";
 
 type ArchiveEntry = {
   uid: string;
@@ -69,6 +71,7 @@ export default function Archives() {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
 
   const homeRef = useRef<View>(null);
   const helpRef = useRef<View>(null);
@@ -76,7 +79,6 @@ export default function Archives() {
   const searchRef = useRef<View>(null);
   const cardRef = useRef<View>(null);
   const restoreBtnRef = useRef<View>(null);
-  const deleteBtnRef = useRef<View>(null);
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
@@ -85,7 +87,6 @@ export default function Archives() {
     { key: "search", ref: searchRef, title: "Search", description: "Find an archived tenant fast by typing their name.", edgeInset: "top" },
     { key: "card", ref: cardRef, title: "Archived tenant", description: "Shows who was archived, when, and their building/space.", edgeInset: "top" },
     { key: "restore", ref: restoreBtnRef, title: "Restore", description: "Brings the tenant's account back to active. If their old stall is occupied, you'll be asked to relocate them first.", edgeInset: "top" },
-    { key: "delete", ref: deleteBtnRef, title: "Deactivated", description: "The tenant cannot log in, but their credentials and records are safely retained for restoration.", edgeInset: "top" },
   ];
 
   const fetchData = useCallback(async () => {
@@ -226,6 +227,7 @@ export default function Archives() {
 
   const handleRestore = async () => {
     if (!confirmTarget) return;
+    if (!(await requireOnlineAction("Restoring a tenant"))) return;
     setRestoring(true);
     setRestoreError("");
     try {
@@ -284,7 +286,7 @@ export default function Archives() {
           </View>
           <Text style={styles.headerTitle}>RentWise</Text>
           <View ref={helpRef} collapsable={false}>
-            <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
+            <TouchableOpacity onPress={() => setHelpSupportVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
               <HelpCircle size={22} color={colors.emeraldSoft} />
             </TouchableOpacity>
           </View>
@@ -300,9 +302,7 @@ export default function Archives() {
       </LinearGradient>
 
       <View style={styles.searchWrap} ref={searchRef} collapsable={false}>
-        <View style={styles.searchIconCircle}>
-          <Search size={16} color={colors.emerald} />
-        </View>
+        <Search size={20} color={colors.textSecondary} />
         <TextInput
           style={styles.searchInput}
           placeholder="Search archived tenants"
@@ -318,11 +318,19 @@ export default function Archives() {
         <View style={styles.emptyBox}>
           <ArchiveIcon size={40} color={colors.emeraldSoft} style={{ marginBottom: 10 }} />
           <Text style={styles.emptyText}>No archived accounts.</Text>
+          <TouchableOpacity style={styles.emptyReloadButton} onPress={onRefresh} disabled={refreshing}>
+            {refreshing ? <ActivityIndicator size="small" color={colors.emerald} /> : <RefreshCw size={14} color={colors.emerald} />}
+            <Text style={styles.emptyReloadText}>{refreshing ? "Syncing…" : "Tap to re-sync"}</Text>
+          </TouchableOpacity>
         </View>
       ) : filteredArchives.length === 0 ? (
         <View style={styles.emptyBox}>
           <Search size={40} color={colors.emeraldSoft} style={{ marginBottom: 10 }} />
           <Text style={styles.emptyText}>No tenants match your search.</Text>
+          <TouchableOpacity style={styles.emptyReloadButton} onPress={onRefresh} disabled={refreshing}>
+            {refreshing ? <ActivityIndicator size="small" color={colors.emerald} /> : <RefreshCw size={14} color={colors.emerald} />}
+            <Text style={styles.emptyReloadText}>{refreshing ? "Syncing…" : "Reload archives"}</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <FlatList
@@ -335,31 +343,22 @@ export default function Archives() {
           }
           renderItem={({ item, index }) => (
             <View style={styles.card} ref={index === 0 ? cardRef : undefined} collapsable={false}>
-              <View style={styles.cardTopRow}>
-                <Text style={styles.cardName} numberOfLines={1} ellipsizeMode="tail">
+              <View style={styles.cardMain}>
+                <View style={styles.vaultedRow}><View style={styles.vaultedDot} /><Text style={styles.vaultedText}>Vaulted Record</Text></View>
+                <Text style={styles.cardName} numberOfLines={2} ellipsizeMode="tail">
                   {[item.firstName, item.middleName, item.lastName].filter(Boolean).join(" ")}
                 </Text>
+                <View style={styles.locationRow}>
+                  <Store size={15} color={colors.emerald} />
+                  <Text style={styles.locationText}>Building {item.buildingNumber} · Space {item.spaceId}</Text>
+                </View>
+              </View>
+              <View style={styles.cardSide}>
                 <View style={styles.archivedInfo}>
-                  <Text style={styles.archivedCaption}>Archived</Text>
+                  <Text style={styles.archivedCaption}>Deactivated</Text>
                   <Text style={styles.archivedDate}>{formatDate(item.archivedAt)}</Text>
                 </View>
-              </View>
-
-              <View style={styles.tagsRow}>
-                <View style={styles.tagPill}>
-                  <Building2 size={12} color={colors.emerald} />
-                  <Text style={styles.tagPillText}>Building {item.buildingNumber}</Text>
-                </View>
-                <View style={styles.tagPill}>
-                  <DoorOpen size={12} color={colors.emerald} />
-                  <Text style={styles.tagPillText}>Space {item.spaceId}</Text>
-                </View>
-              </View>
-
-              <View style={styles.cardDivider} />
-
-              <View style={styles.cardActions}>
-                <View ref={index === 0 ? restoreBtnRef : undefined} collapsable={false} style={{ flex: 1 }}>
+                <View ref={index === 0 ? restoreBtnRef : undefined} collapsable={false}>
                   <Pressable
                     style={({ pressed }) => [styles.restoreBtn, pressed && styles.restoreBtnPressed]}
                     onPress={() => handleRestorePress(item)}
@@ -370,7 +369,7 @@ export default function Archives() {
                         <ActivityIndicator color={colors.emerald} size="small" />
                       ) : (
                         <>
-                          <RotateCcw size={15} color={pressed ? colors.white : colors.emerald} style={styles.btnIcon} />
+                          <ArchiveRestore size={16} color={pressed ? colors.white : colors.emerald} style={styles.btnIcon} />
                           <Text style={[styles.restoreBtnText, pressed && styles.restoreBtnTextPressed]}>Restore</Text>
                         </>
                       )
@@ -378,21 +377,6 @@ export default function Archives() {
                   </Pressable>
                 </View>
 
-                <View style={styles.actionsVDivider} />
-
-                <View ref={index === 0 ? deleteBtnRef : undefined} collapsable={false} style={{ flex: 1 }}>
-                  <Pressable
-                    style={styles.deleteBtn}
-                    disabled
-                  >
-                    {() => (
-                      <>
-                        <ArchiveIcon size={15} color={colors.error} style={styles.btnIcon} />
-                        <Text style={styles.deleteBtnText}>Deactivated</Text>
-                      </>
-                    )}
-                  </Pressable>
-                </View>
               </View>
             </View>
           )}
@@ -521,6 +505,7 @@ export default function Archives() {
       </Modal>
 
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
     </View>
   );
 }
@@ -577,38 +562,33 @@ const styles = StyleSheet.create({
 
   loader: { marginTop: 60 },
 
-  list: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, gap: spacing.sm + 2 },
+  list: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, gap: 12 },
 
   emptyBox: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60 },
   emptyText: { fontSize: fontSize.base, color: colors.textSecondary, fontFamily: fontFamily.regular, textAlign: "center" },
+  emptyReloadButton: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 14, paddingHorizontal: 12, paddingVertical: 7, borderRadius: radius.pill, backgroundColor: colors.mist },
+  emptyReloadText: { fontSize: fontSize.xs, color: colors.emerald, fontFamily: fontFamily.semibold },
 
   // ── Search bar ──────────────────────────────────────────────────────────────
 
   searchWrap: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm + 2,
+    gap: 12,
     backgroundColor: colors.white,
-    borderRadius: radius.pill,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: colors.border,
     marginHorizontal: spacing.lg,
     marginTop: spacing.lg,
-    paddingHorizontal: spacing.sm + 2,
-    paddingVertical: spacing.sm,
-  },
-  searchIconCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.emeraldSoft,
-    alignItems: "center",
-    justifyContent: "center",
+    minHeight: 48,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
   },
   searchInput: {
     flex: 1,
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.medium,
+    fontSize: 14,
+    fontFamily: fontFamily.regular,
     color: colors.ink,
     padding: 0,
   },
@@ -617,11 +597,20 @@ const styles = StyleSheet.create({
 
   card: {
     backgroundColor: colors.white,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.lg,
+    borderRadius: 18,
+    flexDirection: "row",
+    overflow: "hidden",
+    minHeight: 122,
+    ...shadow.card,
   },
+
+  cardMain: { flex: 1, paddingHorizontal: 15, paddingVertical: 13, justifyContent: "space-between" },
+  cardSide: { width: 116, padding: 9, backgroundColor: "#FAFAF9", justifyContent: "space-between", alignItems: "center" },
+  vaultedRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  vaultedDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#77817D" },
+  vaultedText: { fontSize: 10, fontFamily: fontFamily.semibold, color: colors.textSecondary, textTransform: "uppercase", letterSpacing: 0.3 },
+  locationRow: { flexDirection: "row", alignItems: "center", gap: 7, marginTop: 9 },
+  locationText: { fontSize: 11, fontFamily: fontFamily.regular, color: colors.ink },
 
   cardTopRow: {
     flexDirection: "row",
@@ -629,19 +618,19 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: spacing.sm,
   },
-  cardName: { fontSize: fontSize.base, fontFamily: fontFamily.bold, color: colors.ink, flex: 1 },
+  cardName: { fontSize: 17, lineHeight: 21, fontFamily: fontFamily.semibold, color: colors.ink, marginTop: 4 },
 
-  archivedInfo: { alignItems: "flex-end" },
+  archivedInfo: { alignItems: "flex-start", width: "100%", paddingHorizontal: 5, paddingTop: 4 },
   archivedCaption: {
-    fontSize: fontSize.xs,
+    fontSize: 10,
     fontFamily: fontFamily.bold,
-    color: colors.emerald,
+    color: colors.ink,
     textTransform: "uppercase",
     letterSpacing: 0.4,
   },
   archivedDate: {
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.bold,
+    fontSize: 12,
+    fontFamily: fontFamily.semibold,
     color: colors.ink,
     marginTop: 2,
   },
@@ -689,20 +678,22 @@ const styles = StyleSheet.create({
   },
 
   restoreBtn: {
-    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: spacing.sm,
-    borderRadius: radius.sm,
+    width: 96,
+    minHeight: 44,
+    paddingVertical: 9,
+    borderRadius: 11,
+    backgroundColor: "#9EF2D4",
   },
   restoreBtnPressed: {
     backgroundColor: colors.emerald,
   },
   restoreBtnText: {
     color: colors.emerald,
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.semibold,
+    fontSize: 12,
+    fontFamily: fontFamily.medium,
     textAlign: "center",
   },
   restoreBtnTextPressed: {

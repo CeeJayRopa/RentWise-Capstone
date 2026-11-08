@@ -5,25 +5,25 @@ import {
   ScrollView,
   Pressable,
   TouchableOpacity,
-  Modal,
   ActivityIndicator,
   StyleSheet,
   Alert,
   RefreshControl,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { collection, getDocs, onSnapshot, query, where } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { House, HelpCircle, Users, Archive, AlertCircle } from "lucide-react-native";
+import { House, HelpCircle, Users, Mail, Building2, Phone, Eye, EyeOff } from "lucide-react-native";
+import { rentWiseUsernameBase } from "../../../shared/utils/username";
 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
-import { archiveTenant, checkTenantArchiveEligibility } from "../../shared/services/accountServices";
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import HelpSupportModal from "../components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
-import { Badge, EmptyState } from "../../shared/components/ui";
+import { EmptyState } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import { readLocalCache, saveLocalCache } from "../../shared/services/localCache";
 
@@ -33,11 +33,27 @@ type Tenant = {
   middleName: string;
   lastName: string;
   email: string;
+  username: string;
   contactNo: string;
   stallId: string;
   buildingNumber: string;
   spaceId: string;
 };
+
+function displayContactNumber(contactNo: string, revealed: boolean): string {
+  const digits = String(contactNo ?? "").replace(/\D/g, "");
+  const localNumber = digits.startsWith("63")
+    ? digits.slice(2)
+    : digits.startsWith("0")
+      ? digits.slice(1)
+      : digits;
+
+  if (!localNumber) return "—";
+  if (revealed || localNumber.length <= 3) return `+63 ${localNumber}`;
+
+  const hiddenDigits = "•".repeat(Math.max(1, localNumber.length - 3));
+  return `+63 ${localNumber.slice(0, 1)}${hiddenDigits}${localNumber.slice(-2)}`;
+}
 
 export default function TenantManagement() {
   const insets = useSafeAreaInsets();
@@ -46,23 +62,34 @@ export default function TenantManagement() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [revealedContacts, setRevealedContacts] = useState<Set<string>>(() => new Set());
 
-  // Archive modal state
-  const [archiveTarget, setArchiveTarget] = useState<Tenant | null>(null);
-  const [archiving, setArchiving] = useState(false);
-  const [archiveError, setArchiveError] = useState("");
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
 
   const homeRef = useRef<View>(null);
   const helpRef = useRef<View>(null);
   const listRef = useRef<View>(null);
-  const archiveBtnRef = useRef<View>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      setRevealedContacts(new Set());
+    }, []),
+  );
+
+  const toggleContactVisibility = (tenantId: string) => {
+    setRevealedContacts((current) => {
+      const next = new Set(current);
+      if (next.has(tenantId)) next.delete(tenantId);
+      else next.add(tenantId);
+      return next;
+    });
+  };
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
     // Moved right after "home" (was last) -- see financials.tsx for why.
     { key: "list", ref: listRef, title: "Active tenants", description: "Every tenant currently renting a stall.", edgeInset: "top" },
-    { key: "archive", ref: archiveBtnRef, title: "Archive", description: "Archives this tenant, freeing up their stall. You'll be asked to confirm before it happens.", edgeInset: "top" },
   ];
 
   const fetchData = useCallback(async () => {
@@ -104,6 +131,7 @@ export default function TenantManagement() {
             (data.email as string) ||
             (data.username ? `${data.username}@rentwise.app` : "") ||
             "",
+          username: rentWiseUsernameBase((data.firstName as string) ?? ""),
           contactNo: (data.contactNo as string) ?? "",
           stallId: (data.stallId as string) ?? "",
           buildingNumber: stall.buildingNumber,
@@ -166,6 +194,7 @@ export default function TenantManagement() {
           middleName: data.middleName ?? "",
           lastName: data.lastName ?? "",
           email: data.personalEmail || data.email || (data.username ? `${data.username}@rentwise.app` : ""),
+          username: rentWiseUsernameBase(data.firstName ?? ""),
           contactNo: data.contactNo ?? "",
           stallId: data.stallId ?? "",
           buildingNumber: stall.buildingNumber,
@@ -212,32 +241,6 @@ export default function TenantManagement() {
     })();
   }, [checking]);
 
-  const handleArchive = async () => {
-    if (!archiveTarget) return;
-    setArchiving(true);
-    setArchiveError("");
-    try {
-      const eligibility = await checkTenantArchiveEligibility(archiveTarget.uid);
-      if (!eligibility.canArchive) {
-        if (eligibility.hasPendingPayment) {
-          setArchiveError("Cannot archive this tenant. An online payment is awaiting approval. Review it in Financials first.");
-        } else {
-          setArchiveError(
-            `Cannot archive this tenant. They have an unsettled balance of ₱${eligibility.outstandingBalance.toLocaleString()}. Settle it in Financials first.`,
-          );
-        }
-        return;
-      }
-      await archiveTenant(archiveTarget.uid);
-      setArchiveTarget(null);
-      fetchData();
-    } catch {
-      setArchiveError("Failed to archive tenant. Please try again.");
-    } finally {
-      setArchiving(false);
-    }
-  };
-
   if (checking) {
     return (
       <View style={styles.fullCenter}>
@@ -263,7 +266,7 @@ export default function TenantManagement() {
           </View>
           <Text style={styles.headerTitle}>RentWise</Text>
           <View ref={helpRef} collapsable={false}>
-            <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
+            <TouchableOpacity onPress={() => setHelpSupportVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
               <HelpCircle size={22} color={colors.emeraldSoft} />
             </TouchableOpacity>
           </View>
@@ -301,9 +304,18 @@ export default function TenantManagement() {
             }
           >
             {tenants.map((item, index) => (
-              <View key={item.uid} style={styles.card}>
+              <Pressable
+                key={item.uid}
+                accessibilityRole="button"
+                accessibilityLabel={`Manage ${[item.firstName, item.middleName, item.lastName].filter(Boolean).join(" ")}`}
+                style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
+                onPress={() => router.push({
+                  pathname: "/manage-tenant",
+                  params: { tenantId: item.uid, stallId: item.stallId, mode: "manage" },
+                } as any)}
+              >
                 {/* LEFT INFO */}
-                <View style={styles.cardInfo}>
+                <View style={styles.legacyCardInfo}>
                   <Text style={styles.cardName} numberOfLines={1} ellipsizeMode="tail">
                     {[item.firstName, item.middleName, item.lastName].filter(Boolean).join(" ")}
                   </Text>
@@ -318,106 +330,71 @@ export default function TenantManagement() {
                     </Text>
                   ) : null}
                   {item.contactNo ? (
-                    <Text style={styles.cardContact}>+63 {item.contactNo}</Text>
+                    <View style={[styles.contactValueRow, styles.legacyContactValueRow]}>
+                      <Text style={styles.cardContact}>{displayContactNumber(item.contactNo, revealedContacts.has(item.uid))}</Text>
+                      <Pressable
+                        onPress={(event) => {
+                          event.stopPropagation();
+                          toggleContactVisibility(item.uid);
+                        }}
+                        hitSlop={8}
+                        accessibilityRole="button"
+                        accessibilityLabel={revealedContacts.has(item.uid) ? "Hide phone number" : "Show phone number"}
+                        style={styles.contactVisibilityButton}
+                      >
+                        {revealedContacts.has(item.uid)
+                          ? <EyeOff size={15} color={colors.textMuted} />
+                          : <Eye size={15} color={colors.textMuted} />}
+                      </Pressable>
+                    </View>
                   ) : null}
                 </View>
 
-                {/* RIGHT ACTIONS */}
-                <View style={styles.cardActions}>
-                  <View style={styles.floatingStatus} pointerEvents="none">
-                    <Badge label="Active" tone="success" />
+                <View style={styles.tenantCardHeader}>
+                  <View style={styles.tenantAvatar}>
+                    <Text style={styles.tenantAvatarText}>{`${item.firstName.charAt(0)}${item.lastName.charAt(0)}`.toUpperCase()}</Text>
                   </View>
-                  <View ref={index === 0 ? archiveBtnRef : undefined} collapsable={false}>
-                    <Pressable
-                      style={({ pressed }) => [
-                        styles.archiveBtn,
-                        pressed && styles.archiveBtnPressed,
-                      ]}
-                      onPress={() => {
-                        setArchiveError("");
-                        setArchiveTarget(item);
-                      }}
-                    >
-                      {({ pressed }) => (
-                        <>
-                          <Archive size={14} color={pressed ? colors.white : colors.error} />
-                          <Text style={[styles.archiveBtnText, pressed && styles.archiveBtnTextPressed]}>Archive</Text>
-                        </>
-                      )}
-                    </Pressable>
+                  <View style={styles.tenantHeaderText}>
+                    <Text style={styles.cardName} numberOfLines={1}>{[item.firstName, item.middleName, item.lastName].filter(Boolean).join(" ")}</Text>
                   </View>
                 </View>
-              </View>
+
+                <View style={styles.tenantDetails}>
+                  <View style={styles.tenantDetailRow}><Mail size={11} color={colors.ink} /><Text style={styles.tenantDetailLabel}>USERNAME</Text><Text style={styles.tenantDetailValue}>{item.username}</Text></View>
+                  <View style={styles.tenantDetailRow}><Building2 size={11} color={colors.ink} /><Text style={styles.tenantDetailLabel}>LOCATION</Text><View style={styles.locationValue}><Text style={styles.tenantDetailValue}>Building {item.buildingNumber}</Text><Text style={styles.spaceBadge}>Space {item.spaceId}</Text></View></View>
+                  <View style={styles.tenantDetailRow}>
+                    <Phone size={11} color={colors.ink} />
+                    <Text style={styles.tenantDetailLabel}>CONTACT</Text>
+                    <View style={styles.contactValueRow}>
+                      <Text style={styles.tenantDetailValue}>{displayContactNumber(item.contactNo, revealedContacts.has(item.uid))}</Text>
+                      {item.contactNo ? (
+                        <Pressable
+                          onPress={(event) => {
+                            event.stopPropagation();
+                            toggleContactVisibility(item.uid);
+                          }}
+                          hitSlop={8}
+                          accessibilityRole="button"
+                          accessibilityLabel={revealedContacts.has(item.uid) ? "Hide phone number" : "Show phone number"}
+                          style={styles.contactVisibilityButton}
+                        >
+                          {revealedContacts.has(item.uid)
+                            ? <EyeOff size={15} color={colors.textMuted} />
+                            : <Eye size={15} color={colors.textMuted} />}
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  </View>
+                </View>
+
+              </Pressable>
             ))}
           </ScrollView>
         )}
       </View>
 
-
-      {/* ARCHIVE CONFIRMATION MODAL */}
-      <Modal
-        visible={!!archiveTarget}
-        transparent
-        animationType="fade"
-        onRequestClose={() => { if (!archiving) setArchiveTarget(null); }}
-      >
-        <View style={styles.modalOverlay}>
-          <TouchableOpacity
-            style={StyleSheet.absoluteFill}
-            activeOpacity={1}
-            onPress={() => { if (!archiving) setArchiveTarget(null); }}
-          />
-          {archiveTarget && (
-            <View style={styles.modalCard}>
-              <View style={styles.modalTitleBar}>
-                <Text style={styles.modalTitle}>Archive tenant?</Text>
-              </View>
-              <View style={styles.modalBody}>
-                <Text style={styles.modalMessage}>
-                  This will archive the tenant's account. They will no longer have access to the app.
-                </Text>
-                {archiveError ? (
-                  <View style={styles.modalErrorBox}>
-                    <AlertCircle size={14} color={colors.error} />
-                    <Text style={styles.modalError}>{archiveError}</Text>
-                  </View>
-                ) : null}
-                <View style={styles.modalBtns}>
-                  <Pressable
-                    style={({ pressed }) => [styles.modalBtn, styles.modalBtnOutline, pressed && styles.modalBtnOutlinePressed]}
-                    onPress={() => setArchiveTarget(null)}
-                    disabled={archiving}
-                  >
-                    {({ pressed }) => (
-                      <Text style={[styles.modalBtnOutlineText, pressed && styles.modalBtnOutlineTextPressed]}>Cancel</Text>
-                    )}
-                  </Pressable>
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.modalBtn,
-                      styles.modalBtnDanger,
-                      archiving && styles.modalBtnDisabled,
-                      pressed && !archiving && styles.modalBtnDangerPressed,
-                    ]}
-                    onPress={handleArchive}
-                    disabled={archiving}
-                  >
-                    {({ pressed }) =>
-                      archiving ? (
-                        <ActivityIndicator color={colors.white} size="small" />
-                      ) : (
-                        <Text style={[styles.modalBtnDangerText, pressed && styles.modalBtnDangerTextPressed]}>Archive</Text>
-                      )
-                    }
-                  </Pressable>
-                </View>
-              </View>
-            </View>
-          )}
-        </View>
-      </Modal>
-
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
     </View>
   );
 }
@@ -494,7 +471,7 @@ const styles = StyleSheet.create({
   },
 
   listContent: {
-    gap: spacing.md + 2,
+    gap: 10,
   },
 
   // ── Empty state ───────────────────────────────────────────────────────────────
@@ -509,17 +486,65 @@ const styles = StyleSheet.create({
 
   card: {
     backgroundColor: colors.white,
-    borderRadius: radius.lg,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg - 1,
+    borderColor: "#EEF0ED",
+    overflow: "hidden",
+  },
+  cardPressed: {
+    opacity: 0.92,
+    transform: [{ scale: 0.995 }],
+  },
+
+  legacyCardInfo: { display: "none" },
+  legacyCardActions: { display: "none" },
+
+  tenantCardHeader: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md,
-    minHeight: 166,
-    ...shadow.card,
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 9,
   },
+  tenantAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 6,
+    backgroundColor: colors.ink,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 9,
+  },
+  tenantAvatarText: { color: colors.white, fontSize: 12, fontFamily: fontFamily.bold },
+  tenantHeaderText: { flex: 1, minWidth: 0 },
+  tenantDetails: { paddingHorizontal: 14, paddingBottom: 9, gap: 9 },
+  tenantDetailRow: { flexDirection: "row", alignItems: "center", minHeight: 15 },
+  tenantDetailLabel: { width: 84, marginLeft: 7, fontSize: 8, fontFamily: fontFamily.medium, color: colors.ink },
+  tenantDetailValue: { fontSize: 10, fontFamily: fontFamily.medium, color: colors.ink },
+  contactValueRow: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", justifyContent: "flex-start", gap: 4 },
+  legacyContactValueRow: { marginTop: spacing.xs + 1 },
+  contactVisibilityButton: { width: 24, height: 28, alignItems: "center", justifyContent: "center" },
+  locationValue: { flexDirection: "row", alignItems: "center", gap: 5 },
+  spaceBadge: {
+    fontSize: 8,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
+    backgroundColor: "#DDF8EE",
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  registryFooter: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#FAFAF8",
+    borderTopWidth: 1,
+    borderTopColor: "#F1F1EE",
+    paddingHorizontal: 12,
+  },
+  registryFooterText: { fontSize: 8, fontFamily: fontFamily.medium, color: colors.textMuted },
 
   cardInfo: {
     flex: 1,
@@ -528,10 +553,10 @@ const styles = StyleSheet.create({
 
   cardName: {
     minWidth: 0,
-    fontSize: fontSize.md,
+    fontSize: 13,
     fontFamily: fontFamily.bold,
     color: colors.ink,
-    lineHeight: 24,
+    lineHeight: 16,
   },
 
   cardEmailRow: {
@@ -562,7 +587,6 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     fontFamily: fontFamily.regular,
     color: colors.textMuted,
-    marginTop: spacing.xs + 1,
     lineHeight: 19,
   },
 
@@ -574,26 +598,19 @@ const styles = StyleSheet.create({
     position: "relative",
   },
 
-  floatingStatus: {
-    position: "absolute",
-    bottom: 64,
-    right: -5,
-  },
-
   // ── Archive button ────────────────────────────────────────────────────────────
 
   archiveBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 6,
+    gap: 5,
     backgroundColor: colors.errorSoft,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm + 2,
-    borderWidth: 1,
-    borderColor: colors.error,
-    minHeight: 44,
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderWidth: 0,
+    minHeight: 34,
   },
 
   archiveBtnPressed: {
@@ -603,7 +620,7 @@ const styles = StyleSheet.create({
 
   archiveBtnText: {
     color: colors.error,
-    fontSize: fontSize.sm,
+    fontSize: 9,
     fontFamily: fontFamily.semibold,
     textAlign: "center",
   },

@@ -21,13 +21,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useRef, useEffect } from "react";
 import { router } from "expo-router";
 import { Mail, Lock, Eye, EyeOff, AlertCircle, Check } from "lucide-react-native";
-
-import { loginUser } from "../shared/services/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
+
+import { loginUserWithAccountLockout } from "../shared/services/auth";
 import { firebaseApp } from "../shared/firebaseConfig";
 import {
-  checkLockout,
-  recordFailedAttempt,
   resetLockout,
   formatLockoutRemaining,
 } from "../shared/services/loginLockout";
@@ -40,13 +38,14 @@ const CREDENTIAL_ERROR_CODES = new Set([
   "auth/user-not-found",
   "auth/invalid-email",
 ]);
+const cloudFunctions = getFunctions(firebaseApp);
 
 function loginServiceMessage(err: any): string | null {
   const code = String(err?.code ?? "");
   const message = String(err?.message ?? "").toLowerCase();
   if (CREDENTIAL_ERROR_CODES.has(code)) return null;
-  if (code === "functions/unauthenticated" || message.includes("app check") || message.includes("verification")) {
-    return "App verification failed. Please update the app and try again.";
+  if (message.includes("app check") || message.includes("verification")) {
+    return "Unable to sign in. Please try again later.";
   }
   if (
     code === "auth/network-request-failed" ||
@@ -57,12 +56,10 @@ function loginServiceMessage(err: any): string | null {
     message.includes("timeout") ||
     message.includes("failed to fetch")
   ) {
-    return "No internet connection. Check your connection and try again.";
+    return "No internet connection. Please try again.";
   }
-  return "Login service is temporarily unavailable. Please try again.";
+  return "Unable to sign in. Please try again later.";
 }
-
-const cloudFunctions = getFunctions(firebaseApp);
 
 export default function Login() {
   const insets = useSafeAreaInsets();
@@ -182,45 +179,47 @@ export default function Login() {
 
   const handleLogin = async () => {
     setError("");
-    const identifier = username.trim();
-    if (!identifier || !password.trim()) {
-      setError("Please enter your username and password.");
+    const identifier = username.trim().toLowerCase();
+    if (!identifier && !password.trim()) {
+      setError("Enter your username and password.");
       return;
     }
-
-    const existingLockout = await checkLockout(identifier);
-    if (existingLockout) {
-      setLockoutUntil(existingLockout);
+    if (!identifier) {
+      setError("Username is required.");
+      return;
+    }
+    if (!password.trim()) {
+      setError("Password is required.");
+      return;
+    }
+    if (!/^[A-Za-z0-9._-]{3,40}$/.test(identifier)) {
+      setError("Invalid username or password.");
       return;
     }
 
     setLoading(true);
     try {
-      // Resolve email: try username lookup first, then treat input as direct
-      // email. Server-side (Cloud Function) instead of a direct client-side
-      // `users` read -- that read required `users` to stay publicly
-      // queryable, which leaked every user's name/email/phone to anyone.
-      let email = identifier;
-      const resolveEmail = httpsCallable(cloudFunctions, "resolveLoginEmail");
-      const resolved: any = await resolveEmail({ identifier, role: "owner" });
-      if (resolved.data?.email) {
-        email = resolved.data.email;
-      }
-      // loginUser will throw if credentials are wrong
-      const result = await loginUser(email, password);
-      // Verify the signed-in account is actually an owner
-      const { getUserRole } = await import("../shared/services/userServices");
-      const role = await getUserRole(result.uid);
-      if (role !== "owner") {
-        const { logoutUser } = await import("../shared/services/auth");
-        await logoutUser();
-        setError("Access denied. Owner account required.");
-        return;
-      }
+      await loginUserWithAccountLockout(identifier, password, "owner");
       await resetLockout(identifier);
       await setRememberMe(rememberMe);
       router.replace("/welcome");
     } catch (err: any) {
+      const details = err?.details ?? {};
+      if (err?.code === "functions/resource-exhausted") {
+        if (Number(details.lockoutUntil) > Date.now()) setLockoutUntil(Number(details.lockoutUntil));
+        setError("Too many failed attempts. Please try again later.");
+        if (Number(details.lockoutLevel) >= 3) Alert.alert("Forgot your password?", "Use Forgot Password to recover the account.");
+        return;
+      }
+      if (err?.code === "functions/unauthenticated") {
+        const remainingAttempts = Number(details.remainingAttempts ?? 0);
+        const newLockout = Number(details.lockoutUntil ?? 0);
+        if (newLockout > Date.now()) setLockoutUntil(newLockout);
+        else if (remainingAttempts > 0) {
+          setError(`Invalid username or password.\n${remainingAttempts} attempt${remainingAttempts === 1 ? "" : "s"} remaining.`);
+        } else setError("Too many failed attempts. Please try again later.");
+        return;
+      }
       // Network/infra failures aren't proof of a wrong password -- counting
       // them against the lockout would lock out someone with a bad
       // connection just as fast as someone actually guessing wrong.
@@ -230,21 +229,7 @@ export default function Login() {
         return;
       }
 
-      const { lockoutUntil: newLockout, remainingAttempts, lockoutLevel } =
-        await recordFailedAttempt(identifier);
-      if (newLockout) {
-        setLockoutUntil(newLockout);
-        if (lockoutLevel >= 3) {
-          Alert.alert(
-            "Forgot your password?",
-            "It seems that you really forgot the password, please click the forgot password and answer your 3 security questions to recover it.",
-          );
-        }
-      } else {
-        setError(
-          `Invalid username or password. ${remainingAttempts} attempt${remainingAttempts === 1 ? "" : "s"} remaining.`,
-        );
-      }
+      setError("Unable to sign in. Please try again later.");
     } finally {
       setLoading(false);
     }
@@ -305,9 +290,9 @@ export default function Login() {
               <Text style={styles.subheading}>Sign in to monitor your market</Text>
             </Animated.View>
 
-            {/* Email field */}
+            {/* Username field */}
             <Animated.View style={[{ marginTop: spacing.xxl }, slideIn(emailAnim)]}>
-              <Text style={styles.fieldLabel}>Email</Text>
+              <Text style={styles.fieldLabel}>Username</Text>
               <View style={styles.inputWrapper}>
                 <Mail size={17} color={colors.emeraldBright} style={styles.leftIcon} />
                 <TextInput
@@ -315,17 +300,14 @@ export default function Login() {
                   style={[styles.textInput, emailFocused && styles.textInputFocused]}
                   value={username}
                   onChangeText={(t) => { setUsername(t); setError(""); }}
-                  placeholder="username@rentwise.app"
+                  placeholder="Enter your username"
                   placeholderTextColor={colors.textMuted}
                   autoCapitalize="none"
                   autoCorrect={false}
-                  keyboardType="email-address"
+                  keyboardType="default"
                   editable={!loading && !lockoutUntil}
                   onFocus={() => { setEmailFocused(true); scrollToRevealForm(); }}
-                  onBlur={() => {
-                    setEmailFocused(false);
-                    checkLockout(username.trim()).then((u) => { if (u) setLockoutUntil(u); });
-                  }}
+                  onBlur={() => setEmailFocused(false)}
                 />
               </View>
             </Animated.View>
@@ -363,14 +345,15 @@ export default function Login() {
 
               {/* Remember me */}
               <Pressable
-                style={styles.rememberMeRow}
+                style={[styles.rememberMeRow, loading && styles.rememberMeRowDisabled]}
                 onPress={() => setRememberMeChecked((v) => !v)}
+                disabled={loading}
                 hitSlop={8}
               >
-                <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
+                <View style={[styles.checkbox, loading && styles.checkboxDisabled, rememberMe && styles.checkboxChecked]}>
                   {rememberMe && <Check size={13} color={colors.white} />}
                 </View>
-                <Text style={styles.rememberMeText}>Remember me</Text>
+                <Text style={[styles.rememberMeText, loading && styles.rememberMeTextDisabled]}>Remember me</Text>
               </Pressable>
             </Animated.View>
 
@@ -379,7 +362,7 @@ export default function Login() {
               <View style={styles.errorBanner}>
                 <AlertCircle size={16} color={colors.error} style={{ marginRight: 8 }} />
                 <Text style={styles.errorText}>
-                  Too many failed attempts. Try again in {formatLockoutRemaining(lockoutUntil)}.
+                  Too many failed attempts. Please try again later.
                 </Text>
               </View>
             ) : !!error && (
@@ -508,6 +491,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: spacing.md,
   },
+  rememberMeRowDisabled: {
+    opacity: 0.5,
+  },
   checkbox: {
     width: 20,
     height: 20,
@@ -523,10 +509,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.emerald,
     borderColor: colors.emerald,
   },
+  checkboxDisabled: {
+    backgroundColor: colors.mist,
+    borderColor: colors.borderStrong,
+  },
   rememberMeText: {
     fontSize: fontSize.sm,
     color: colors.ink,
     fontFamily: fontFamily.medium,
+  },
+  rememberMeTextDisabled: {
+    color: colors.textMuted,
   },
 
   inputWrapper: {

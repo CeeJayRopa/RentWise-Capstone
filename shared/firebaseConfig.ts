@@ -63,9 +63,18 @@ try {
     } = require("@react-native-firebase/app-check");
 
     const rnfbProvider = new ReactNativeFirebaseAppCheckProvider();
+    const developmentDebugToken = __DEV__
+      ? process.env.EXPO_PUBLIC_FIREBASE_APP_CHECK_DEBUG_TOKEN
+      : undefined;
     rnfbProvider.configure({
-      android: { provider: __DEV__ ? "debug" : "playIntegrity" },
-      apple: { provider: __DEV__ ? "debug" : "appAttestWithDeviceCheckFallback" },
+      android: {
+        provider: __DEV__ ? "debug" : "playIntegrity",
+        debugToken: developmentDebugToken,
+      },
+      apple: {
+        provider: __DEV__ ? "debug" : "appAttestWithDeviceCheckFallback",
+        debugToken: developmentDebugToken,
+      },
       isTokenAutoRefreshEnabled: true,
     });
     // Activates the native attestation session. Fire-and-forget at module

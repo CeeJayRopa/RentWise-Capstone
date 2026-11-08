@@ -21,16 +21,13 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useRef, useEffect } from "react";
 import { router } from "expo-router";
 import { Mail, Lock, Eye, EyeOff, Check, X } from "lucide-react-native";
-import { loginUser, logoutUser } from "../services/authService";
+import { loginUserWithAccountLockout } from "../shared/services/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { firebaseApp } from "../shared/firebaseConfig";
 import {
-  checkLockout,
-  recordFailedAttempt,
   resetLockout,
   formatLockoutRemaining,
 } from "../shared/services/loginLockout";
-import { getUserRole } from "../shared/services/userServices";
 import { setRememberMe } from "../shared/services/rememberMe";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
@@ -45,8 +42,8 @@ function loginServiceMessage(err: any): string | null {
   const code = String(err?.code ?? "");
   const message = String(err?.message ?? "").toLowerCase();
   if (CREDENTIAL_ERROR_CODES.has(code)) return null;
-  if (code === "functions/unauthenticated" || message.includes("app check") || message.includes("verification")) {
-    return "App verification failed. Please update the app and try again.";
+  if (message.includes("app check") || message.includes("verification")) {
+    return "Unable to sign in. Please try again later.";
   }
   if (
     code === "auth/network-request-failed" ||
@@ -57,12 +54,28 @@ function loginServiceMessage(err: any): string | null {
     message.includes("timeout") ||
     message.includes("failed to fetch")
   ) {
-    return "No internet connection. Check your connection and try again.";
+    return "No internet connection. Please try again.";
   }
-  return "Login service is temporarily unavailable. Please try again.";
+  return "Unable to sign in. Please try again later.";
 }
 
 const cloudFunctions = getFunctions(firebaseApp);
+
+type TenantLoginResolution = {
+  email: string | null;
+  accountStatus: string | null;
+  accountType: "tenant" | "other-role" | "unregistered" | string;
+};
+
+async function resolveTenantLogin(identifier: string): Promise<TenantLoginResolution> {
+  const resolveLoginEmail = httpsCallable(cloudFunctions, "resolveLoginEmail");
+  const result = (await resolveLoginEmail({ identifier, role: "tenant" })).data as Partial<TenantLoginResolution>;
+  return {
+    email: result.email ?? null,
+    accountStatus: result.accountStatus ?? null,
+    accountType: result.accountType ?? (result.email ? "tenant" : "unregistered"),
+  };
+}
 
 export default function Login() {
   const insets = useSafeAreaInsets();
@@ -85,6 +98,7 @@ export default function Login() {
   const [fpEmail, setFpEmail] = useState("");
   const [fpEmailFocused, setFpEmailFocused] = useState(false);
   const [fpError, setFpError] = useState<string | null>(null);
+  const [fpSubmitting, setFpSubmitting] = useState(false);
 
   const pulseScale = useRef(new Animated.Value(0.92)).current;
   const pulseOpacity = useRef(new Animated.Value(0.6)).current;
@@ -219,76 +233,102 @@ export default function Login() {
   });
 
   function closeForgotModal() {
+    if (fpSubmitting) return;
     setShowForgotModal(false);
     setFpEmail("");
     setFpEmailFocused(false);
     setFpError(null);
   }
 
-  // Resolves the username and hands off to the loading screen, which does
-  // the real work: verify the account + text the SMS OTP, then the code-entry
-  // screen. The Firebase reset code is only minted after that OTP is verified
-  // server-side -- see sendResetOtp/verifyResetOtp in functions/src/index.ts
-  // and OTP_RESET_PLAN.md.
-  function handleForgotSubmit() {
-    const trimmed = fpEmail.trim().toLowerCase();
-    if (!/^[A-Za-z0-9._-]{3,40}$/.test(trimmed)) {
-      setFpError("Please enter a valid username.");
+  // Keep the request on this modal so the pressed Continue button owns the
+  // loading state. Only leave this screen after the server has found an
+  // active tenant account and successfully sent its SMS code.
+  async function handleForgotSubmit() {
+    const trimmed = fpEmail.trim().toUpperCase();
+    if (!/^RW[A-Z0-9._-]{2,38}$/.test(trimmed)) {
+      setFpError("Enter your username beginning with RW (for example, RWJAYCEE).");
       return;
     }
     setFpError(null);
-    void (async () => {
-      try {
-        const resolveLoginEmail = httpsCallable(cloudFunctions, "resolveLoginEmail");
-        const resolved = (await resolveLoginEmail({ identifier: trimmed, role: "tenant" })).data as { email?: string | null };
-        if (!resolved.email) {
-          setFpError("We couldn't find that username. Please check it and try again.");
-          return;
-        }
-        closeForgotModal();
-        router.push({ pathname: "/reset-sending", params: { email: resolved.email } });
-      } catch {
-        setFpError("We couldn't start the reset. Please try again.");
+    setFpSubmitting(true);
+    try {
+      const sendResetOtp = httpsCallable(cloudFunctions, "sendResetOtp");
+      const result = (await sendResetOtp({ identifier: trimmed })).data as {
+        status?: "sent" | "manual";
+        phoneHint?: string;
+        username?: string;
+      };
+
+      if (result.status !== "sent") {
+        setFpError(
+          "This account cannot receive an SMS reset code. Please request help from the administrator.",
+        );
+        return;
       }
-    })();
+
+      setShowForgotModal(false);
+      router.push({
+        pathname: "/reset-otp",
+        params: {
+          identifier: result.username ?? trimmed,
+          phoneHint: result.phoneHint ?? "",
+        },
+      });
+    } catch (err: any) {
+      console.log("[login] sendResetOtp error:", err);
+      setFpError(
+        err?.code === "functions/resource-exhausted"
+          ? err?.message || "Please wait before requesting another reset code."
+          : err?.code === "functions/unavailable"
+            ? "We couldn't send the reset code right now. Please try again in a few minutes."
+            : "We couldn't start the password reset. Please try again.",
+      );
+    } finally {
+      setFpSubmitting(false);
+    }
   }
 
   async function handleLogin() {
     setErrorMsg("");
-    const identifier = email.trim().toLowerCase();
-    if (!identifier || !password.trim()) {
-      setErrorMsg("Please enter your username and password.");
+    const identifier = email.trim().toUpperCase();
+    if (!identifier && !password.trim()) {
+      setErrorMsg("Enter your username and password.");
       return;
     }
-    if (!/^[A-Za-z0-9._-]{3,40}$/.test(identifier)) {
-      setErrorMsg("Enter a valid username.");
+    if (!identifier) {
+      setErrorMsg("Username is required.");
+      return;
+    }
+    if (!password.trim()) {
+      setErrorMsg("Password is required.");
+      return;
+    }
+    if (!/^RW[A-Z0-9._-]{2,38}$/.test(identifier)) {
+      setErrorMsg("Invalid username or password.");
       return;
     }
 
     setLoading(true);
     try {
-      const existingLockout = await checkLockout(identifier);
-      if (existingLockout) {
-        setLockoutUntil(existingLockout);
-        return;
-      }
-
-      const resolveLoginEmail = httpsCallable(cloudFunctions, "resolveLoginEmail");
-      const resolved = (await resolveLoginEmail({ identifier, role: "tenant" })).data as { email?: string | null };
-      if (!resolved.email) throw { code: "auth/invalid-credential" };
-      const user = await loginUser(resolved.email, password);
-
-      const role = await getUserRole(user.uid);
-      if (role !== "tenant") {
-        await logoutUser();
-        setErrorMsg("Access denied. Tenant account required.");
-        return;
-      }
+      await loginUserWithAccountLockout(identifier, password, "tenant");
 
       await resetLockout(identifier);
       await setRememberMe(rememberMe);
       router.replace({ pathname: "/welcome" });
     } catch (err: any) {
+      const details = err?.details ?? {};
+      if (err?.code === "functions/resource-exhausted") {
+        if (Number(details.lockoutUntil) > Date.now()) setLockoutUntil(Number(details.lockoutUntil));
+        setErrorMsg("Too many failed attempts. Please try again later.");
+        if (Number(details.lockoutLevel) >= 3) {
+          Alert.alert("Forgot your password?", "Use Forgot Password to recover the account or request help from the administrator.");
+        }
+        return;
+      }
+      if (err?.code === "functions/permission-denied" && details.reason === "inactive-tenant") {
+        setErrorMsg("This account is inactive. Contact the administrator.");
+        return;
+      }
       // Network/infra failures aren't proof of a wrong password -- counting
       // them against the lockout would lock out someone with a bad
       // connection just as fast as someone actually guessing wrong.
@@ -298,21 +338,18 @@ export default function Login() {
         return;
       }
 
-      const { lockoutUntil: newLockout, remainingAttempts, lockoutLevel } =
-        await recordFailedAttempt(identifier);
-      if (newLockout) {
-        setLockoutUntil(newLockout);
-        if (lockoutLevel >= 3) {
-          Alert.alert(
-            "Forgot your password?",
-            "It seems that you really forgot the password, please click the forgot password to request for a password reset to the admin.",
+      if (err?.code === "functions/unauthenticated") {
+        const remainingAttempts = Number(details.remainingAttempts ?? 0);
+        const newLockout = Number(details.lockoutUntil ?? 0);
+        if (newLockout > Date.now()) setLockoutUntil(newLockout);
+        else if (remainingAttempts > 0) {
+          setErrorMsg(
+            `Invalid username or password.\n${remainingAttempts} attempt${remainingAttempts === 1 ? "" : "s"} remaining.`,
           );
-        }
-      } else {
-        setErrorMsg(
-          `Incorrect username or password. ${remainingAttempts} attempt${remainingAttempts === 1 ? "" : "s"} remaining.`,
-        );
+        } else setErrorMsg("Too many failed attempts. Please try again later.");
+        return;
       }
+      setErrorMsg("Unable to sign in. Please try again later.");
     } finally {
       setLoading(false);
     }
@@ -387,10 +424,7 @@ export default function Login() {
                   keyboardType="default"
                   editable={!lockoutUntil}
                   onFocus={() => { setEmailFocused(true); scrollToRevealForm(); }}
-                  onBlur={() => {
-                    setEmailFocused(false);
-                    checkLockout(email.trim().toLowerCase()).then((u) => { if (u) setLockoutUntil(u); });
-                  }}
+                  onBlur={() => setEmailFocused(false)}
                 />
               </View>
             </Animated.View>
@@ -451,7 +485,7 @@ export default function Login() {
             {lockoutUntil ? (
               <View style={styles.errorBanner}>
                 <Text style={styles.errorText}>
-                  Too many failed attempts. Try again in {formatLockoutRemaining(lockoutUntil)}.
+                  Too many failed attempts. Please try again later.
                 </Text>
               </View>
             ) : errorMsg ? (
@@ -503,7 +537,7 @@ export default function Login() {
           <View style={fp.overlay}>
             <View style={fp.card}>
               {/* Close button */}
-              <Pressable style={fp.closeBtn} onPress={closeForgotModal} hitSlop={8}>
+              <Pressable style={fp.closeBtn} onPress={closeForgotModal} disabled={fpSubmitting} hitSlop={8}>
                 <X size={16} color={colors.textSecondary} />
               </Pressable>
 
@@ -531,6 +565,9 @@ export default function Login() {
                     autoCapitalize="none"
                     onFocus={() => setFpEmailFocused(true)}
                     onBlur={() => setFpEmailFocused(false)}
+                    editable={!fpSubmitting}
+                    onSubmitEditing={handleForgotSubmit}
+                    returnKeyType="send"
                   />
                 </View>
                 {fpError ? <Text style={fp.errorText}>{fpError}</Text> : null}
@@ -540,13 +577,19 @@ export default function Login() {
               <Pressable
                 style={({ pressed }) => [
                   fp.submitBtn,
-                  pressed && fp.submitBtnPressed,
+                  fpSubmitting && { opacity: 0.65 },
+                  pressed && !fpSubmitting && fp.submitBtnPressed,
                 ]}
                 onPress={handleForgotSubmit}
+                disabled={fpSubmitting}
               >
-                {({ pressed }) => (
-                  <Text style={[fp.submitText, pressed && fp.submitTextPressed]}>Continue</Text>
-                )}
+                {({ pressed }) =>
+                  fpSubmitting ? (
+                    <ActivityIndicator size="small" color={colors.white} />
+                  ) : (
+                    <Text style={[fp.submitText, pressed && fp.submitTextPressed]}>Continue</Text>
+                  )
+                }
               </Pressable>
             </View>
           </View>

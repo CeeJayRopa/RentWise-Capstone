@@ -27,29 +27,31 @@ import {
 } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, HelpCircle, Eye, EyeOff, ChevronDown, CheckCircle2, LogOut } from "lucide-react-native";
+import { ArrowLeft, HelpCircle, Eye, EyeOff, ChevronDown, CheckCircle2, LogOut, BadgeCheck, Contact, Pencil, LockKeyhole, KeyRound } from "lucide-react-native";
 
 import { auth, logoutUser } from "../shared/services/auth";
 import { clearLocalCache } from "../shared/services/localCache";
 import { setRememberMe } from "../shared/services/rememberMe";
 import { firebaseApp } from "../shared/firebaseConfig";
-import { getUserById, updateUserProfile, isUsernameTaken } from "../shared/services/userServices";
+import { getUserById } from "../shared/services/userServices";
 import HelpTour, { HelpStep } from "./components/HelpTour";
+import HelpSupportModal from "./components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
-import { Avatar, Card } from "../shared/components/ui";
+import { Card } from "../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
+import { RENTWISE_OWNER_USERNAME } from "../../shared/utils/username";
 
 const cloudFunctions = getFunctions(firebaseApp);
 
 const SECURITY_QUESTIONS = [
-  "When did Ka Domeng start?",
-  "What is your mother's maiden name?",
-  "What was the name of your elementary school?",
-  "What city were you born in?",
-  "What was the make of your first vehicle?",
-  "What is your favorite childhood nickname?",
-  "What was the name of the admin of the market?",
-  "What is the name of your best friend growing up?",
+  "What year did you start managing the market?",
+  "What was the original name of the market?",
+  "What was the first stall number you managed?",
+  "What product category did your first tenant sell?",
+  "What was the name of your first market administrator?",
+  "What month did the market begin operating?",
+  "Which market section was opened first?",
+  "What landmark is closest to the market?",
 ];
 
 export default function OwnerProfile() {
@@ -59,10 +61,11 @@ export default function OwnerProfile() {
   const [saving, setSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [firstName, setFirstName] = useState("");
+  const [middleName, setMiddleName] = useState("");
   const [lastName, setLastName] = useState("");
   const [username, setUsername] = useState("");
   const [contactNo, setContactNo] = useState("");
-  const [original, setOriginal] = useState({ firstName: "", lastName: "", username: "", contactNo: "" });
+  const [original, setOriginal] = useState({ firstName: "", middleName: "", lastName: "", username: "", contactNo: "" });
   const [firstNameError, setFirstNameError] = useState("");
   const [lastNameError, setLastNameError] = useState("");
   const [usernameError, setUsernameError] = useState("");
@@ -82,11 +85,14 @@ export default function OwnerProfile() {
   const [showPwConfirm, setShowPwConfirm] = useState(false);
 
   const [secEditing, setSecEditing] = useState(false);
-  const [secQuestions, setSecQuestions] = useState<[string, string, string]>(["", "", ""]);
-  const [secAnswers, setSecAnswers] = useState<[string, string, string]>(["", "", ""]);
+  const [secQuestions, setSecQuestions] = useState<string[]>(["", "", "", "", ""]);
+  const [secAnswers, setSecAnswers] = useState<string[]>(["", "", "", "", ""]);
+  const [showSecAnswers, setShowSecAnswers] = useState<boolean[]>([false, false, false, false, false]);
+  const [savedSecQuestions, setSavedSecQuestions] = useState<string[]>([]);
+  const [secQuestionCount, setSecQuestionCount] = useState<number | null>(null);
   const [secCurrentPassword, setSecCurrentPassword] = useState("");
   const [showSecCurrentPass, setShowSecCurrentPass] = useState(false);
-  const [pickerSlot, setPickerSlot] = useState<0 | 1 | 2 | null>(null);
+  const [pickerSlot, setPickerSlot] = useState<number | null>(null);
   const [savingSecQ, setSavingSecQ] = useState(false);
 
   const [focusedField, setFocusedField] = useState<string | null>(null);
@@ -96,6 +102,7 @@ export default function OwnerProfile() {
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
   const fieldsRef = useRef<View>(null);
   const editBtnRef = useRef<View>(null);
   const pwSectionRef = useRef<View>(null);
@@ -144,7 +151,7 @@ export default function OwnerProfile() {
     { key: "fields", ref: fieldsRef, title: "Your details", description: "Your last name, first name, login username, and contact number.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(fieldsRef) },
     { key: "edit", ref: editBtnRef, title: "Edit Profile", description: "Unlocks your name, username, and contact number so you can update them.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(editBtnRef) },
     { key: "password", ref: pwSectionRef, title: "Change password", description: "Verify your current password, then set a new one — 8-12 characters with an uppercase letter, a number, and a special character.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(pwSectionRef) },
-    { key: "secquestions", ref: secQSectionRef, title: "Security questions", description: "Set 3 recovery questions so you can get back into your account if you ever forget your password.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(secQSectionRef) },
+    { key: "secquestions", ref: secQSectionRef, title: "Security questions", description: "Set 5 recovery questions so you can get back into your account if you ever forget your password.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(secQSectionRef) },
   ];
 
   useEffect(() => {
@@ -175,14 +182,26 @@ export default function OwnerProfile() {
       const data = await getUserById(uid);
       if (data) {
         const fn = data.firstName ?? "";
+        const mn = data.middleName ?? "";
         const ln = data.lastName ?? "";
-        const un = data.username ?? "";
+        const un = RENTWISE_OWNER_USERNAME;
         const cn = data.contactNo ?? "";
         setFirstName(fn);
+        setMiddleName(mn);
         setLastName(ln);
         setUsername(un);
         setContactNo(cn);
-        setOriginal({ firstName: fn, lastName: ln, username: un, contactNo: cn });
+        setOriginal({ firstName: fn, middleName: mn, lastName: ln, username: un, contactNo: cn });
+      }
+      try {
+        const getRecoveryStatus = httpsCallable(cloudFunctions, "getOwnerRecoveryQuestionStatus");
+        const status = (await getRecoveryStatus()).data as {questionCount?: number; questions?: string[]};
+        const savedQuestions = Array.isArray(status.questions) ? status.questions.slice(0, 5) : [];
+        setSavedSecQuestions(savedQuestions);
+        setSecQuestionCount(Number(status.questionCount ?? savedQuestions.length));
+      } catch (recoveryError) {
+        console.error("Failed to load recovery-question status", recoveryError);
+        setSecQuestionCount(null);
       }
     } catch (err) {
       console.error(err);
@@ -233,28 +252,29 @@ export default function OwnerProfile() {
     if (!user) return;
 
     const fn = firstName.trim();
+    const mn = middleName.trim();
     const ln = lastName.trim();
-    const un = username.trim();
+    const un = RENTWISE_OWNER_USERNAME;
     const cn = contactNo.trim();
 
     if (!validateProfileFields(fn, ln, un, cn)) return;
 
     setSaving(true);
     try {
-      if (un !== original.username) {
-        const taken = await isUsernameTaken(un, "owner", user.uid);
-        if (taken) {
-          setUsernameError("This username is already in use.");
-          return;
-        }
-      }
-      await updateUserProfile(user.uid, { firstName: fn, lastName: ln, username: un, contactNo: cn });
-      setOriginal({ firstName: fn, lastName: ln, username: un, contactNo: cn });
+      const updateProfile = httpsCallable(cloudFunctions, "ownerUpdateOwnProfile");
+      await updateProfile({ firstName: fn, middleName: mn, lastName: ln, contactNo: cn });
+      setUsername(un);
+      setOriginal({ firstName: fn, middleName: mn, lastName: ln, username: un, contactNo: cn });
       setIsEditing(false);
       showToast("Profile saved!");
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      Alert.alert("Error", "Failed to update profile.");
+      Alert.alert(
+        "Error",
+        err?.code === "functions/unauthenticated"
+          ? "Please sign out and sign in again before changing your recovery number."
+          : "Failed to update profile.",
+      );
     } finally {
       setSaving(false);
     }
@@ -262,6 +282,7 @@ export default function OwnerProfile() {
 
   const handleCancelEditProfile = () => {
     setFirstName(original.firstName);
+    setMiddleName(original.middleName);
     setLastName(original.lastName);
     setUsername(original.username);
     setContactNo(original.contactNo);
@@ -276,8 +297,9 @@ export default function OwnerProfile() {
   }
 
   function handleCancelSecQuestionsEdit() {
-    setSecQuestions(["", "", ""]);
-    setSecAnswers(["", "", ""]);
+    setSecQuestions(["", "", "", "", ""]);
+    setSecAnswers(["", "", "", "", ""]);
+    setShowSecAnswers([false, false, false, false, false]);
     setSecCurrentPassword("");
     setPickerSlot(null);
     setSecEditing(false);
@@ -288,6 +310,7 @@ export default function OwnerProfile() {
   function handleStartEditProfile() {
     handleCancelPasswordEdit();
     handleCancelSecQuestionsEdit();
+    setUsername(RENTWISE_OWNER_USERNAME);
     setIsEditing(true);
   }
 
@@ -300,17 +323,27 @@ export default function OwnerProfile() {
   function handleStartEditSecQuestions() {
     handleCancelEditProfile();
     handleCancelPasswordEdit();
+    setSecQuestions([...savedSecQuestions, "", "", "", "", ""].slice(0, 5));
+    setSecAnswers(["", "", "", "", ""]);
+    setShowSecAnswers([false, false, false, false, false]);
     setSecEditing(true);
   }
 
   const hasChanges =
     firstName !== original.firstName ||
+    middleName !== original.middleName ||
     lastName !== original.lastName ||
     username !== original.username ||
     contactNo !== original.contactNo;
 
   const hasEmptyField =
     !firstName.trim() || !lastName.trim() || !username.trim() || !contactNo.trim();
+
+  const passwordHasCapital = /[A-Z]/.test(newPassword);
+  const passwordHasNumber = /\d/.test(newPassword);
+  const passwordHasSpecial = /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]/.test(newPassword);
+  const passwordStrong = newPassword.length >= 8 && passwordHasCapital && passwordHasNumber && passwordHasSpecial;
+  const passwordsMatch = confirmPassword.length > 0 && confirmPassword === newPassword;
 
   const handleChangePassword = async () => {
     const pwRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
@@ -352,6 +385,8 @@ export default function OwnerProfile() {
       // on a stale session.
       await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, oldPassword));
       await updatePassword(user, newPassword);
+      const finalizePassword = httpsCallable(cloudFunctions, "ownerFinalizePasswordChange");
+      await finalizePassword();
       setOldPassword("");
       setNewPassword("");
       setConfirmPassword("");
@@ -376,11 +411,11 @@ export default function OwnerProfile() {
 
   const handleSaveSecurityQuestions = async () => {
     if (!secSlotsFilled) {
-      Alert.alert("Incomplete", "Please pick all 3 questions and answer each one.");
+      Alert.alert("Incomplete", "Please pick all 5 questions and answer each one.");
       return;
     }
     if (secQuestionsDuplicated) {
-      Alert.alert("Duplicate Questions", "Please choose 3 different questions.");
+      Alert.alert("Duplicate Questions", "Please choose 5 different questions.");
       return;
     }
     if (!secCurrentPassword) {
@@ -398,10 +433,15 @@ export default function OwnerProfile() {
         user,
         EmailAuthProvider.credential(user.email, secCurrentPassword),
       );
+      // Ensure the callable receives the newly reauthenticated ID token and
+      // its refreshed auth_time instead of a cached pre-verification token.
+      await user.getIdToken(true);
       const saveFn = httpsCallable(cloudFunctions, "ownerSaveSecurityQuestions");
       await saveFn({
         securityQuestions: secQuestions.map((q, i) => ({ question: q, answer: secAnswers[i] })),
       });
+      setSavedSecQuestions([...secQuestions]);
+      setSecQuestionCount(5);
       setSecCurrentPassword("");
       setSecEditing(false);
       showToast("Security questions saved!");
@@ -455,7 +495,7 @@ export default function OwnerProfile() {
             <ArrowLeft size={22} color={colors.emeraldSoft} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>My Account</Text>
-          <TouchableOpacity style={styles.headerBtn} onPress={() => setTourVisible(true)} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.headerBtn} onPress={() => setHelpSupportVisible(true)} activeOpacity={0.7}>
             <HelpCircle size={22} color={colors.emeraldSoft} />
           </TouchableOpacity>
         </View>
@@ -475,16 +515,29 @@ export default function OwnerProfile() {
         {/* IDENTITY CARD */}
         <Card style={styles.identityCard}>
           <View style={styles.identityInner}>
-            <Avatar name={`${firstName} ${lastName}`} size={90} />
-            <Text style={styles.identityName}>{firstName} {lastName}</Text>
-            <Text style={styles.identityRole}>Property Owner</Text>
+            <View style={styles.ownerAvatar}>
+              <Text style={styles.ownerAvatarText}>{`${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase()}</Text>
+            </View>
+            <View style={styles.identityCopy}>
+              <Text style={styles.identityName} numberOfLines={1}>{[firstName, middleName, lastName].filter(Boolean).join(" ")}</Text>
+              <View style={styles.identityRoleRow}>
+                <BadgeCheck size={15} color={colors.emerald} />
+                <Text style={styles.identityRole}>Market Owner</Text>
+              </View>
+            </View>
           </View>
         </Card>
 
         {/* FIELDS CARD */}
         <View ref={fieldsRef} collapsable={false} style={{ width: "100%" }}>
-        <Card style={styles.fieldsCard}>
-          <Text style={styles.fieldLabel}>Last name</Text>
+        <View style={styles.personalHeading}>
+          <View style={styles.personalAccent} />
+          <Text style={styles.personalHeadingText}>Personal Information</Text>
+        </View>
+        <View style={styles.fieldsCard}>
+          <View style={styles.nameRow}>
+          <View style={styles.nameColumn}>
+          <Text style={styles.profileFieldLabel}>Last Name</Text>
           <TextInput
             style={[
               styles.input,
@@ -501,8 +554,10 @@ export default function OwnerProfile() {
             editable={isEditing}
           />
           {!!lastNameError && <Text style={styles.fieldError}>{lastNameError}</Text>}
+          </View>
 
-          <Text style={styles.fieldLabel}>First name</Text>
+          <View style={styles.nameColumn}>
+          <Text style={styles.profileFieldLabel}>First Name</Text>
           <TextInput
             style={[
               styles.input,
@@ -511,7 +566,11 @@ export default function OwnerProfile() {
               !!firstNameError && styles.inputErrorBorder,
             ]}
             value={firstName}
-            onChangeText={(t) => { setFirstName(t); if (firstNameError) setFirstNameError(""); }}
+            onChangeText={(t) => {
+              setFirstName(t);
+              setUsername(RENTWISE_OWNER_USERNAME);
+              if (firstNameError) setFirstNameError("");
+            }}
             placeholder="First name"
             placeholderTextColor={colors.textMuted}
             onFocus={() => { setFocusedField("firstName"); scrollFieldIntoView(fieldsRef); }}
@@ -519,8 +578,26 @@ export default function OwnerProfile() {
             editable={isEditing}
           />
           {!!firstNameError && <Text style={styles.fieldError}>{firstNameError}</Text>}
+          </View>
+          </View>
 
-          <Text style={styles.fieldLabel}>Username</Text>
+          <Text style={styles.profileFieldLabel}>Middle Name</Text>
+          <TextInput
+            style={[
+              styles.input,
+              focusedField === "middleName" && isEditing && styles.inputFocused,
+              !isEditing && styles.inputReadOnly,
+            ]}
+            value={middleName}
+            onChangeText={setMiddleName}
+            placeholder="Middle name (optional)"
+            placeholderTextColor={colors.textMuted}
+            onFocus={() => { setFocusedField("middleName"); scrollFieldIntoView(fieldsRef); }}
+            onBlur={() => setFocusedField(null)}
+            editable={isEditing}
+          />
+
+          <Text style={styles.profileFieldLabel}>Username</Text>
           <View
             style={[
               styles.rowField,
@@ -529,22 +606,21 @@ export default function OwnerProfile() {
               !!usernameError && styles.inputErrorBorder,
             ]}
           >
+            <Contact size={18} color={colors.emerald} style={styles.profileFieldIcon} />
             <TextInput
-              style={[styles.rowInput, !isEditing && styles.rowInputReadOnly]}
+              style={[styles.rowInput, styles.rowInputReadOnly]}
               value={username}
-              onChangeText={(t) => { setUsername(t); if (usernameError) setUsernameError(""); }}
               placeholder="username"
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               onFocus={() => { setFocusedField("username"); scrollFieldIntoView(fieldsRef); }}
               onBlur={() => setFocusedField(null)}
-              editable={isEditing}
+              editable={false}
             />
-            <Text style={styles.suffix}>@rentwise.app</Text>
           </View>
           {!!usernameError && <Text style={styles.fieldError}>{usernameError}</Text>}
 
-          <Text style={styles.fieldLabel}>Contact no.</Text>
+          <Text style={styles.profileFieldLabel}>Registered Mobile Number</Text>
           <View style={styles.phoneRow}>
             <View style={[styles.phonePrefix, !isEditing && styles.phonePrefixReadOnly]}>
               <Text style={styles.phonePrefixText}>+63</Text>
@@ -569,10 +645,11 @@ export default function OwnerProfile() {
                 onBlur={() => setFocusedField(null)}
                 editable={isEditing}
               />
+              {!isEditing && <CheckCircle2 size={19} color={colors.emerald} style={styles.phoneVerifiedIcon} />}
             </View>
           </View>
           {!!contactNoError && <Text style={styles.fieldError}>{contactNoError}</Text>}
-        </Card>
+        </View>
         </View>
 
         {/* Edit / Cancel + Save Button */}
@@ -614,7 +691,10 @@ export default function OwnerProfile() {
               onPress={handleStartEditProfile}
             >
               {({ pressed }) => (
-                <Text style={[styles.saveBtnText, pressed && styles.saveBtnTextPressed]}>Edit Profile</Text>
+                <View style={styles.editButtonContent}>
+                  <Pencil size={17} color={pressed ? colors.ink : colors.white} />
+                  <Text style={[styles.saveBtnText, pressed && styles.saveBtnTextPressed]}>Edit Profile Details</Text>
+                </View>
               )}
             </Pressable>
           )}
@@ -623,10 +703,16 @@ export default function OwnerProfile() {
         {/* PASSWORD CARD */}
         <View ref={pwSectionRef} collapsable={false} style={{ width: "100%" }}>
         <Card style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Change Password</Text>
+          <View style={styles.passwordSectionHeading}>
+            <KeyRound size={17} color={colors.emerald} />
+            <Text style={[styles.sectionTitle, styles.passwordSectionTitle]}>Change Password</Text>
+          </View>
 
-          <Text style={styles.fieldLabel}>Current password</Text>
-          <View style={[styles.pwField, !pwEditing && styles.rowFieldReadOnly, !!oldPwError && styles.inputErrorBorder]}>
+          <View style={styles.passwordLabelRow}>
+            <Text style={styles.passwordFieldLabel}>Current Password</Text>
+          </View>
+          <View style={[styles.pwField, !!oldPwError && styles.inputErrorBorder]}>
+            <LockKeyhole size={16} color={colors.textMuted} style={styles.passwordInputIcon} />
             <TextInput
               style={styles.rowInput}
               value={oldPassword}
@@ -639,13 +725,14 @@ export default function OwnerProfile() {
               editable={pwEditing}
             />
             <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowOldPass((v) => !v)} activeOpacity={0.7}>
-              {showOldPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+              {showOldPass ? <EyeOff size={17} color={colors.textSecondary} /> : <Eye size={17} color={colors.textSecondary} />}
             </TouchableOpacity>
           </View>
           {!!oldPwError && <Text style={styles.fieldError}>{oldPwError}</Text>}
 
-          <Text style={styles.fieldLabel}>New password</Text>
-          <View style={[styles.pwField, !pwEditing && styles.rowFieldReadOnly, !!pwError && styles.inputErrorBorder]}>
+          <Text style={styles.passwordFieldLabel}>New Password</Text>
+          <View style={[styles.pwField, !!pwError && styles.inputErrorBorder]}>
+            <LockKeyhole size={16} color={colors.textMuted} style={styles.passwordInputIcon} />
             <TextInput
               style={styles.rowInput}
               value={newPassword}
@@ -659,14 +746,30 @@ export default function OwnerProfile() {
               editable={pwEditing}
             />
             <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowNewPass((v) => !v)} activeOpacity={0.7}>
-              {showNewPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+              {showNewPass ? <EyeOff size={17} color={colors.textSecondary} /> : <Eye size={17} color={colors.textSecondary} />}
             </TouchableOpacity>
           </View>
           {!!pwError && <Text style={styles.fieldError}>{pwError}</Text>}
-          <Text style={styles.hint}>Min. 8 characters with a capital letter, a number, and a special character.</Text>
+          {pwEditing && (
+            <View style={styles.passwordStrengthCard}>
+              <View style={styles.passwordStrengthHeader}>
+                <Text style={styles.passwordStrengthHint}>Minimum 8 characters with:</Text>
+                <Text style={[styles.passwordStrengthStatus, passwordStrong && styles.passwordStrengthStatusStrong]}>{passwordStrong ? "Strong" : "Building"}</Text>
+              </View>
+              <View style={styles.passwordRequirementRow}>
+                {[{ label: "Capital", met: passwordHasCapital }, { label: "Number", met: passwordHasNumber }, { label: "Special", met: passwordHasSpecial }].map((item) => (
+                  <View key={item.label} style={[styles.passwordRequirement, item.met && styles.passwordRequirementMet]}>
+                    <Text style={styles.passwordRequirementText}>{item.met ? "✓ " : ""}{item.label}</Text>
+                  </View>
+                ))}
+              </View>
+              <View style={styles.passwordStrengthTrack}><View style={[styles.passwordStrengthFill, { width: passwordStrong ? "100%" : newPassword.length ? "45%" : "0%" }]} /></View>
+            </View>
+          )}
 
-          <Text style={styles.fieldLabel}>Confirm password</Text>
-          <View style={[styles.pwField, !pwEditing && styles.rowFieldReadOnly, !!confirmError && styles.inputErrorBorder]}>
+          <Text style={styles.passwordFieldLabel}>Confirm Password</Text>
+          <View style={[styles.pwField, !!confirmError && styles.inputErrorBorder]}>
+            <CheckCircle2 size={16} color={passwordsMatch ? colors.emerald : colors.textMuted} style={styles.passwordInputIcon} />
             <TextInput
               style={styles.rowInput}
               value={confirmPassword}
@@ -680,10 +783,11 @@ export default function OwnerProfile() {
               editable={pwEditing}
             />
             <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowConfirmPass((v) => !v)} activeOpacity={0.7}>
-              {showConfirmPass ? <Eye size={18} color={colors.emerald} /> : <EyeOff size={18} color={colors.emerald} />}
+              {showConfirmPass ? <EyeOff size={17} color={colors.textSecondary} /> : <Eye size={17} color={colors.textSecondary} />}
             </TouchableOpacity>
           </View>
           {!!confirmError && <Text style={styles.fieldError}>{confirmError}</Text>}
+          {pwEditing && passwordsMatch && <Text style={styles.passwordMatchText}>✓ Passwords match perfectly</Text>}
 
           {pwEditing ? (
             <View style={[styles.pwActionsRow, { marginTop: spacing.sm }]}>
@@ -712,7 +816,7 @@ export default function OwnerProfile() {
                 {({ pressed }) =>
                   changingPw
                     ? <ActivityIndicator color={colors.white} size="small" />
-                    : <Text style={[styles.saveBtnText, styles.pwUpdateBtnText, pressed && styles.saveBtnTextPressed]}>Update Password</Text>
+                    : <View style={styles.changePasswordContent}><KeyRound size={14} color={pressed ? colors.ink : colors.white} /><Text style={[styles.saveBtnText, styles.pwUpdateBtnText, pressed && styles.saveBtnTextPressed]}>Change Password</Text></View>
                 }
               </Pressable>
             </View>
@@ -722,7 +826,7 @@ export default function OwnerProfile() {
               onPress={handleStartEditPassword}
             >
               {({ pressed }) => (
-                <Text style={[styles.saveBtnText, pressed && styles.saveBtnTextPressed]}>Change Password</Text>
+                <View style={styles.changePasswordContent}><KeyRound size={14} color={pressed ? colors.ink : colors.white} /><Text style={[styles.saveBtnText, pressed && styles.saveBtnTextPressed]}>Change Password</Text></View>
               )}
             </Pressable>
           )}
@@ -731,41 +835,70 @@ export default function OwnerProfile() {
 
         {/* SECURITY QUESTIONS CARD */}
         <View ref={secQSectionRef} collapsable={false} style={{ width: "100%" }}>
-        <Card style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Security Questions</Text>
-          <Text style={styles.hint}>
-            Set 3 questions so you can recover your password later if you forget it.
-          </Text>
+        <View style={styles.securityQuestionsSection}>
+          {!secEditing && (
+            <View style={styles.recoveryQuestionCard}>
+              <View style={styles.recoveryQuestionHeading}>
+                <LockKeyhole size={17} color={colors.emerald} />
+                <Text style={styles.recoveryQuestionTitle}>Recovery Questions</Text>
+              </View>
+              <Text style={styles.recoveryFieldLabel}>
+                {secQuestionCount === null
+                  ? "Recovery status is temporarily unavailable."
+                  : secQuestionCount >= 5
+                    ? "5 recovery questions configured."
+                    : secQuestionCount >= 3
+                      ? `${secQuestionCount} of 5 questions configured. Update required.`
+                      : "Recovery questions have not been configured."}
+              </Text>
+            </View>
+          )}
 
-          {[0, 1, 2].map((slot) => (
-            <View key={slot} style={{ width: "100%", marginTop: spacing.sm }}>
-              <Text style={styles.fieldLabel}>Question {slot + 1}</Text>
+          {secEditing && [0, 1, 2, 3, 4].map((slot) => (
+            <View key={slot} style={styles.recoveryQuestionCard}>
+              <View style={styles.recoveryQuestionHeading}>
+                <View style={styles.questionNumberBadge}><Text style={styles.questionNumberText}>{String(slot + 1).padStart(2, "0")}</Text></View>
+                <Text style={styles.recoveryQuestionTitle}>{["Question One", "Question Two", "Question Three", "Question Four", "Question Five"][slot]}</Text>
+              </View>
+              <Text style={styles.recoveryFieldLabel}>Select Question</Text>
               <TouchableOpacity
-                style={[styles.rowField, !secEditing && styles.rowFieldReadOnly, { paddingHorizontal: spacing.lg, paddingVertical: spacing.md + 1 }]}
-                onPress={() => secEditing && setPickerSlot(slot as 0 | 1 | 2)}
+                style={styles.recoverySelect}
+                onPress={() => setPickerSlot(slot)}
                 disabled={!secEditing}
                 activeOpacity={0.7}
               >
-                <Text style={[{ flex: 1, fontSize: fontSize.base, fontFamily: fontFamily.medium, color: secQuestions[slot] ? colors.ink : colors.textMuted }]}>
+                <Text style={[styles.recoverySelectText, !secQuestions[slot] && { color: colors.textMuted }]} numberOfLines={1}>
                   {secQuestions[slot] || "Select a question"}
                 </Text>
-                <ChevronDown size={16} color={colors.emerald} />
+                <ChevronDown size={15} color={colors.ink} />
               </TouchableOpacity>
 
-              <TextInput
-                style={[styles.input, !secEditing && styles.inputReadOnly, { marginTop: spacing.sm, marginBottom: 0 }]}
-                value={secAnswers[slot]}
-                onChangeText={(t) => setSecAnswers((prev) => {
-                  const next = [...prev] as [string, string, string];
-                  next[slot] = t;
+              <Text style={styles.recoveryFieldLabel}>Your Answer</Text>
+              <View style={styles.recoveryAnswerField}>
+                {secEditing ? <Pencil size={15} color={colors.textMuted} /> : <LockKeyhole size={15} color={colors.textMuted} />}
+                <TextInput
+                  style={styles.recoveryAnswerInput}
+                  value={secAnswers[slot]}
+                  onChangeText={(t) => setSecAnswers((prev) => {
+                    const next = [...prev];
+                    next[slot] = t;
+                    return next;
+                  })}
+                  secureTextEntry={!showSecAnswers[slot]}
+                  placeholder="Your answer"
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  onFocus={() => scrollFieldIntoView(secQSectionRef)}
+                  editable={secEditing}
+                />
+                <TouchableOpacity onPress={() => setShowSecAnswers((prev) => {
+                  const next = [...prev];
+                  next[slot] = !next[slot];
                   return next;
-                })}
-                placeholder="Your answer"
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                onFocus={() => scrollFieldIntoView(secQSectionRef)}
-                editable={secEditing}
-              />
+                })} activeOpacity={0.7}>
+                  {showSecAnswers[slot] ? <Eye size={17} color={colors.ink} /> : <EyeOff size={17} color={colors.ink} />}
+                </TouchableOpacity>
+              </View>
             </View>
           ))}
 
@@ -816,21 +949,23 @@ export default function OwnerProfile() {
               >
                 {({ pressed }) => savingSecQ
                   ? <ActivityIndicator color={colors.white} size="small" />
-                  : <Text style={[styles.saveBtnText, styles.pwUpdateBtnText, pressed && styles.saveBtnTextPressed]}>Save Security Questions</Text>
+                  : <Text style={[styles.saveBtnText, styles.pwUpdateBtnText, pressed && styles.saveBtnTextPressed]}>Save Recovery Questions</Text>
                 }
               </Pressable>
             </View>
           ) : (
             <Pressable
-              style={({ pressed }) => [styles.updatePwBtn, pressed && styles.saveBtnPressed]}
+              style={({ pressed }) => [styles.updatePwBtn, styles.recoveryEditButton, pressed && styles.saveBtnPressed]}
               onPress={handleStartEditSecQuestions}
             >
               {({ pressed }) => (
-                <Text style={[styles.saveBtnText, pressed && styles.saveBtnTextPressed]}>Set Security Questions</Text>
+                <Text style={[styles.saveBtnText, styles.recoveryEditButtonText, pressed && styles.saveBtnTextPressed]}>
+                  {secQuestionCount !== null && secQuestionCount < 5 ? "Set Up Recovery Questions" : "Edit Recovery Questions"}
+                </Text>
               )}
             </Pressable>
           )}
-        </Card>
+        </View>
         </View>
 
         {/* Logout */}
@@ -864,7 +999,7 @@ export default function OwnerProfile() {
                   onPress={() => {
                     if (pickerSlot === null) return;
                     setSecQuestions((prev) => {
-                      const next = [...prev] as [string, string, string];
+                      const next = [...prev];
                       next[pickerSlot] = item;
                       return next;
                     });
@@ -898,6 +1033,7 @@ export default function OwnerProfile() {
           scrollRef.current?.scrollTo({ y: 0, animated: true });
         }}
       />
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
 
       {/* LOGOUT CONFIRMATION MODAL */}
       <Modal
@@ -1033,43 +1169,55 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: {
     alignItems: "center",
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xxl,
+    paddingHorizontal: 16,
+    paddingTop: 18,
   },
 
   // ── Identity card ─────────────────────────────────────────────────────────────
 
   identityCard: {
     width: "100%",
-    marginBottom: spacing.lg,
+    marginBottom: 18,
   },
 
   identityInner: {
-    flex: 1,
+    flexDirection: "row",
     alignItems: "center",
-    paddingVertical: spacing.sm,
+    gap: 16,
   },
+
+  identityCopy: { flex: 1 },
+  ownerAvatar: { width: 50, height: 50, borderRadius: 12, backgroundColor: colors.ink, alignItems: "center", justifyContent: "center" },
+  ownerAvatarText: { fontSize: 19, fontFamily: fontFamily.bold, color: colors.emeraldBright },
 
   identityName: {
-    fontSize: fontSize.xl,
+    fontSize: 22,
     fontFamily: fontFamily.extrabold,
     color: colors.ink,
-    marginTop: spacing.lg,
   },
 
+  identityRoleRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 3 },
+
   identityRole: {
-    fontSize: fontSize.base,
-    fontFamily: fontFamily.medium,
+    fontSize: 12,
+    fontFamily: fontFamily.semibold,
     color: colors.emerald,
-    marginTop: 2,
   },
 
   // ── Fields card / sections ───────────────────────────────────────────────────
 
   fieldsCard: {
     width: "100%",
-    marginBottom: spacing.lg,
+    marginBottom: 14,
   },
+
+  personalHeading: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 16 },
+  personalAccent: { width: 6, height: 16, borderRadius: 3, backgroundColor: colors.emerald },
+  personalHeadingText: { fontSize: 13, fontFamily: fontFamily.semibold, color: colors.ink, textTransform: "uppercase", letterSpacing: 0.5 },
+  nameRow: { flexDirection: "row", gap: 10 },
+  nameColumn: { flex: 1 },
+  profileFieldLabel: { fontSize: 11, fontFamily: fontFamily.medium, color: colors.ink, marginBottom: 7, marginLeft: 2 },
+  profileFieldIcon: { marginLeft: 14 },
 
   sectionCard: {
     width: "100%",
@@ -1077,12 +1225,31 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
 
+  passwordSectionHeading: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 16 },
+  passwordSectionTitle: { marginBottom: 0, fontSize: 14 },
+  passwordLabelRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  passwordFieldLabel: { fontSize: 10, fontFamily: fontFamily.semibold, color: colors.ink, marginBottom: 6 },
+
   sectionTitle: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.bold,
     color: colors.ink,
     marginBottom: spacing.lg,
   },
+
+  securityQuestionsSection: { width: "100%", marginTop: 18, marginBottom: 8 },
+  recoveryQuestionCard: { width: "100%", backgroundColor: colors.white, borderRadius: 11, padding: 12, marginBottom: 12, ...shadow.card },
+  recoveryQuestionHeading: { flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 10 },
+  questionNumberBadge: { minWidth: 22, height: 20, borderRadius: 10, paddingHorizontal: 4, backgroundColor: colors.ink, alignItems: "center", justifyContent: "center" },
+  questionNumberText: { fontSize: 10, color: colors.emeraldSoft, fontFamily: fontFamily.bold },
+  recoveryQuestionTitle: { fontSize: 14, color: colors.ink, fontFamily: fontFamily.semibold },
+  recoveryFieldLabel: { fontSize: 9, color: colors.ink, fontFamily: fontFamily.medium, marginBottom: 5 },
+  recoverySelect: { minHeight: 37, flexDirection: "row", alignItems: "center", borderRadius: 6, backgroundColor: colors.mist, paddingHorizontal: 11, marginBottom: 9 },
+  recoverySelectText: { flex: 1, fontSize: 11, color: colors.ink, fontFamily: fontFamily.regular, marginRight: 8 },
+  recoveryAnswerField: { minHeight: 37, flexDirection: "row", alignItems: "center", gap: 7, borderRadius: 6, backgroundColor: colors.mist, paddingHorizontal: 11 },
+  recoveryAnswerInput: { flex: 1, paddingVertical: 8, fontSize: 12, color: colors.ink, fontFamily: fontFamily.medium },
+  recoveryEditButton: { minHeight: 46, paddingVertical: 11, marginTop: 7 },
+  recoveryEditButtonText: { fontSize: 13 },
 
   fieldLabel: {
     alignSelf: "flex-start",
@@ -1097,15 +1264,16 @@ const styles = StyleSheet.create({
   input: {
     width: "100%",
     backgroundColor: colors.white,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md + 1,
-    fontSize: fontSize.base,
+    borderRadius: 12,
+    borderWidth: 0,
+    paddingHorizontal: 16,
+    minHeight: 54,
+    paddingVertical: 12,
+    fontSize: 16,
     fontFamily: fontFamily.medium,
     color: colors.ink,
-    marginBottom: spacing.lg,
+    marginBottom: 16,
+    ...shadow.card,
   },
 
   inputFocused: {
@@ -1114,9 +1282,8 @@ const styles = StyleSheet.create({
   },
 
   inputReadOnly: {
-    backgroundColor: colors.mist,
-    borderColor: colors.border,
-    borderRadius: radius.xl,
+    backgroundColor: colors.white,
+    borderRadius: 12,
     color: colors.ink,
   },
 
@@ -1130,12 +1297,13 @@ const styles = StyleSheet.create({
     width: "100%",
     flexDirection: "row",
     alignItems: "center",
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
+    minHeight: 54,
+    borderRadius: 12,
+    borderWidth: 0,
     backgroundColor: colors.white,
     overflow: "hidden",
-    marginBottom: spacing.lg,
+    marginBottom: 16,
+    ...shadow.card,
   },
 
   rowFieldFocused: {
@@ -1144,9 +1312,8 @@ const styles = StyleSheet.create({
   },
 
   rowFieldReadOnly: {
-    backgroundColor: colors.mist,
-    borderColor: colors.border,
-    borderRadius: radius.xl,
+    backgroundColor: colors.white,
+    borderRadius: 12,
   },
 
   rowInput: {
@@ -1175,21 +1342,27 @@ const styles = StyleSheet.create({
   phoneRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm + 2,
-    marginBottom: spacing.lg,
+    gap: 0,
+    marginBottom: 16,
+    minHeight: 54,
+    padding: 5,
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    ...shadow.card,
   },
 
   phonePrefix: {
-    backgroundColor: colors.emeraldSoft,
-    borderRadius: radius.xl,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md + 1,
+    minHeight: 44,
+    backgroundColor: colors.mist,
+    borderRadius: 8,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
     justifyContent: "center",
     alignItems: "center",
   },
 
   phonePrefixReadOnly: {
-    backgroundColor: colors.border,
+    backgroundColor: colors.mist,
   },
 
   phonePrefixText: {
@@ -1202,27 +1375,42 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.mist,
+    borderRadius: 8,
+    borderWidth: 0,
+    backgroundColor: colors.white,
     overflow: "hidden",
   },
+  phoneVerifiedIcon: { marginRight: 10 },
 
   // ── Password fields ───────────────────────────────────────────────────────────
 
   pwField: {
     width: "100%",
+    minHeight: 38,
     flexDirection: "row",
     alignItems: "center",
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.white,
-    marginBottom: spacing.xs,
+    borderRadius: 7,
+    borderWidth: 0,
+    backgroundColor: colors.mist,
+    marginBottom: 10,
   },
 
-  eyeBtn: { paddingHorizontal: spacing.md, paddingVertical: spacing.md },
+  passwordInputIcon: { marginLeft: 10 },
+  eyeBtn: { paddingHorizontal: 10, paddingVertical: 10 },
+
+  passwordStrengthCard: { backgroundColor: colors.mist, borderRadius: 7, padding: 7, marginTop: -4, marginBottom: 10 },
+  passwordStrengthHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
+  passwordStrengthHint: { fontSize: 8, color: colors.ink, fontFamily: fontFamily.regular },
+  passwordStrengthStatus: { fontSize: 8, color: colors.textSecondary, fontFamily: fontFamily.semibold },
+  passwordStrengthStatusStrong: { color: colors.emerald },
+  passwordRequirementRow: { flexDirection: "row", gap: 4 },
+  passwordRequirement: { flex: 1, minHeight: 20, borderRadius: 3, backgroundColor: colors.border, alignItems: "center", justifyContent: "center" },
+  passwordRequirementMet: { backgroundColor: "#8EF0CF" },
+  passwordRequirementText: { fontSize: 8, color: colors.ink, fontFamily: fontFamily.semibold },
+  passwordStrengthTrack: { height: 3, borderRadius: 2, backgroundColor: colors.border, marginTop: 7, overflow: "hidden" },
+  passwordStrengthFill: { height: 3, borderRadius: 2, backgroundColor: colors.emerald },
+  passwordMatchText: { fontSize: 8, color: colors.emerald, fontFamily: fontFamily.semibold, marginTop: -5, marginBottom: 9 },
+  changePasswordContent: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7 },
 
   fieldError: {
     alignSelf: "flex-start",
@@ -1245,9 +1433,10 @@ const styles = StyleSheet.create({
 
   saveBtn: {
     width: "100%",
-    borderRadius: radius.pill,
+    borderRadius: 12,
     backgroundColor: colors.ink,
-    paddingVertical: 16,
+    minHeight: 54,
+    paddingVertical: 14,
     alignItems: "center",
     justifyContent: "center",
     ...shadow.button,
@@ -1266,15 +1455,18 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
+  editButtonContent: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 },
+
   saveBtnTextPressed: {
     color: colors.ink,
   },
 
   updatePwBtn: {
     width: "100%",
-    borderRadius: radius.pill,
+    borderRadius: 8,
     backgroundColor: colors.ink,
-    paddingVertical: 16,
+    minHeight: 42,
+    paddingVertical: 11,
     alignItems: "center",
     justifyContent: "center",
     marginTop: spacing.md,

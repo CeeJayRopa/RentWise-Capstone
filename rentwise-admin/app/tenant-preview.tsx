@@ -12,6 +12,7 @@ import {
   RefreshControl,
   Animated,
   Easing,
+  Platform,
 } from "react-native";
 import * as Print from "expo-print";
 import RNBlobUtil from "react-native-blob-util";
@@ -24,7 +25,7 @@ import {
   collection,
   doc,
   getDoc,
-  getDocs,
+  onSnapshot,
   query,
   serverTimestamp,
   where,
@@ -32,11 +33,38 @@ import {
 
 import { db } from "../shared/services/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Bell, Check, FileText, Info, TrendingUp, CalendarClock, HelpCircle, ChevronUp, ChevronDown } from "lucide-react-native";
-import { Card, Badge, Avatar, Button } from "../shared/components/ui";
+import { ArrowLeft, Bell, FileText, TrendingUp, CalendarClock, HelpCircle, ChevronUp, ChevronDown, ChevronRight, Banknote, X, BadgeCheck, Download, Calculator } from "lucide-react-native";
+import { Card, Badge, Avatar } from "../shared/components/ui";
 import HelpTour, { HelpStep } from "./components/HelpTour";
+import HelpSupportModal from "./components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
+import { rentalCycleProgress } from "../shared/services/financeServices";
+import {
+  getSavedReceiptDirectory,
+  requestReceiptDirectoryAccess,
+  saveBase64PdfToReceiptDirectory,
+} from "../shared/services/receiptStorage";
+
+async function confirmReceiptFolderAccess(): Promise<boolean> {
+  if (Platform.OS !== "android") return true;
+  if (await getSavedReceiptDirectory()) return true;
+
+  const approved = await new Promise<boolean>((resolve) => {
+    Alert.alert(
+      "Allow receipt storage?",
+      "RentWise needs access to a folder you choose so it can save receipt soft copies. RentWise can only access the folder you select.",
+      [
+        { text: "Not now", style: "cancel", onPress: () => resolve(false) },
+        { text: "Choose folder", onPress: () => resolve(true) },
+      ],
+      { cancelable: true, onDismiss: () => resolve(false) },
+    );
+  });
+
+  if (!approved) return false;
+  return Boolean(await requestReceiptDirectoryAccess());
+}
 
 const MONTHS = [
   "January",
@@ -56,15 +84,21 @@ const MONTHS = [
 // The admin always enters the stall's DAILY rate. Every schedule's period
 // charge is derived by multiplying that daily rate by however many days
 // fall in the period containing `date`. Mirrors financials.tsx exactly.
+function scheduleIntervalDays(schedule: string): number {
+  if (schedule === "daily") return 1;
+  if (schedule === "weekly") return 7;
+  if (schedule === "semi-monthly") return 15;
+  return 30;
+}
+
+function scheduleDayLabel(schedule: string): string {
+  const days = scheduleIntervalDays(schedule);
+  if (days === 1) return "Daily";
+  return `${days} days`;
+}
+
 function computePeriodCharge(dailyRate: number, schedule: string, date: Date): number {
-  if (schedule === "daily") return dailyRate;
-  if (schedule === "weekly") return dailyRate * 7;
-  const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
-  if (schedule === "semi-monthly") {
-    const daysInHalf = date.getDate() <= 15 ? 15 : daysInMonth - 15;
-    return dailyRate * daysInHalf;
-  }
-  return dailyRate * daysInMonth; // monthly
+  return dailyRate * scheduleIntervalDays(schedule);
 }
 
 // Advances `d` to the start of the next billing period for `schedule`.
@@ -158,17 +192,7 @@ function consecutivePeriodsEnding(
 // Human-readable label for a single billing period's start date. Mirrors
 // billingSchedule.ts's periodLabel exactly.
 function periodLabel(schedule: string, date: Date): string {
-  if (schedule === "daily") {
-    return `Daily Rent (${date.toLocaleDateString("en-US", { month: "long", day: "numeric" })})`;
-  }
-  if (schedule === "weekly") {
-    return `Weekly Rent (week of ${date.toLocaleDateString("en-US", { month: "long", day: "numeric" })})`;
-  }
-  if (schedule === "semi-monthly") {
-    const half = date.getDate() <= 15 ? "1st half" : "2nd half";
-    return `Rent – ${half} of ${date.toLocaleDateString("en-US", { month: "long" })}`;
-  }
-  return `Monthly Rent (${date.toLocaleDateString("en-US", { month: "long", year: "numeric" })})`;
+  return `${scheduleDayLabel(schedule)} rent from ${date.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`;
 }
 
 // Older receipts (and admin-recorded cash payments) never stored a
@@ -178,18 +202,49 @@ function periodLabel(schedule: string, date: Date): string {
 function synthesizeBreakdown(data: any, tenant: any): { label: string; amount: number }[] {
   const schedule = tenant?.paymentSchedule;
   const dailyRate = Number(tenant?.price || 0);
-  const rentAmount = Number(data?.rentAmount || 0);
-  if (!schedule || dailyRate <= 0 || rentAmount <= 0) return [];
+  const totalPaid = getReceiptAmountPaid(data);
+  const stored = Array.isArray(data?.breakdown) ? data.breakdown.filter((line: any) =>
+    line && typeof line.label === "string" && Number.isFinite(Number(line.amount)) && Number(line.amount) >= 0,
+  ).map((line: any) => ({label: line.label, amount: Number(line.amount)})) : [];
+  const storedTotal = stored.reduce((sum: number, line: any) => sum + line.amount, 0);
+  if (stored.length > 0 && Math.abs(storedTotal - totalPaid) < 0.01) return stored;
+  if (!schedule || dailyRate <= 0 || totalPaid <= 0) return stored;
 
   const receiptDate = data.date ? new Date(data.date) : new Date();
   const onePeriodCharge = computePeriodCharge(dailyRate, schedule, receiptDate);
   if (onePeriodCharge <= 0) return [];
 
-  const periodsCount = Math.max(1, Math.round(rentAmount / onePeriodCharge));
+  const storedPeriods = Number(data?.periodsCovered ?? 0);
+  const periodsCount = storedPeriods > 0
+    ? Math.max(1, Math.round(storedPeriods))
+    : Math.max(1, Math.round(totalPaid / onePeriodCharge));
+  if (Math.abs(periodsCount * onePeriodCharge - totalPaid) >= 0.01) {
+    return stored.length > 0
+      ? [...stored, {label: "Additional rent coverage", amount: Math.max(0, totalPaid - storedTotal)}]
+      : [{label: "Rent coverage", amount: totalPaid}];
+  }
   return consecutivePeriodsEnding(dailyRate, schedule, receiptDate, periodsCount).map((p) => ({
     label: periodLabel(schedule, p.date),
     amount: p.amount,
   }));
+}
+
+function getReceiptAmountPaid(data: any): number {
+  const numeric = (value: unknown): number | null => {
+    if (value === null || value === undefined || value === "") return null;
+    const amount = Number(value);
+    return Number.isFinite(amount) ? amount : null;
+  };
+  const change = Math.max(0, numeric(data?.change) ?? 0);
+  const tendered = numeric(data?.cashTendered ?? data?.cashReceived);
+  if (tendered !== null) return Math.max(0, numeric(data?.amountPaid) ?? tendered - change);
+
+  const payment = numeric(data?.payment);
+  if (change > 0 && payment !== null && payment > change) return Math.max(0, payment - change);
+  // `rentAmount` is one schedule-period charge on current online receipts;
+  // `payment`/`amount` is the full submitted transaction (possibly several
+  // periods). Never let the period rate replace the actual receipt total.
+  return Math.max(0, numeric(data?.amountPaid ?? data?.amount) ?? payment ?? numeric(data?.rentAmount) ?? 0);
 }
 
 export default function TenantPreview() {
@@ -201,6 +256,7 @@ export default function TenantPreview() {
 
   const [tenant, setTenant] = useState<any>(null);
   const [stall, setStall] = useState<any>(null);
+  const [assignedReceiptStalls, setAssignedReceiptStalls] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -209,8 +265,10 @@ export default function TenantPreview() {
   const [imageViewerUrl, setImageViewerUrl] = useState<string | null>(null);
   const [digitalReceipt, setDigitalReceipt] = useState<any>(null);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
+  const [showAllPayments, setShowAllPayments] = useState(false);
 
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
   const helpRef = useRef<View>(null);
   const notifyRef = useRef<View>(null);
   const paymentCardRef = useRef<View>(null);
@@ -239,6 +297,35 @@ export default function TenantPreview() {
   useEffect(() => {
     loadTenant();
   }, []);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    const paymentsQuery = query(
+      collection(db, "payments"),
+      where("userId", "==", tenantId),
+    );
+
+    return onSnapshot(
+      paymentsQuery,
+      (snapshot) => {
+        const list = snapshot.docs.map((paymentDoc) => ({
+          id: paymentDoc.id,
+          ...paymentDoc.data(),
+        }));
+        list.sort((a: any, b: any) => {
+          const aMs = a.date?.toMillis ? a.date.toMillis() : 0;
+          const bMs = b.date?.toMillis ? b.date.toMillis() : 0;
+          return bMs - aMs;
+        });
+        setPayments(list);
+      },
+      (error) => console.log("TENANT PAYMENT HISTORY LISTENER ERROR:", error),
+    );
+  }, [tenantId]);
+
+  useEffect(() => {
+    setShowAllPayments(false);
+  }, [tenantId]);
 
   // Collapse the Breakdown dropdown again each time a different receipt is
   // opened, so it doesn't stay expanded from whatever the last one left it at.
@@ -284,6 +371,20 @@ export default function TenantPreview() {
           ...userData,
         });
 
+        const assignedIds = [...new Set([
+          ...(Array.isArray(userData.stallIds) ? userData.stallIds.map(String) : []),
+          String(userData.primaryStallId ?? userData.stallId ?? ""),
+        ].filter(Boolean))].slice(0, 3);
+        const assignedSnapshots = await Promise.all(
+          assignedIds.map((id) => getDoc(doc(db, "stalls", id))),
+        );
+        setAssignedReceiptStalls(assignedSnapshots.filter((snap) => snap.exists()).map((snap) => ({
+          stallId: snap.id,
+          buildingNumber: String(snap.data()?.buildingNumber ?? ""),
+          spaceId: String(snap.data()?.spaceId ?? snap.id),
+          dailyRate: Number(snap.data()?.price ?? 0),
+        })));
+
         // GET STALL
 
         if (userData.stallId) {
@@ -300,32 +401,10 @@ export default function TenantPreview() {
 
       // GET PAYMENTS
 
-      const q = query(
-        collection(db, "payments"),
-        where("userId", "==", tenantId),
-      );
-
-      const snap = await getDocs(q);
-
-      const list: any[] = [];
-
-      snap.forEach((d) => {
-        list.push({
-          id: d.id,
-          ...d.data(),
-        });
-      });
 
       // Latest payment first — Firestore doesn't guarantee doc order, and
       // sorting client-side avoids needing a composite index for the
       // userId + date query.
-      list.sort((a, b) => {
-        const aMs = a.date?.toMillis ? a.date.toMillis() : 0;
-        const bMs = b.date?.toMillis ? b.date.toMillis() : 0;
-        return bMs - aMs;
-      });
-
-      setPayments(list);
     } catch (error) {
       console.log(error);
     } finally {
@@ -337,17 +416,22 @@ export default function TenantPreview() {
     if (generatingReceipt || !rd) return;
     setGeneratingReceipt(true);
     try {
+      if (!(await confirmReceiptFolderAccess())) return;
+
+      const pdfStalls = Array.isArray(rd.stalls) && rd.stalls.length > 0 ? rd.stalls : assignedReceiptStalls;
+      const premisesHtml = pdfStalls.length > 0
+        ? pdfStalls.map((item: any) => `Building ${item.buildingNumber} · Space ${item.spaceId}`).join("<br/>")
+        : `Building ${rd.buildingNumber || "N/A"} · Space ${rd.spaceId || "N/A"}`;
       const html = `
         <html><body style="font-family:Arial;padding:30px;">
           <h1 style="text-align:center;">RentWise</h1>
           <h2 style="text-align:center;">Online Payment Receipt</h2>
           <hr/>
-          <p><b>Receipt No:</b> ${rd.receiptNo ?? ""}</p>
-          <p><b>Tenant Name:</b> ${rd.tenantName ?? ""}</p>
-          <p><b>Building Number:</b> ${rd.buildingNumber ?? ""}</p>
-          <p><b>Space ID:</b> ${rd.spaceId ?? ""}</p>
+          <p><b>Receipt No:</b> ${rd.receiptNo || "N/A"}</p>
+          <p><b>Tenant Name:</b> ${rd.tenantName || "N/A"}</p>
+          <p><b>Stalls Covered:</b><br/>${premisesHtml}</p>
           <p><b>Date:</b> ${rd.date ? new Date(rd.date).toLocaleDateString() : ""}</p>
-          <p><b>Payment Method:</b> ${rd.paymentMethod ?? ""}</p>
+          <p><b>Payment Method:</b> ${rd.paymentMethod || "N/A"}</p>
           <p><b>Rent Amount:</b> ₱${rd.rentAmount ?? 0}</p>
           <p><b>Amount Paid:</b> ₱${rd.payment ?? 0}</p>
           ${rd.change > 0 ? `<p><b>Change:</b> ₱${rd.change}</p>` : ""}
@@ -359,6 +443,16 @@ export default function TenantPreview() {
 
       const { base64 } = await Print.printToFileAsync({ html, base64: true });
       const fileName = `online-receipt-${rd.receiptNo ?? Date.now()}.pdf`;
+      if (Platform.OS === "android") {
+        const saved = await saveBase64PdfToReceiptDirectory(base64!, fileName);
+        if (!saved) {
+          Alert.alert("Folder needed", "Choose a folder to save your receipt.");
+          return;
+        }
+        Alert.alert("Downloaded", "Receipt saved to your chosen folder.");
+        return;
+      }
+
       const cachePath = `${RNBlobUtil.fs.dirs.CacheDir}/${fileName}`;
       await RNBlobUtil.fs.writeFile(cachePath, base64!, "base64");
       await RNBlobUtil.MediaCollection.copyToMediaStore(
@@ -380,7 +474,7 @@ export default function TenantPreview() {
   function formatDateShort(date: any) {
     if (!date) return "-";
     const d = date.toDate ? date.toDate() : new Date(date);
-    return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "2-digit", year: "numeric" });
   }
 
   // Mirrors rentwise-tenant/app/payment-history.tsx's methodLabel exactly.
@@ -408,34 +502,32 @@ export default function TenantPreview() {
   const dailyRate = Number(tenant?.price || 0);
   const paymentSchedule = tenant?.paymentSchedule ?? "monthly";
   const today = new Date();
-  const year = today.getFullYear();
-  const month = today.getMonth();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const monthTotalCharge = dailyRate * daysInMonth;
-
-  const paidThisMonth = payments.reduce((sum, p) => {
-    if (p.status !== "approved") return sum;
-    const d = p.date?.toDate ? p.date.toDate() : p.date ? new Date(p.date) : null;
-    if (!d || d.getFullYear() !== year || d.getMonth() !== month) return sum;
-    return sum + Number(p.amount || 0);
-  }, 0);
-
-  const remainingBill = monthTotalCharge - paidThisMonth;
-  const chargedToDate = chargedSinceMonthStart(dailyRate, paymentSchedule, today);
-  const paymentDue = chargedToDate - paidThisMonth;
+  const rawBillingStart = tenant?.billingStartedAt ?? tenant?.createdAt;
+  const billingStartedAt = rawBillingStart?.toDate?.() ?? (rawBillingStart ? new Date(rawBillingStart) : null);
+  const rawNextDue = tenant?.nextDueAt ?? tenant?.billingStartedAt ?? tenant?.createdAt;
+  const nextDueAt = rawNextDue?.toDate ? rawNextDue.toDate() : null;
+  const cycleProgress = rentalCycleProgress(dailyRate, billingStartedAt, nextDueAt, today);
+  const cycleEndInclusive = new Date(cycleProgress.cycleEndExclusive);
+  cycleEndInclusive.setDate(cycleEndInclusive.getDate() - 1);
+  const cycleLabel = `${cycleProgress.cycleStart.toLocaleDateString("en-PH", { month: "short", day: "numeric" })}–${cycleEndInclusive.toLocaleDateString("en-PH", { month: "short", day: "numeric" })}`.toUpperCase();
+  const monthTotalCharge = cycleProgress.totalBill;
+  const paidThisMonth = cycleProgress.settled;
+  const remainingBill = cycleProgress.remaining;
+  const intervalDays = scheduleIntervalDays(paymentSchedule);
+  const periodsDue = nextDueAt && today >= nextDueAt
+    ? Math.floor((today.getTime() - nextDueAt.getTime()) / (intervalDays * 86400000)) + 1
+    : 0;
+  const paymentDue = dailyRate * intervalDays * periodsDue;
 
   const periodCharge = computePeriodCharge(dailyRate, paymentSchedule, today);
   const periodsOwed =
     paymentDue > 0 && periodCharge > 0 ? Math.max(1, Math.round(paymentDue / periodCharge)) : 0;
   const missedDuesText =
     periodsOwed > 0
-      ? `Missed ${periodsOwed} ${paymentSchedule} due${periodsOwed !== 1 ? "s" : ""}`
+      ? `Missed ${periodsOwed} × ${scheduleDayLabel(paymentSchedule)} due${periodsOwed !== 1 ? "s" : ""}`
       : "You're all caught up";
-  const monthLabel = `${MONTHS[month]} ${year}`;
-  const progressPct = Math.max(0, Math.min(100, (paidThisMonth / Math.max(monthTotalCharge, 1)) * 100));
-  const scheduleLabel = paymentSchedule
-    ? paymentSchedule.charAt(0).toUpperCase() + paymentSchedule.slice(1)
-    : "—";
+  const progressPct = cycleProgress.percent;
+  const scheduleLabel = paymentSchedule ? scheduleDayLabel(paymentSchedule) : "—";
 
   // Resets to 0 and animates back up whenever the underlying totals change
   // (including the first time real data arrives), instead of the fill just
@@ -464,14 +556,14 @@ export default function TenantPreview() {
     { key: "history", ref: historyCardRef, title: "Monthly payment history", description: "Every payment this tenant has made. Tap one with a receipt to view it.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(historyCardRef) },
   ];
 
-  // For the digital receipt modal's Breakdown section — `data.payment` is
-  // what the tenant tendered (includes any change owed back for cash), so
-  // the real amount paid is that minus the change. Mirrors
-  // ReceiptCardContent.tsx exactly.
   const receiptBreakdown = digitalReceipt ? synthesizeBreakdown(digitalReceipt, tenant) : [];
-  const receiptAmountPaid = digitalReceipt
-    ? Number(digitalReceipt.payment ?? 0) - Number(digitalReceipt.change ?? 0)
-    : 0;
+  const receiptAmountPaid = digitalReceipt ? getReceiptAmountPaid(digitalReceipt) : 0;
+  const receiptStalls = digitalReceipt && Array.isArray(digitalReceipt.stalls) && digitalReceipt.stalls.length > 0
+    ? digitalReceipt.stalls
+    : assignedReceiptStalls;
+  const receiptPremises = receiptStalls.length > 0
+    ? receiptStalls.map((item: any) => `Building ${item.buildingNumber} · Space ${item.spaceId}`).join("\n")
+    : `Building ${digitalReceipt?.buildingNumber ?? ""} · Space ${digitalReceipt?.spaceId ?? ""}`;
 
   const NOTIFY_MESSAGE =
     "The Market Administrator sent you a reminder regarding your rental account. Please check your payment status or contact the market office if you have any questions.";
@@ -483,6 +575,9 @@ export default function TenantPreview() {
       // Create in-app notification (Cloud Function trigger sends the push)
       await addDoc(collection(db, "notifications"), {
         userId: tenantId,
+        type: "payment_reminder",
+        category: "payment",
+        route: "/(tabs)/payments",
         message: NOTIFY_MESSAGE,
         read: false,
         createdAt: serverTimestamp(),
@@ -548,7 +643,7 @@ export default function TenantPreview() {
             </View>
 
             <View ref={helpRef} collapsable={false}>
-              <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
+              <TouchableOpacity onPress={() => setHelpSupportVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
                 <HelpCircle size={22} color={colors.white} />
               </TouchableOpacity>
             </View>
@@ -571,61 +666,47 @@ export default function TenantPreview() {
         <View style={styles.banner}>
           <Avatar name={[tenant?.firstName, tenant?.middleName, tenant?.lastName].filter(Boolean).join(" ")} size={54} />
           <View style={styles.bannerTextWrap}>
-            <Text style={styles.bannerWelcome}>Welcome, tenant!</Text>
             <Text style={styles.bannerName}>
               {[tenant?.firstName, tenant?.middleName, tenant?.lastName].filter(Boolean).join(" ")}
             </Text>
             <Text style={styles.bannerContact}>
               {tenant?.contactNo ? `+63 ${tenant.contactNo}` : ""}
             </Text>
-            {!!(tenant?.personalEmail || tenant?.email) && (
-              <View style={styles.bannerEmailRow}>
-                <Text style={styles.bannerEmail} numberOfLines={1}>
-                  {tenant.personalEmail || tenant.email}
-                </Text>
-                <Badge label="Registered Gmail" tone="success" />
-              </View>
-            )}
           </View>
         </View>
 
         {/* CARD 1 — RENTAL PAYMENT */}
         <View ref={paymentCardRef} collapsable={false}>
-        <Card style={styles.cardOverride} noPadding>
-          <View style={styles.rpHeaderRow}>
-            <Text style={styles.cardTitle}>Rental Payment</Text>
-            <View style={styles.rpMonthBadge}>
-              <Text style={styles.rpMonthBadgeText}>{monthLabel}</Text>
-            </View>
-          </View>
-
+        <Card style={styles.rentalCardOverride} noPadding>
           <View style={styles.rpRemainingBox}>
             <View style={styles.rpRemainingLabelRow}>
-              <Info size={13} color={colors.textSecondary} />
               <Text style={styles.rpRemainingLabel}>Remaining Bill</Text>
+              <Text style={styles.rpMonthBadgeText}>{cycleLabel}</Text>
             </View>
-            <Text style={styles.rpRemainingAmount}>₱{remainingBill.toLocaleString()}</Text>
+            <Text style={styles.rpRemainingAmount}>₱{remainingBill.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
 
             <View style={styles.rpProgressTrack}>
-              <Animated.View
-                style={[
-                  styles.rpProgressFill,
-                  {
-                    width: progressAnim.interpolate({
-                      inputRange: [0, 100],
-                      outputRange: ["0%", "100%"],
-                      extrapolate: "clamp",
-                    }),
-                  },
-                ]}
-              />
+              {Array.from({ length: 10 }, (_, index) => (
+                <View key={index} style={styles.rpProgressSegment}>
+                  <Animated.View
+                    style={[
+                      styles.rpProgressFill,
+                      {
+                        width: progressAnim.interpolate({
+                          inputRange: [index * 10, (index + 1) * 10],
+                          outputRange: ["0%", "100%"],
+                          extrapolate: "clamp",
+                        }),
+                      },
+                    ]}
+                  />
+                </View>
+              ))}
             </View>
 
             <View style={styles.rpProgressLabels}>
-              <Text style={styles.rpFooterText}>
-                <Text style={styles.rpFooterStrong}>₱{paidThisMonth.toLocaleString()}</Text> paid
-              </Text>
-              <Text style={styles.rpFooterText}>of ₱{monthTotalCharge.toLocaleString()}</Text>
+              <View><Text style={styles.rpFooterText}>Settled</Text><Text style={styles.rpFooterStrong}>● ₱{paidThisMonth.toLocaleString()}</Text></View>
+              <View style={styles.rpTotalWrap}><Text style={styles.rpFooterText}>Total Bill</Text><Text style={styles.rpFooterTotal}>₱{monthTotalCharge.toLocaleString()} ●</Text></View>
             </View>
           </View>
 
@@ -661,7 +742,7 @@ export default function TenantPreview() {
           {payments.length === 0 ? (
             <Text style={styles.empty}>No payments yet.</Text>
           ) : (
-            payments.map((item) => {
+            (showAllPayments ? payments : payments.slice(0, 10)).map((item) => {
               const hasReceipt = !!(item.receipt || item.receiptData);
               const Row = hasReceipt ? TouchableOpacity : View;
               return (
@@ -673,21 +754,22 @@ export default function TenantPreview() {
                         onPress: () =>
                           item.receipt
                             ? setImageViewerUrl(item.receipt)
-                            : setDigitalReceipt(item.receiptData),
+                            : setDigitalReceipt({
+                                ...item.receiptData,
+                                periodsCovered: item.periodsCovered,
+                                periodsAdvance: item.periodsAdvance,
+                                stalls: item.receiptData?.stalls ?? item.stalls,
+                              }),
                         activeOpacity: 0.7,
                       }
                     : {})}
                 >
-                  <View style={styles.rowIconCircle}>
-                    <FileText size={18} color={colors.emerald} />
-                  </View>
-
                   <View style={styles.rowInfo}>
-                    <Text style={styles.rowAmount}>₱{Number(item.amount || 0).toLocaleString()}</Text>
-                    <Text style={styles.rowDate}>
-                      {formatDateShort(item.date)}
-                      {item.receiptNo ? ` · #${item.receiptNo}` : ""}
-                    </Text>
+                    <View style={styles.rowAmountLine}>
+                      <Text style={styles.rowAmount}>₱{Number(item.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                      {!!item.receiptNo && <Text style={styles.receiptNoChip}>{item.receiptNo}</Text>}
+                    </View>
+                    <Text style={styles.rowDate}>{formatDateShort(item.date)}</Text>
                   </View>
 
                   <View style={styles.rowRight}>
@@ -701,11 +783,26 @@ export default function TenantPreview() {
                             : "error"
                       }
                     />
-                    <Text style={styles.rowMethod}>via {methodLabel(item)}</Text>
+                    <View style={styles.rowMethodLine}>
+                      <Banknote size={12} color={colors.ink} />
+                      <Text style={styles.rowMethod}>{methodLabel(item)}</Text>
+                    </View>
                   </View>
+                  <ChevronRight size={18} color={colors.borderStrong} style={styles.rowChevron} />
                 </Row>
               );
             })
+          )}
+          {!showAllPayments && payments.length > 10 && (
+            <View style={styles.viewAllPaymentsWrap}>
+              <TouchableOpacity
+                style={styles.viewAllPaymentsButton}
+                activeOpacity={0.75}
+                onPress={() => setShowAllPayments(true)}
+              >
+                <Text style={styles.viewAllPaymentsText}>View all</Text>
+              </TouchableOpacity>
+            </View>
           )}
         </Card>
         </View>
@@ -731,41 +828,49 @@ export default function TenantPreview() {
       <Modal visible={!!digitalReceipt} transparent animationType="fade">
         <View style={styles.modalBg}>
           <View style={styles.modalBox}>
+            <View style={styles.receiptHandle} />
             <View style={styles.receiptHeaderRow}>
-              <View style={styles.receiptBadge}>
-                <FileText size={20} color={colors.emerald} />
-              </View>
-              <View>
+              <View style={{ flex: 1 }}>
                 <Text style={styles.receiptEyebrow}>Tenant's</Text>
-                <Text style={styles.receiptTitle}>Digital Receipt</Text>
+                <View style={styles.receiptTitleRow}>
+                  <Text style={styles.receiptTitle}>Digital Receipt</Text>
+                  <BadgeCheck size={18} color={colors.emerald} />
+                </View>
               </View>
+              <TouchableOpacity style={styles.receiptCloseIcon} onPress={() => setDigitalReceipt(null)} activeOpacity={0.7}>
+                <X size={18} color={colors.ink} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.receiptNumberBox}>
+              <Text style={styles.receiptNumberLabel}>Receipt No.</Text>
+              <Text style={styles.receiptNumberValue}>{digitalReceipt?.receiptNo ?? ""}</Text>
+            </View>
+
+            <View style={styles.receiptAmountBox}>
+              <Text style={styles.receiptAmountLabel}>
+                {String(digitalReceipt?.status ?? "").toLowerCase() === "pending" ? "Payment Submitted" : "Total Settled Rent"}
+              </Text>
+              <Text style={styles.receiptAmountValue}>₱{receiptAmountPaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
             </View>
 
             <View style={styles.receiptDetailsBox}>
               <View style={styles.receiptDetailRow}>
-                <Text style={styles.receiptDetailLabel}>Receipt No.</Text>
-                <Text style={styles.receiptDetailValue}>{digitalReceipt?.receiptNo ?? ""}</Text>
-              </View>
-              <View style={styles.receiptDetailRow}>
-                <Text style={styles.receiptDetailLabel}>Tenant</Text>
+                <Text style={styles.receiptDetailLabel}>Tenant Name</Text>
                 <Text style={styles.receiptDetailValue}>{digitalReceipt?.tenantName ?? ""}</Text>
               </View>
               <View style={styles.receiptDetailRow}>
-                <Text style={styles.receiptDetailLabel}>Building</Text>
-                <Text style={styles.receiptDetailValue}>{digitalReceipt?.buildingNumber ?? ""}</Text>
+                <Text style={styles.receiptDetailLabel}>Stalls Covered</Text>
+                <Text style={styles.receiptDetailValue}>{receiptPremises}</Text>
               </View>
               <View style={styles.receiptDetailRow}>
-                <Text style={styles.receiptDetailLabel}>Space ID</Text>
-                <Text style={styles.receiptDetailValue}>{digitalReceipt?.spaceId ?? ""}</Text>
-              </View>
-              <View style={styles.receiptDetailRow}>
-                <Text style={styles.receiptDetailLabel}>Date</Text>
+                <Text style={styles.receiptDetailLabel}>Settlement Date</Text>
                 <Text style={styles.receiptDetailValue}>
                   {digitalReceipt?.date ? new Date(digitalReceipt.date).toLocaleDateString() : ""}
                 </Text>
               </View>
               <View style={styles.receiptDetailRow}>
-                <Text style={styles.receiptDetailLabel}>Method</Text>
+                <Text style={styles.receiptDetailLabel}>Payment Method</Text>
                 <View style={styles.receiptMethodValueRow}>
                   {methodIcon(digitalReceipt?.paymentMethod) && (
                     <Image
@@ -778,8 +883,8 @@ export default function TenantPreview() {
                 </View>
               </View>
               <View style={styles.receiptDetailRow}>
-                <Text style={styles.receiptDetailLabel}>Rent</Text>
-                <Text style={styles.receiptDetailValue}>₱{digitalReceipt?.rentAmount ?? 0}</Text>
+                <Text style={styles.receiptDetailLabel}>Rent Settled</Text>
+                <Text style={[styles.receiptDetailValue, styles.receiptSettledValue]}>₱{receiptAmountPaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
               </View>
               {digitalReceipt?.change > 0 && (
                 <View style={styles.receiptDetailRow}>
@@ -788,14 +893,6 @@ export default function TenantPreview() {
                 </View>
               )}
 
-              <View style={styles.receiptStatusPill}>
-                {String(digitalReceipt?.status ?? "").toLowerCase() === "approved" && (
-                  <Check size={14} color={colors.emerald} style={{ marginRight: 6 }} />
-                )}
-                <Text style={styles.receiptStatusPillText}>
-                  {String(digitalReceipt?.status ?? "").toUpperCase()}
-                </Text>
-              </View>
             </View>
 
             {receiptBreakdown.length > 0 && (
@@ -805,7 +902,10 @@ export default function TenantPreview() {
                   onPress={() => setBreakdownOpen((v) => !v)}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.breakdownTitle}>Breakdown</Text>
+                  <View style={styles.breakdownTitleRow}>
+                    <Calculator size={14} color={colors.emerald} />
+                    <Text style={styles.breakdownTitle}>Breakdown (Rent Interval Summary)</Text>
+                  </View>
                   {breakdownOpen ? (
                     <ChevronUp size={16} color={colors.emerald} />
                   ) : (
@@ -832,27 +932,18 @@ export default function TenantPreview() {
             )}
 
             <View style={styles.modalButtons}>
-              <Button
-                label="Close"
-                variant="secondary"
-                fullWidth={false}
-                onPress={() => setDigitalReceipt(null)}
-                style={styles.receiptCloseBtn}
-              />
-
-              <Button
-                label="Download Receipt"
-                variant="primary"
-                fullWidth={false}
-                loading={generatingReceipt}
-                onPress={() => downloadOnlineReceipt(digitalReceipt)}
-                style={styles.receiptDownloadBtn}
-              />
+              <Pressable style={({ pressed }) => [styles.receiptCloseBtn, pressed && styles.receiptButtonPressed]} onPress={() => setDigitalReceipt(null)}>
+                <Text style={styles.receiptCloseBtnText}>Close</Text>
+              </Pressable>
+              <Pressable style={({ pressed }) => [styles.receiptDownloadBtn, pressed && styles.receiptButtonPressed]} onPress={() => downloadOnlineReceipt(digitalReceipt)} disabled={generatingReceipt}>
+                {generatingReceipt ? <ActivityIndicator color={colors.white} size="small" /> : <><Download size={15} color={colors.white} /><Text style={styles.receiptDownloadBtnText}>Download Receipt</Text></>}
+              </Pressable>
             </View>
           </View>
         </View>
       </Modal>
 
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
       <HelpTour
         visible={tourVisible}
         steps={tourSteps}
@@ -985,12 +1076,6 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
-  bannerWelcome: {
-    color: colors.emeraldSoft,
-    fontSize: fontSize.xs,
-    fontFamily: fontFamily.medium,
-  },
-
   bannerName: {
     color: colors.white,
     fontSize: fontSize.lg,
@@ -1005,26 +1090,17 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  bannerEmailRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexWrap: "wrap",
-    gap: spacing.xs + 2,
-    marginTop: 4,
-  },
-
-  bannerEmail: {
-    color: colors.emeraldSoft,
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.regular,
-    flexShrink: 1,
-  },
-
   // ── Card ─────────────────────────────────────────────────────────────────────
 
   cardOverride: {
     flexDirection: "column",
     padding: spacing.lg + 2,
+    ...shadow.card,
+  },
+
+  rentalCardOverride: {
+    flexDirection: "column",
+    padding: spacing.md + 2,
     ...shadow.card,
   },
 
@@ -1037,18 +1113,6 @@ const styles = StyleSheet.create({
 
   // ── Rental Payment card (Card 1) — mirrors rentwise-tenant/app/dashboard.tsx exactly ──
 
-  rpHeaderRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: spacing.md + 2,
-  },
-  rpMonthBadge: {
-    backgroundColor: colors.emeraldSoft,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 5,
-  },
   rpMonthBadgeText: {
     fontSize: fontSize.xs,
     fontFamily: fontFamily.semibold,
@@ -1056,36 +1120,38 @@ const styles = StyleSheet.create({
   },
 
   rpRemainingBox: {
-    backgroundColor: colors.mist,
-    borderRadius: radius.md,
-    padding: spacing.lg,
+    backgroundColor: "#FBFFFD",
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: "#B9DED1",
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
   },
   rpRemainingLabelRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    justifyContent: "space-between",
   },
   rpRemainingLabel: {
-    fontSize: fontSize.xs,
+    fontSize: fontSize.xs + 1,
     fontFamily: fontFamily.semibold,
-    color: colors.textSecondary,
+    color: colors.ink,
     letterSpacing: 0.4,
     textTransform: "uppercase",
   },
   rpRemainingAmount: {
-    fontSize: fontSize.display,
+    fontSize: 38,
     fontFamily: fontFamily.extrabold,
-    color: colors.error,
-    marginTop: 4,
+    color: colors.ink,
+    marginTop: spacing.md,
     marginBottom: spacing.md,
   },
   rpProgressTrack: {
-    height: 8,
-    borderRadius: radius.pill,
-    backgroundColor: colors.border,
-    overflow: "hidden",
-    marginBottom: spacing.sm,
+    flexDirection: "row",
+    gap: 6,
+    marginBottom: spacing.sm + 2,
   },
+  rpProgressSegment: { flex: 1, height: 8, borderRadius: radius.pill, backgroundColor: "#E1E5E3", overflow: "hidden" },
   rpProgressFill: {
     height: "100%",
     borderRadius: radius.pill,
@@ -1101,28 +1167,33 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   rpFooterStrong: {
+    fontSize: fontSize.md,
     fontFamily: fontFamily.bold,
-    color: colors.ink,
+    color: colors.emerald,
+    marginTop: spacing.sm,
   },
+  rpFooterTotal: { fontSize: fontSize.md, fontFamily: fontFamily.bold, color: colors.emerald, marginTop: spacing.sm },
+  rpTotalWrap: { alignItems: "flex-end" },
 
   rpStatRow: {
     flexDirection: "row",
     gap: spacing.md,
-    marginTop: spacing.lg,
+    marginTop: spacing.md,
   },
   rpStatCard: {
     flex: 1,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
-    padding: spacing.md + 2,
+    padding: spacing.md,
+    minHeight: 92,
   },
   rpStatLabelRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs + 2,
   },
   rpStatLabel: {
     fontSize: fontSize.sm,
@@ -1130,7 +1201,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   rpStatValue: {
-    fontSize: fontSize.lg,
+    fontSize: fontSize.md,
     fontFamily: fontFamily.bold,
     color: colors.ink,
     marginBottom: 2,
@@ -1148,31 +1219,31 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: colors.white,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.md + 2,
-    marginBottom: spacing.md,
-  },
-
-  rowIconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.emeraldSoft,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+    paddingVertical: spacing.md,
   },
 
   rowInfo: {
     flex: 1,
   },
 
+  rowAmountLine: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+
   rowAmount: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.bold,
     color: colors.ink,
+  },
+
+  receiptNoChip: {
+    fontSize: 9,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
+    backgroundColor: colors.mist,
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
   },
 
   rowDate: {
@@ -1184,13 +1255,36 @@ const styles = StyleSheet.create({
 
   rowRight: {
     alignItems: "flex-end",
+    marginLeft: spacing.sm,
   },
+
+  rowMethodLine: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4 },
 
   rowMethod: {
     fontSize: fontSize.xs,
     fontFamily: fontFamily.regular,
-    color: colors.textMuted,
-    marginTop: 4,
+    color: colors.ink,
+  },
+
+  rowChevron: { marginLeft: spacing.sm },
+
+  viewAllPaymentsWrap: {
+    alignItems: "center",
+    paddingTop: spacing.lg,
+  },
+  viewAllPaymentsButton: {
+    minWidth: 112,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+    backgroundColor: colors.ink,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm + 2,
+  },
+  viewAllPaymentsText: {
+    color: colors.white,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
   },
 
   // Empty state
@@ -1225,10 +1319,12 @@ const styles = StyleSheet.create({
   },
 
   modalBox: {
-    width: "88%",
+    width: "92%",
+    maxWidth: 390,
+    maxHeight: "92%",
     backgroundColor: colors.white,
-    borderRadius: radius.xl,
-    padding: spacing.xl,
+    borderRadius: 24,
+    padding: spacing.lg,
     ...shadow.raised,
   },
 
@@ -1243,23 +1339,17 @@ const styles = StyleSheet.create({
   receiptHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
 
-  receiptBadge: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.md,
-    backgroundColor: colors.emeraldSoft,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  receiptHandle: { width: 36, height: 5, borderRadius: 3, backgroundColor: colors.border, alignSelf: "center", marginBottom: spacing.md },
+  receiptTitleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  receiptCloseIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.mist, alignItems: "center", justifyContent: "center" },
 
   receiptEyebrow: {
     fontSize: fontSize.xs,
     fontFamily: fontFamily.semibold,
-    color: colors.textMuted,
+    color: colors.emerald,
     textTransform: "uppercase",
     letterSpacing: 0.6,
   },
@@ -1270,33 +1360,43 @@ const styles = StyleSheet.create({
     color: colors.ink,
   },
 
+  receiptNumberBox: { backgroundColor: "#F7F9FA", borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md },
+  receiptNumberLabel: { fontSize: 9, fontFamily: fontFamily.semibold, color: colors.textMuted, textTransform: "uppercase" },
+  receiptNumberValue: { fontSize: fontSize.xs, fontFamily: fontFamily.bold, color: colors.ink, marginTop: 2 },
+  receiptAmountBox: { minHeight: 105, backgroundColor: "#FBFCFD", borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center", marginBottom: spacing.md },
+  receiptAmountLabel: { fontSize: 10, fontFamily: fontFamily.semibold, color: colors.textMuted, textTransform: "uppercase" },
+  receiptAmountValue: { fontSize: 30, fontFamily: fontFamily.extrabold, color: colors.ink, marginTop: spacing.sm },
+
   receiptDetailsBox: {
     borderWidth: 1,
-    borderStyle: "dashed",
-    borderColor: colors.borderStrong,
+    borderColor: colors.border,
     borderRadius: radius.lg,
-    backgroundColor: colors.mist,
-    padding: spacing.lg,
+    backgroundColor: colors.white,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
 
   receiptDetailRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingVertical: spacing.xs + 2,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
   },
 
   receiptDetailLabel: {
-    fontSize: fontSize.sm,
+    fontSize: fontSize.xs,
     fontFamily: fontFamily.medium,
     color: colors.textSecondary,
   },
 
   receiptDetailValue: {
-    fontSize: fontSize.sm,
+    fontSize: fontSize.xs,
     fontFamily: fontFamily.bold,
     color: colors.ink,
   },
+  receiptSettledValue: { color: colors.emerald },
 
   receiptMethodValueRow: {
     flexDirection: "row",
@@ -1310,25 +1410,14 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
 
-  receiptStatusPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.successSoft,
-    borderRadius: radius.pill,
-    paddingVertical: spacing.sm + 2,
-    marginTop: spacing.md,
-  },
-
-  receiptStatusPillText: {
-    fontSize: fontSize.xs + 1,
-    fontFamily: fontFamily.bold,
-    color: colors.emerald,
-    letterSpacing: 0.4,
-  },
-
   breakdownSection: {
-    marginTop: spacing.lg,
+    marginTop: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: "#F8FAFA",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
   },
 
   breakdownHeader: {
@@ -1336,9 +1425,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
+  breakdownTitleRow: { flexDirection: "row", alignItems: "center", gap: 7 },
 
   breakdownTitle: {
-    fontSize: fontSize.base,
+    fontSize: fontSize.xs,
     fontFamily: fontFamily.bold,
     color: colors.ink,
   },
@@ -1390,13 +1480,26 @@ const styles = StyleSheet.create({
   },
 
   receiptCloseBtn: {
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.xl,
+    minWidth: 78,
+    minHeight: 44,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.emerald,
+    alignItems: "center",
+    justifyContent: "center",
   },
+  receiptCloseBtnText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.ink },
 
   receiptDownloadBtn: {
     flex: 1,
-    borderRadius: radius.pill,
+    minHeight: 44,
+    borderRadius: radius.md,
     backgroundColor: colors.ink,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
   },
+  receiptDownloadBtnText: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.white },
+  receiptButtonPressed: { opacity: 0.78, transform: [{ scale: 0.98 }] },
 });

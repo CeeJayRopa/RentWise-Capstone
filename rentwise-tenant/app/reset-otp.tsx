@@ -27,7 +27,7 @@ const RESEND_COOLDOWN = 60; // seconds
 // OTP_RESET_PLAN.md.
 export default function ResetOtp() {
   const insets = useSafeAreaInsets();
-  const { email, phoneHint } = useLocalSearchParams<{ email?: string; phoneHint?: string }>();
+  const { identifier, phoneHint } = useLocalSearchParams<{ identifier?: string; phoneHint?: string }>();
 
   const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +58,7 @@ export default function ResetOtp() {
 
   async function handleVerify() {
     if (otp.length !== OTP_LENGTH || submitting) return;
-    if (!email) {
+    if (!identifier) {
       setError("Something went wrong. Please restart from the sign-in screen.");
       return;
     }
@@ -67,13 +67,13 @@ export default function ResetOtp() {
     setNotice(null);
     try {
       const verifyResetOtp = httpsCallable(cloudFunctions, "verifyResetOtp");
-      const res = (await verifyResetOtp({ email, otp })).data as { resetToken?: string };
+      const res = (await verifyResetOtp({ identifier, otp })).data as { resetToken?: string };
       if (!res.resetToken) {
         setError("Something went wrong. Please request a new code.");
         setOtp("");
         return;
       }
-      router.replace({ pathname: "/reset-password", params: { resetToken: res.resetToken, email } });
+      router.replace({ pathname: "/reset-password", params: { resetToken: res.resetToken, identifier } });
     } catch (err: any) {
       // Server messages are already user-facing (incorrect + attempts left,
       // expired, locked out). Clear the field and let them retry / resend.
@@ -87,13 +87,13 @@ export default function ResetOtp() {
   }
 
   async function handleResend() {
-    if (cooldown > 0 || resending || !email) return;
+    if (cooldown > 0 || resending || !identifier) return;
     setResending(true);
     setError(null);
     setNotice(null);
     try {
       const sendResetOtp = httpsCallable(cloudFunctions, "sendResetOtp");
-      const res = (await sendResetOtp({ email })).data as { status: string };
+      const res = (await sendResetOtp({ identifier })).data as { status: string };
       // Stay generic regardless of outcome -- don't reveal account state.
       setOtp("");
       setCooldown(RESEND_COOLDOWN);
@@ -108,6 +108,21 @@ export default function ResetOtp() {
       setError(err?.message || "Couldn't resend the code. Please try again.");
     } finally {
       setResending(false);
+    }
+  }
+
+  async function handleAdminRecovery() {
+    if (!identifier || submitting || resending) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const requestRecovery = httpsCallable(cloudFunctions, "requestTenantAdminRecovery");
+      await requestRecovery({identifier});
+      setNotice("Recovery request sent. Visit the admin office with identification to receive a temporary code.");
+    } catch (err: any) {
+      setError(err?.message || "Couldn't send the recovery request. Please try again.");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -198,6 +213,14 @@ export default function ResetOtp() {
             </TouchableOpacity>
           )}
         </View>
+        <TouchableOpacity
+          style={styles.adminHelpButton}
+          onPress={handleAdminRecovery}
+          disabled={submitting || resending}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.adminHelpText}>I can't access this phone</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -285,4 +308,6 @@ const styles = StyleSheet.create({
   resendRow: { alignItems: "center", marginTop: spacing.xl },
   resendMuted: { fontSize: fontSize.sm, fontFamily: fontFamily.regular, color: colors.textMuted },
   resendLink: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.emerald },
+  adminHelpButton: { alignItems: "center", marginTop: spacing.lg, paddingVertical: spacing.sm },
+  adminHelpText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.textSecondary },
 });

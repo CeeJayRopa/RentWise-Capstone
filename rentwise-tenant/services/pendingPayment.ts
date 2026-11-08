@@ -1,29 +1,30 @@
-let pendingCheckoutSessionId: string | null = null;
-let pendingPaymentMethod: string | null = null;
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
-export function setPendingCheckoutSession(id: string): void {
-  pendingCheckoutSessionId = id;
+const CHECKOUT_SESSION_KEY = "tenant:pendingCheckoutSessionId";
+const PAYMENT_METHOD_KEY = "tenant:pendingPaymentMethod";
+
+export async function setPendingCheckoutSession(id: string): Promise<void> {
+  await AsyncStorage.setItem(CHECKOUT_SESSION_KEY, id);
 }
 
-export function getPendingCheckoutSession(): string | null {
-  return pendingCheckoutSessionId;
+export async function getPendingCheckoutSession(): Promise<string | null> {
+  return AsyncStorage.getItem(CHECKOUT_SESSION_KEY);
 }
 
-export function clearPendingCheckoutSession(): void {
-  pendingCheckoutSessionId = null;
+export async function clearPendingCheckoutSession(): Promise<void> {
+  await AsyncStorage.removeItem(CHECKOUT_SESSION_KEY);
 }
 
-// Remembers which wallet (GCash/Maya) the tenant picked before handing off
-// to the WebView checkout, so the payment record created afterward can show
-// the actual method instead of a generic "GCash/Maya" label.
-export function setPendingPaymentMethod(method: string): void {
-  pendingPaymentMethod = method;
+// Remembers the PayMongo method selected before handing off to checkout so
+// the payment record created afterward can show the actual method.
+export async function setPendingPaymentMethod(method: string): Promise<void> {
+  await AsyncStorage.setItem(PAYMENT_METHOD_KEY, method);
 }
 
-export function getPendingPaymentMethod(): string | null {
-  return pendingPaymentMethod;
+export async function getPendingPaymentMethod(): Promise<string | null> {
+  return AsyncStorage.getItem(PAYMENT_METHOD_KEY);
 }
 
-export function clearPendingPaymentMethod(): void {
-  pendingPaymentMethod = null;
+export async function clearPendingPaymentMethod(): Promise<void> {
+  await AsyncStorage.removeItem(PAYMENT_METHOD_KEY);
 }

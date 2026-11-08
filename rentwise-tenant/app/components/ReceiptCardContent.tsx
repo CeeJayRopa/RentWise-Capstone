@@ -74,13 +74,45 @@ function methodBadge(method: string): MethodBadge {
   return { initial: "C", color: colors.textMuted };
 }
 
+function finiteMoney(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const amount = Number(value);
+  return Number.isFinite(amount) ? amount : null;
+}
+
+// New cash receipts store the rent applied in `payment` and the cash handed
+// over in `cashReceived`. Legacy admin receipts stored tendered cash in
+// `payment`. Supporting both shapes also keeps historical receipts correct.
+function getReceiptAmounts(data: any): { amountPaid: number; cashTendered: number | null; change: number } {
+  const change = Math.max(0, finiteMoney(data?.change) ?? 0);
+  const explicitPaid = finiteMoney(data?.amountPaid ?? data?.amount);
+  const payment = finiteMoney(data?.payment);
+  const explicitTendered = finiteMoney(data?.cashTendered ?? data?.cashReceived);
+
+  if (explicitTendered !== null) {
+    return {
+      amountPaid: Math.max(0, finiteMoney(data?.amountPaid) ?? explicitTendered - change),
+      cashTendered: explicitTendered,
+      change,
+    };
+  }
+  if (change > 0 && payment !== null && payment > change) {
+    return { amountPaid: Math.max(0, payment - change), cashTendered: payment, change };
+  }
+  return {
+    amountPaid: Math.max(0, explicitPaid ?? payment ?? finiteMoney(data?.rentAmount) ?? 0),
+    cashTendered: null,
+    change,
+  };
+}
+
 // Older receipts (and admin-recorded cash payments) never got a `breakdown`
 // array — they only stored the lump `rentAmount`. Reconstructs the same
 // itemized, date-listed breakdown for those by working out how many
 // consecutive periods that lump sum actually represents (rentAmount ÷ one
 // period's charge) and listing each one ending on the receipt's date.
 function synthesizeBreakdown(data: any, _billing: any): BreakdownLine[] {
-  const amountPaid = Number(data.payment ?? data.amount ?? data.rentAmount ?? 0) - Number(data.change ?? 0);
+  const { amountPaid } = getReceiptAmounts(data);
   if (!Number.isFinite(amountPaid) || amountPaid <= 0) return [];
   return [{
     label: "Legacy payment — itemized coverage unavailable",
@@ -88,7 +120,38 @@ function synthesizeBreakdown(data: any, _billing: any): BreakdownLine[] {
   }];
 }
 
+function completeBreakdown(data: any, billing: any, amountPaid: number): BreakdownLine[] {
+  const stored: BreakdownLine[] = Array.isArray(data?.breakdown)
+    ? data.breakdown.filter((line: any) => line && typeof line.label === "string" && Number.isFinite(Number(line.amount)))
+      .map((line: any) => ({label: line.label, amount: Math.max(0, Number(line.amount))}))
+    : [];
+  const storedTotal = stored.reduce((sum, line) => sum + line.amount, 0);
+  if (stored.length > 0 && Math.abs(storedTotal - amountPaid) < 0.01) return stored;
+
+  const periods = Math.max(0, Math.round(Number(data?.periodsCovered ?? 0)));
+  const schedule = String(data?.paymentSchedule ?? billing?.paymentSchedule ?? "daily").toLowerCase();
+  if (periods > 0 && amountPaid > 0) {
+    const perPeriod = amountPaid / periods;
+    if (Number.isFinite(perPeriod) && perPeriod > 0) {
+      const label = schedule === "daily" ? "Daily rent coverage" : `${schedule} rent coverage`;
+      return Array.from({length: periods}, (_, index) => ({
+        label: periods === 1 ? label : `${label} ${index + 1} of ${periods}`,
+        amount: perPeriod,
+      }));
+    }
+  }
+  if (stored.length > 0 && amountPaid > storedTotal) {
+    return [...stored, {label: "Additional rent coverage", amount: amountPaid - storedTotal}];
+  }
+  return synthesizeBreakdown(data, billing);
+}
+
 function buildReceiptHtml(data: any, breakdown: BreakdownLine[], amountPaid: number) {
+  const { cashTendered, change } = getReceiptAmounts(data);
+  const stalls = Array.isArray(data.stalls) && data.stalls.length > 0 ? data.stalls : [];
+  const premises = stalls.length > 0
+    ? stalls.map((item: any) => `Building ${escapeHtml(item.buildingNumber)} · Space ${escapeHtml(item.spaceId)}`).join("<br/>")
+    : `Building ${escapeHtml(data.buildingNumber)} · Space ${escapeHtml(data.spaceId)}`;
   const rows = breakdown
     .map(
       (b) =>
@@ -103,14 +166,13 @@ function buildReceiptHtml(data: any, breakdown: BreakdownLine[], amountPaid: num
         <hr />
         <p><b>Reference ID:</b> #${escapeHtml(data.receiptNo)}</p>
         <p><b>Tenant Name:</b> ${escapeHtml(data.tenantName)}</p>
-        <p><b>Building No.:</b> ${escapeHtml(data.buildingNumber)}</p>
-        <p><b>Space ID:</b> ${escapeHtml(data.spaceId)}</p>
+        <p><b>Stalls Covered:</b><br/>${premises}</p>
         <p><b>Payment Date:</b> ${escapeHtml(data.date ? new Date(data.date).toLocaleString() : "")}</p>
         <p><b>Payment Method:</b> ${escapeHtml(data.paymentMethod)}</p>
         <p><b>Status:</b> ${escapeHtml(data.status)}</p>
         ${
-          data.change > 0
-            ? `<p><b>Cash Tendered:</b> ₱${Number(data.payment ?? 0).toLocaleString()}</p><p><b>Change:</b> ₱${Number(data.change).toLocaleString()}</p>`
+          change > 0 && cashTendered !== null
+            ? `<p><b>Cash Tendered:</b> ₱${cashTendered.toLocaleString()}</p><p><b>Change:</b> ₱${change.toLocaleString()}</p>`
             : ""
         }
         <hr />
@@ -159,21 +221,17 @@ async function confirmReceiptFolderAccess(): Promise<boolean> {
 // caller can render the buttons OUTSIDE a ScrollView (fixed at the bottom
 // of a modal) while the content itself scrolls independently.
 function useReceiptDerived(data: any, billing: any) {
-  const breakdown: BreakdownLine[] =
-    Array.isArray(data.breakdown) && data.breakdown.length > 0
-      ? data.breakdown
-      : synthesizeBreakdown(data, billing);
-
-  // For cash payments, `data.payment` is what the tenant physically handed
-  // over — it includes change owed back, which was never actually applied
-  // toward rent. The real amount paid is that minus the change.
-  const amountPaid = Number(data.payment ?? 0) - Number(data.change ?? 0);
+  const { amountPaid } = getReceiptAmounts(data);
+  const breakdown = completeBreakdown(data, billing, amountPaid);
 
   async function handleDownloadPdf() {
     try {
       if (Platform.OS === "android" && !(await confirmReceiptFolderAccess())) return;
 
-      const { uri } = await Print.printToFileAsync({ html: buildReceiptHtml(data, breakdown, amountPaid) });
+      const receiptData = Array.isArray(data.stalls) && data.stalls.length > 0
+        ? data
+        : {...data, stalls: Array.isArray(billing?.stalls) ? billing.stalls : []};
+      const { uri } = await Print.printToFileAsync({ html: buildReceiptHtml(receiptData, breakdown, amountPaid) });
       const safeReceiptNo = String(data.receiptNo ?? Date.now()).replace(/[^a-zA-Z0-9_-]/g, "-");
       const fileName = `RentWise-Receipt-${safeReceiptNo}.pdf`;
 
@@ -259,10 +317,17 @@ export default function ReceiptCardContent({
   const receiptDate = data.date ? new Date(data.date) : new Date();
 
   const { breakdown, amountPaid, handleDownloadPdf } = useReceiptDerived(data, billing);
+  const { cashTendered, change } = getReceiptAmounts(data);
 
   const info = statusInfo(data.status);
   const Icon = info.icon;
   const badge = methodBadge(data.paymentMethod);
+  const receiptStalls = Array.isArray(data.stalls) && data.stalls.length > 0
+    ? data.stalls
+    : Array.isArray(billing?.stalls) ? billing.stalls : [];
+  const premises = receiptStalls.length > 0
+    ? receiptStalls.map((item: any) => `Building ${item.buildingNumber} · Space ${item.spaceId}`).join("\n")
+    : `Building ${data.buildingNumber ?? ""} · Space ${data.spaceId ?? ""}`;
 
   return (
     <View style={styles.root}>
@@ -312,21 +377,25 @@ export default function ReceiptCardContent({
             <Text style={styles.detailValue}>{data.paymentMethod || "—"}</Text>
           </View>
         </View>
-        <View style={data.change > 0 ? styles.detailRow : [styles.detailRow, { borderBottomWidth: 0 }]}>
+        <View style={styles.detailRow}>
+          <Text style={styles.detailLabel}>Stalls Covered</Text>
+          <Text style={styles.detailValue}>{premises}</Text>
+        </View>
+        <View style={change > 0 && cashTendered !== null ? styles.detailRow : [styles.detailRow, { borderBottomWidth: 0 }]}>
           <Text style={styles.detailLabel}>Status</Text>
           <View style={[styles.statusDetailBadge, { backgroundColor: info.pillBg }]}>
             <Text style={[styles.statusDetailText, { color: info.pillColor }]}>{info.statusText}</Text>
           </View>
         </View>
-        {data.change > 0 && (
+        {change > 0 && cashTendered !== null && (
           <>
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>Cash Tendered</Text>
-              <Text style={styles.detailValue}>₱{Number(data.payment ?? 0).toLocaleString()}</Text>
+              <Text style={styles.detailValue}>₱{cashTendered.toLocaleString()}</Text>
             </View>
             <View style={[styles.detailRow, { borderBottomWidth: 0 }]}>
               <Text style={styles.detailLabel}>Change</Text>
-              <Text style={styles.detailValue}>₱{Number(data.change).toLocaleString()}</Text>
+              <Text style={styles.detailValue}>₱{change.toLocaleString()}</Text>
             </View>
           </>
         )}

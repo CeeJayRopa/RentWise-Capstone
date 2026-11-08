@@ -22,6 +22,8 @@ import {
   orderBy,
   updateDoc,
   writeBatch,
+  getDocs,
+  limit,
 } from "firebase/firestore";
 import {
   ArrowLeft,
@@ -39,6 +41,7 @@ import { auth } from "../shared/firebaseConfig";
 import { db } from "../shared/services/firestore";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 import HelpTour, { HelpStep } from "./components/HelpTour";
+import HelpSupportModal from "./components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
 
 type Notification = {
@@ -47,13 +50,40 @@ type Notification = {
   message: string;
   read: boolean;
   createdAt: any;
+  type?: string;
+  category?: string;
+  route?: string;
 };
+
+const PAYMENTS_ROUTE = "/(tabs)/payments";
+
+function isPaymentReminder(item: Notification): boolean {
+  if (item.route === PAYMENTS_ROUTE) return true;
+  if (item.type === "payment_reminder" || item.type === "payment_update") return true;
+  if (item.category === "payment") return true;
+
+  // Backward compatibility for manual reminders created before notification
+  // routing metadata was added. Keep this deliberately narrow so unrelated
+  // historical notifications do not unexpectedly navigate to Payments.
+  const message = item.message.toLowerCase();
+  return (
+    message.includes("market administrator") &&
+    message.includes("rental account") &&
+    message.includes("payment status")
+  );
+}
 
 // The backend only ever writes a single `message` sentence — there's no
 // category field to key off of. Sniffing keywords out of that sentence is
 // the only way to give each notification a distinct title/icon/color
 // without touching every Cloud Function that creates one.
-function categorize(message: string) {
+function categorize(message: string, type?: string) {
+  if (type === "payment_reminder") {
+    return { title: "Rent Due", icon: AlarmClock, iconColor: colors.error, iconBg: colors.errorSoft };
+  }
+  if (type === "payment_update") {
+    return { title: "Payment Update", icon: Wallet, iconColor: colors.emerald, iconBg: colors.emeraldSoft };
+  }
   const m = message.toLowerCase();
   if (m.includes("rent") && (m.includes("due") || m.includes("overdue"))) {
     return { title: "Rent Due", icon: AlarmClock, iconColor: colors.error, iconBg: colors.errorSoft };
@@ -89,10 +119,12 @@ export default function Notification() {
   const [loading, setLoading] = useState(true);
   const [markingAll, setMarkingAll] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [displayLimit, setDisplayLimit] = useState(50);
 
   const unsubRef = useRef<(() => void) | null>(null);
 
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
   const helpRef = useRef<View>(null);
   const markAllRef = useRef<View>(null);
   const clearAllRef = useRef<View>(null);
@@ -127,6 +159,7 @@ export default function Notification() {
       collection(db, "notifications"),
       where("userId", "==", user.uid),
       orderBy("createdAt", "desc"),
+      limit(displayLimit),
     );
 
     const unsub = onSnapshot(q, (snap) => {
@@ -137,10 +170,13 @@ export default function Notification() {
         })),
       );
       setLoading(false);
+    }, (error) => {
+      if (auth.currentUser) console.error("TENANT NOTIFICATIONS LISTENER ERROR:", error);
+      setLoading(false);
     });
 
     unsubRef.current = unsub;
-  }, []);
+  }, [displayLimit]);
 
   useFocusEffect(
     useCallback(() => {
@@ -161,16 +197,31 @@ export default function Notification() {
     }
   };
 
+  const handleNotificationPress = (item: Notification) => {
+    // Reading a reminder and navigating are intentionally independent. A
+    // temporary Firestore failure must not prevent the tenant from opening
+    // their current payment page, and navigation never starts a transaction.
+    void markRead(item);
+    if (isPaymentReminder(item)) {
+      router.push(PAYMENTS_ROUTE);
+    }
+  };
+
   const markAllRead = async () => {
-    const unread = notifications.filter((n) => !n.read);
-    if (unread.length === 0) return;
+    const user = auth.currentUser;
+    if (!user) return;
     setMarkingAll(true);
     try {
-      const batch = writeBatch(db);
-      unread.forEach((n) => {
-        batch.update(doc(db, "notifications", n.id), { read: true });
-      });
-      await batch.commit();
+      const snapshot = await getDocs(query(
+        collection(db, "notifications"),
+        where("userId", "==", user.uid),
+        where("read", "==", false),
+      ));
+      for (let start = 0; start < snapshot.docs.length; start += 400) {
+        const batch = writeBatch(db);
+        snapshot.docs.slice(start, start + 400).forEach((item) => batch.update(item.ref, {read: true}));
+        await batch.commit();
+      }
     } catch (err) {
       console.log(err);
     } finally {
@@ -179,14 +230,19 @@ export default function Notification() {
   };
 
   const clearAll = async () => {
-    if (notifications.length === 0) return;
+    const user = auth.currentUser;
+    if (!user) return;
     setClearing(true);
     try {
-      const batch = writeBatch(db);
-      notifications.forEach((n) => {
-        batch.delete(doc(db, "notifications", n.id));
-      });
-      await batch.commit();
+      const snapshot = await getDocs(query(
+        collection(db, "notifications"),
+        where("userId", "==", user.uid),
+      ));
+      for (let start = 0; start < snapshot.docs.length; start += 400) {
+        const batch = writeBatch(db);
+        snapshot.docs.slice(start, start + 400).forEach((item) => batch.delete(item.ref));
+        await batch.commit();
+      }
     } catch (err) {
       console.log(err);
     } finally {
@@ -232,7 +288,7 @@ export default function Notification() {
           </TouchableOpacity>
           <Text style={styles.headerRowTitle}>Notifications</Text>
           <View ref={helpRef} collapsable={false}>
-            <TouchableOpacity style={styles.headerIconBtn} onPress={() => setTourVisible(true)} hitSlop={8}>
+            <TouchableOpacity style={styles.headerIconBtn} onPress={() => setHelpSupportVisible(true)} hitSlop={8}>
               <HelpCircle size={20} color={colors.white} />
             </TouchableOpacity>
           </View>
@@ -313,14 +369,14 @@ export default function Notification() {
             </View>
           ) : (
             notifications.map((item, index) => {
-              const cat = categorize(item.message);
+              const cat = categorize(item.message, item.type);
               const Icon = cat.icon;
               return (
                 <TouchableOpacity
                   key={item.id}
                   ref={index === 0 ? firstCardRef : undefined}
                   style={styles.card}
-                  onPress={() => markRead(item)}
+                  onPress={() => handleNotificationPress(item)}
                   activeOpacity={0.8}
                 >
                   <View style={[styles.iconCircle, { backgroundColor: cat.iconBg }]}>
@@ -336,9 +392,15 @@ export default function Notification() {
               );
             })
           )}
+          {notifications.length >= displayLimit && (
+            <Pressable style={styles.loadMoreButton} onPress={() => setDisplayLimit((value) => value + 50)}>
+              <Text style={styles.loadMoreText}>Load older notifications</Text>
+            </Pressable>
+          )}
         </View>
       </ScrollView>
 
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
       <HelpTour
         visible={tourVisible}
         steps={tourSteps}
@@ -516,6 +578,21 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: colors.emeraldBright,
     marginTop: 4,
+  },
+
+  loadMoreButton: {
+    alignSelf: "center",
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.mist,
+  },
+
+  loadMoreText: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
   },
 
   // ── Empty state ──────────────────────────────────

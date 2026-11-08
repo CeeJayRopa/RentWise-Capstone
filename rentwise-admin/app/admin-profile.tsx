@@ -18,18 +18,23 @@ import {
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import { doc, onSnapshot, updateDoc } from "firebase/firestore";
+import { doc, onSnapshot } from "firebase/firestore";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { House, HelpCircle, CheckCircle2, LogOut } from "lucide-react-native";
+import { House, HelpCircle, CheckCircle2, LogOut, BadgeCheck, Contact, Pencil } from "lucide-react-native";
 
 import { auth, logoutUser } from "../shared/services/auth";
 import { clearLocalCache } from "../shared/services/localCache";
 import { db } from "../shared/services/firestore";
+import { firebaseApp } from "../shared/firebaseConfig";
 import { setRememberMe } from "../shared/services/rememberMe";
 import HelpTour, { HelpStep } from "./components/HelpTour";
+import HelpSupportModal from "./components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
-import { Avatar, Card } from "../shared/components/ui";
+import { Card } from "../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
+
+const RENTWISE_ADMIN_USERNAME = "RWADMIN";
 
 export default function AdminProfile() {
   const insets = useSafeAreaInsets();
@@ -38,8 +43,15 @@ export default function AdminProfile() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const isEditingRef = useRef(false);
+
+  const setEditingMode = (value: boolean) => {
+    isEditingRef.current = value;
+    setIsEditing(value);
+  };
 
   const [firstName, setFirstName] = useState("");
+  const [middleName, setMiddleName] = useState("");
   const [lastName, setLastName] = useState("");
   const [contactNo, setContactNo] = useState("");
 
@@ -49,8 +61,9 @@ export default function AdminProfile() {
   const [focusedField, setFocusedField] = useState<string | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(20)).current;
-  const originalRef = useRef({ firstName: "", lastName: "", contactNo: "" });
+  const originalRef = useRef({ firstName: "", middleName: "", lastName: "", contactNo: "" });
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
 
   const homeRef = useRef<View>(null);
   const helpRef = useRef<View>(null);
@@ -122,7 +135,7 @@ export default function AdminProfile() {
 
   const tourSteps: HelpStep[] = [
     { key: "home", ref: homeRef, title: "Home", description: "Takes you back to the dashboard.", edgeInset: "top", round: true },
-    { key: "fields", ref: fieldsRef, title: "Your details", description: "Your last name, first name, and contact number.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(fieldsRef), heightTrimPercent: 0.05 },
+    { key: "fields", ref: fieldsRef, title: "Your details", description: "Your last name, first name, middle name, and contact number.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(fieldsRef), heightTrimPercent: 0.05 },
     { key: "edit", ref: editBtnRef, title: "Edit Profile", description: "Unlocks your name and contact number so you can update them.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(editBtnRef), heightTrimPercent: 0.12, nudgeYPercent: 0.01 },
     { key: "logout", ref: logoutBtnRef, title: "Logout", description: "Signs you out of your admin account.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(logoutBtnRef), heightTrimPercent: 0.02, nudgeYPercent: 0.01 },
   ];
@@ -138,15 +151,17 @@ export default function AdminProfile() {
     return onSnapshot(
       doc(db, "users", user.uid),
       (snap) => {
-        if (snap.exists() && !isEditing) {
+        if (snap.exists() && !isEditingRef.current) {
           const data = snap.data();
           const fn = data.firstName ?? "";
+          const mn = data.middleName ?? "";
           const ln = data.lastName ?? "";
           const cn = data.contactNo ?? "";
           setFirstName(fn);
+          setMiddleName(mn);
           setLastName(ln);
           setContactNo(cn);
-          originalRef.current = { firstName: fn, lastName: ln, contactNo: cn };
+          originalRef.current = { firstName: fn, middleName: mn, lastName: ln, contactNo: cn };
         }
         setLoading(false);
       },
@@ -155,7 +170,7 @@ export default function AdminProfile() {
         setLoading(false);
       },
     );
-  }, [isEditing]);
+  }, []);
 
   // Auto-opens the guided tour the first time the admin ever lands on this
   // page — never again after that, since it flips a persisted per-device
@@ -190,6 +205,7 @@ export default function AdminProfile() {
 
   const hasChanges =
     firstName.trim() !== originalRef.current.firstName ||
+    middleName.trim() !== originalRef.current.middleName ||
     lastName.trim() !== originalRef.current.lastName ||
     contactNo.trim() !== originalRef.current.contactNo;
 
@@ -201,6 +217,7 @@ export default function AdminProfile() {
     if (!user) return;
 
     const fn = firstName.trim();
+    const mn = middleName.trim();
     const ln = lastName.trim();
     const cn = contactNo.trim();
 
@@ -215,13 +232,15 @@ export default function AdminProfile() {
 
     setSaving(true);
     try {
-      await updateDoc(doc(db, "users", user.uid), {
+      const updateProfile = httpsCallable(getFunctions(firebaseApp), "adminUpdateOwnProfile");
+      await updateProfile({
         firstName: fn,
+        middleName: mn,
         lastName: ln,
         contactNo: cn,
       });
-      originalRef.current = { firstName: fn, lastName: ln, contactNo: cn };
-      setIsEditing(false);
+      originalRef.current = { firstName: fn, middleName: mn, lastName: ln, contactNo: cn };
+      setEditingMode(false);
       setSaved(true);
     } catch (err) {
       console.error("ADMIN PROFILE SAVE ERROR:", err);
@@ -233,9 +252,10 @@ export default function AdminProfile() {
 
   function handleCancelEditProfile() {
     setFirstName(originalRef.current.firstName);
+    setMiddleName(originalRef.current.middleName);
     setLastName(originalRef.current.lastName);
     setContactNo(originalRef.current.contactNo);
-    setIsEditing(false);
+    setEditingMode(false);
   }
 
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
@@ -279,7 +299,7 @@ export default function AdminProfile() {
           </View>
           <Text style={styles.headerTitle}>RentWise</Text>
           <View ref={helpRef} collapsable={false}>
-            <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
+            <TouchableOpacity onPress={() => setHelpSupportVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
               <HelpCircle size={24} color={colors.emeraldSoft} />
             </TouchableOpacity>
           </View>
@@ -305,19 +325,31 @@ export default function AdminProfile() {
         {/* IDENTITY CARD */}
         <Card style={styles.identityCard}>
           <View style={styles.identityInner}>
-            <Avatar name={`${firstName} ${lastName}`} size={90} />
-            <Text style={styles.identityName}>
-              {firstName} {lastName}
-            </Text>
-            <Text style={styles.identityRole}>Market Administrator</Text>
+            <View style={styles.adminAvatar}>
+              <Text style={styles.adminAvatarText}>{`${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase()}</Text>
+            </View>
+            <View style={styles.identityCopy}>
+              <Text style={styles.identityName} numberOfLines={1}>
+                {[firstName, middleName, lastName].filter(Boolean).join(" ")}
+              </Text>
+              <View style={styles.identityRoleRow}>
+                <BadgeCheck size={15} color={colors.emerald} />
+                <Text style={styles.identityRole}>Market Administrator</Text>
+              </View>
+            </View>
           </View>
         </Card>
 
         {/* FIELDS CARD */}
-        <View ref={fieldsRef} collapsable={false}>
-        <Card style={styles.fieldsCard}>
-          {/* LAST NAME */}
-          <Text style={styles.fieldLabel}>Last name</Text>
+        <View ref={fieldsRef} collapsable={false} style={styles.fieldsSection}>
+        <View style={styles.personalHeading}>
+          <View style={styles.personalAccent} />
+          <Text style={styles.personalHeadingText}>Personal Information</Text>
+        </View>
+        <View style={styles.fieldsCard}>
+          <View style={styles.nameRow}>
+          <View style={styles.nameColumn}>
+          <Text style={styles.profileFieldLabel}>Last Name</Text>
           <TextInput
             style={[
               styles.input,
@@ -332,9 +364,10 @@ export default function AdminProfile() {
             onBlur={() => setFocusedField(null)}
             editable={isEditing && !saving}
           />
+          </View>
 
-          {/* FIRST NAME */}
-          <Text style={styles.fieldLabel}>First name</Text>
+          <View style={styles.nameColumn}>
+          <Text style={styles.profileFieldLabel}>First Name</Text>
           <TextInput
             style={[
               styles.input,
@@ -349,22 +382,43 @@ export default function AdminProfile() {
             onBlur={() => setFocusedField(null)}
             editable={isEditing && !saving}
           />
+          </View>
+          </View>
 
-          {/* CONTACT NO. */}
-          <Text style={styles.fieldLabel}>Contact no.</Text>
-          <View
-            style={[
-              styles.phoneRow,
-              styles.phoneRowLast,
-              focusedField === "contactNo" && styles.phoneRowFocused,
-              !isEditing && styles.phoneRowReadOnly,
-            ]}
-          >
-            <View style={styles.phonePrefix}>
+          <Text style={styles.profileFieldLabel}>Middle Name</Text>
+          <TextInput
+            style={[styles.input, focusedField === "middleName" && styles.inputFocused, !isEditing && styles.inputReadOnly]}
+            value={middleName}
+            onChangeText={setMiddleName}
+            placeholder="Middle name (optional)"
+            placeholderTextColor={colors.textMuted}
+            onFocus={() => { setFocusedField("middleName"); scrollToRevealForm(); }}
+            onBlur={() => setFocusedField(null)}
+            editable={isEditing && !saving}
+          />
+
+          <Text style={styles.profileFieldLabel}>Username</Text>
+          <View style={[styles.rowField, styles.rowFieldReadOnly]}>
+            <Contact size={18} color={colors.emerald} style={styles.profileFieldIcon} />
+            <TextInput
+              style={[styles.rowInput, styles.rowInputReadOnly]}
+              value={RENTWISE_ADMIN_USERNAME}
+              editable={false}
+            />
+          </View>
+
+          <Text style={styles.profileFieldLabel}>Registered Mobile Number</Text>
+          <View style={styles.phoneRow}>
+            <View style={[styles.phonePrefix, !isEditing && styles.phonePrefixReadOnly]}>
               <Text style={styles.phonePrefixText}>+63</Text>
             </View>
+            <View style={[
+              styles.phoneInputWrap,
+              focusedField === "contactNo" && isEditing && styles.rowFieldFocused,
+              !isEditing && styles.rowFieldReadOnly,
+            ]}>
             <TextInput
-              style={[styles.phoneInput, !isEditing && styles.inputReadOnly]}
+              style={[styles.rowInput, !isEditing && styles.rowInputReadOnly]}
               value={contactNo}
               onChangeText={(t) => setContactNo(t.replace(/\D/g, "").slice(0, 10))}
               keyboardType="phone-pad"
@@ -374,12 +428,14 @@ export default function AdminProfile() {
               onBlur={() => setFocusedField(null)}
               editable={isEditing && !saving}
             />
+            {!isEditing && <CheckCircle2 size={19} color={colors.emerald} style={styles.phoneVerifiedIcon} />}
+            </View>
           </View>
-        </Card>
+        </View>
         </View>
 
         {/* EDIT / SAVE BUTTON */}
-        <View ref={editBtnRef} collapsable={false}>
+        <View ref={editBtnRef} collapsable={false} style={styles.actionSection}>
           {isEditing ? (
             <View style={styles.pwActionsRow}>
               <Pressable
@@ -427,15 +483,20 @@ export default function AdminProfile() {
           ) : (
             <Pressable
               style={({ pressed }) => [styles.saveBtn, pressed && styles.saveBtnPressed]}
-              onPress={() => setIsEditing(true)}
+              onPress={() => setEditingMode(true)}
             >
-              <Text style={styles.saveBtnText}>Edit Profile</Text>
+              {({ pressed }) => (
+                <View style={styles.editButtonContent}>
+                  <Pencil size={15} color={pressed ? colors.ink : colors.white} />
+                  <Text style={[styles.saveBtnText, pressed && styles.saveBtnTextPressed]}>Edit Profile Details</Text>
+                </View>
+              )}
             </Pressable>
           )}
         </View>
 
         {/* LOGOUT */}
-        <View ref={logoutBtnRef} collapsable={false}>
+        <View ref={logoutBtnRef} collapsable={false} style={styles.actionSection}>
         <Pressable
           style={({ pressed }) => [
             styles.logoutBtn,
@@ -464,6 +525,7 @@ export default function AdminProfile() {
         </Animated.View>
       )}
 
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
       <HelpTour
         visible={tourVisible}
         steps={tourSteps}
@@ -619,62 +681,81 @@ const styles = StyleSheet.create({
   },
 
   bodyContent: {
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xxl,
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingTop: 18,
   },
 
   // ── Identity card ─────────────────────────────────────────────────────────────
 
   identityCard: {
-    marginBottom: spacing.lg,
+    width: "100%",
+    marginBottom: 18,
   },
 
   identityInner: {
-    flex: 1,
+    flexDirection: "row",
     alignItems: "center",
-    paddingVertical: spacing.sm,
+    gap: 16,
   },
+
+  identityCopy: { flex: 1 },
+  adminAvatar: { width: 50, height: 50, borderRadius: 12, backgroundColor: colors.ink, alignItems: "center", justifyContent: "center" },
+  adminAvatarText: { fontSize: 19, fontFamily: fontFamily.bold, color: colors.emeraldBright },
 
   identityName: {
-    fontSize: fontSize.xl,
+    fontSize: 22,
     fontFamily: fontFamily.extrabold,
     color: colors.ink,
-    marginTop: spacing.lg,
   },
 
+  identityRoleRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 3 },
+
   identityRole: {
-    fontSize: fontSize.base,
-    fontFamily: fontFamily.medium,
-    color: colors.textSecondary,
-    marginTop: 2,
+    fontSize: 12,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
   },
 
   // ── Fields card ───────────────────────────────────────────────────────────────
 
   fieldsCard: {
-    marginBottom: spacing.lg,
+    width: "100%",
+    marginBottom: 14,
   },
 
+  fieldsSection: { width: "100%" },
+  personalHeading: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 16 },
+  personalAccent: { width: 6, height: 16, borderRadius: 3, backgroundColor: colors.emerald },
+  personalHeadingText: { fontSize: 13, fontFamily: fontFamily.semibold, color: colors.ink, textTransform: "uppercase", letterSpacing: 0.5 },
+  nameRow: { flexDirection: "row", gap: 10 },
+  nameColumn: { flex: 1 },
+  profileFieldLabel: { fontSize: 11, fontFamily: fontFamily.medium, color: colors.ink, marginBottom: 7, marginLeft: 2 },
+  profileFieldIcon: { marginLeft: 14 },
+
   fieldLabel: {
-    fontSize: fontSize.xs,
+    fontSize: 12,
     fontFamily: fontFamily.semibold,
     color: colors.textMuted,
     textTransform: "uppercase",
     letterSpacing: 0.6,
-    marginBottom: spacing.sm - 2,
+    marginLeft: 1,
+    marginBottom: spacing.sm,
   },
 
   input: {
-    backgroundColor: colors.mist,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md + 1,
-    fontSize: fontSize.base,
+    width: "100%",
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    borderWidth: 0,
+    paddingHorizontal: 16,
+    minHeight: 54,
+    paddingVertical: 12,
+    fontSize: 16,
     fontFamily: fontFamily.medium,
     color: colors.ink,
-    marginBottom: spacing.lg,
+    marginBottom: 16,
+    ...shadow.card,
   },
 
   inputFocused: {
@@ -683,22 +764,39 @@ const styles = StyleSheet.create({
   },
 
   inputReadOnly: {
-    backgroundColor: colors.mist,
-    borderColor: colors.border,
-    color: colors.textSecondary,
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    color: colors.ink,
   },
+
+  rowField: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 54,
+    borderRadius: 12,
+    backgroundColor: colors.white,
+    overflow: "hidden",
+    marginBottom: 16,
+    ...shadow.card,
+  },
+  rowFieldFocused: { borderColor: colors.emeraldBright, backgroundColor: colors.white },
+  rowFieldReadOnly: { backgroundColor: colors.white, borderRadius: 12 },
+  rowInput: { flex: 1, paddingHorizontal: spacing.md + 2, paddingVertical: spacing.md + 1, fontSize: fontSize.base, fontFamily: fontFamily.medium, color: colors.ink },
+  rowInputReadOnly: { color: colors.ink, fontFamily: fontFamily.bold },
 
   // ── Phone row ─────────────────────────────────────────────────────────────────
 
   phoneRow: {
     flexDirection: "row",
     alignItems: "center",
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.mist,
-    overflow: "hidden",
-    marginBottom: spacing.lg,
+    gap: 0,
+    marginBottom: 16,
+    minHeight: 54,
+    padding: 5,
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    ...shadow.card,
   },
 
   phoneRowLast: {
@@ -716,13 +814,16 @@ const styles = StyleSheet.create({
   },
 
   phonePrefix: {
-    backgroundColor: colors.emeraldSoft,
-    paddingHorizontal: spacing.md + 2,
-    paddingVertical: spacing.md + 1,
-    borderRightWidth: 1,
-    borderRightColor: colors.emeraldSoft,
+    minHeight: 44,
+    backgroundColor: colors.mist,
+    borderRadius: 8,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
     justifyContent: "center",
+    alignItems: "center",
   },
+
+  phonePrefixReadOnly: { backgroundColor: colors.mist },
 
   phonePrefixText: {
     fontSize: fontSize.base,
@@ -730,31 +831,33 @@ const styles = StyleSheet.create({
     color: colors.emerald,
   },
 
-  phoneInput: {
+  phoneInputWrap: {
     flex: 1,
-    paddingHorizontal: spacing.md + 2,
-    paddingVertical: spacing.md + 1,
-    fontSize: fontSize.base,
-    fontFamily: fontFamily.medium,
-    color: colors.ink,
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    overflow: "hidden",
   },
+  phoneVerifiedIcon: { marginRight: 12 },
 
   // ── Save button ───────────────────────────────────────────────────────────────
 
   saveBtn: {
     width: "100%",
-    borderRadius: radius.pill,
+    borderRadius: 10,
     backgroundColor: colors.ink,
-    paddingVertical: 16,
+    minHeight: 46,
+    paddingVertical: 11,
     alignItems: "center",
     justifyContent: "center",
     marginTop: spacing.sm,
     transform: [{ scale: 1 }],
     ...shadow.button,
   },
+  actionSection: { width: "100%" },
 
   saveBtnPressed: {
-    backgroundColor: colors.emerald,
+    backgroundColor: colors.white,
     transform: [{ scale: 0.97 }],
   },
 
@@ -764,10 +867,12 @@ const styles = StyleSheet.create({
 
   saveBtnText: {
     color: colors.white,
-    fontSize: fontSize.md,
+    fontSize: 14,
     fontFamily: fontFamily.bold,
     textAlign: "center",
   },
+  saveBtnTextPressed: { color: colors.ink },
+  editButtonContent: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 },
 
   // ── Save/Cancel row (shown while editing) ────────────────────────────
   pwActionsRow: {

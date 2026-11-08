@@ -11,6 +11,9 @@ node_modules/
 .expo/
 dist/
 web-build/
+.gradle-local/
+.vercel/
+.vercel-*/
 
 # Env files
 .env

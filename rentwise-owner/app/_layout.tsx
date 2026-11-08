@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
-import { BackHandler, View, StyleSheet, Platform, ToastAndroid } from "react-native";
+import { Alert, BackHandler, View, StyleSheet, Platform, ToastAndroid } from "react-native";
 import { Stack, router, usePathname } from "expo-router";
-import { onAuthStateChanged } from "firebase/auth";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { doc, onSnapshot } from "firebase/firestore";
 import * as SplashScreen from "expo-splash-screen";
 import * as NavigationBar from "expo-navigation-bar";
 import {
@@ -14,13 +15,16 @@ import {
 } from "@expo-google-fonts/plus-jakarta-sans";
 
 import { auth } from "../shared/services/auth";
+import { db } from "../shared/services/firestore";
 import {
   configurePushNotifications,
   registerForPushNotificationsAsync,
 } from "../shared/services/pushNotifications";
 import { useResponsive, MAX_CONTENT_WIDTH } from "../shared/hooks/useResponsive";
 import { colors } from "../shared/theme";
-import { initializeLocalCache } from "../shared/services/localCache";
+import { clearLocalCache, initializeLocalCache } from "../shared/services/localCache";
+import NetworkStatusBanner from "../shared/components/NetworkStatusBanner";
+import { setRememberMe } from "../shared/services/rememberMe";
 
 configurePushNotifications();
 
@@ -88,12 +92,56 @@ export default function RootLayout() {
   }, [pathname]);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        registerForPushNotificationsAsync(user.uid);
+        await registerForPushNotificationsAsync(user.uid);
       }
     });
     return unsub;
+  }, []);
+
+  useEffect(() => {
+    let unsubscribeProfile: (() => void) | undefined;
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      unsubscribeProfile?.();
+      unsubscribeProfile = undefined;
+      if (!user) return;
+
+      const token = await user.getIdTokenResult();
+      const authenticatedAt = new Date(token.authTime).getTime();
+      let endingSession = false;
+      unsubscribeProfile = onSnapshot(
+        doc(db, "users", user.uid),
+        async (snapshot) => {
+          if (endingSession) return;
+          const data = snapshot.data();
+          const invalidOwner = !snapshot.exists() || data?.role !== "owner" || (data?.status && data.status !== "active");
+          const revokedAt = data?.sessionRevokedAt?.toMillis?.() ?? 0;
+          if (!invalidOwner && revokedAt <= authenticatedAt) return;
+
+          endingSession = true;
+          await setRememberMe(false).catch(() => {});
+          await clearLocalCache().catch(() => {});
+          await signOut(auth).catch(() => {});
+          Alert.alert(
+            invalidOwner ? "Account Unavailable" : "Session Ended",
+            invalidOwner
+              ? "This account no longer has active owner access."
+              : "Your password was changed. Please sign in again with your new password.",
+          );
+          router.replace("/login");
+        },
+        (error) => {
+          if (!auth.currentUser) return;
+          console.error("OWNER SESSION LISTENER ERROR:", error);
+        },
+      );
+    });
+
+    return () => {
+      unsubscribeProfile?.();
+      unsubscribeAuth();
+    };
   }, []);
 
   if (!fontsLoaded && !fontError) {
@@ -104,6 +152,7 @@ export default function RootLayout() {
     <View style={styles.outer}>
       <View style={[styles.inner, isTablet && styles.innerTablet]}>
         <Stack screenOptions={{ headerShown: false, animation: "fade", animationDuration: 200 }} />
+        <NetworkStatusBanner />
       </View>
     </View>
   );

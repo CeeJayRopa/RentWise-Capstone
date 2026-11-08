@@ -32,6 +32,10 @@ export const notifyAdminsOnPayment = onDocumentCreated(
     for (const adminDoc of adminsSnap.docs) {
       batch.set(db.collection("notifications").doc(), {
         userId: adminDoc.id,
+        type: "payment_pending",
+        route: "/financials",
+        paymentId: event.params.paymentId,
+        tenantId: data.userId || null,
         message,
         read: false,
         createdAt: FieldValue.serverTimestamp(),

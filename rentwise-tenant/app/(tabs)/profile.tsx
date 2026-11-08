@@ -18,17 +18,18 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { doc, onSnapshot, updateDoc } from "firebase/firestore";
+import { doc, onSnapshot } from "firebase/firestore";
 import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 import { auth } from "../../shared/firebaseConfig";
 import { db } from "../../shared/services/firestore";
-import { getTenantData, updateTenantProfile } from "../../services/tenantService";
+import { finalizeTenantPasswordChange, getTenantData, updateTenantProfile } from "../../services/tenantService";
 import { logoutUser } from "../../services/authService";
 import { setRememberMe } from "../../shared/services/rememberMe";
 import { router, useFocusEffect } from "expo-router";
 import { Tag, CheckCircle2, LogOut, User, Phone, Pencil, ShieldCheck, HelpCircle, Eye, EyeOff, KeyRound, Info, RotateCcw, Droplet, Archive, Store } from "lucide-react-native";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import HelpSupportModal from "../components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { requireOnlineAction } from "../../shared/services/networkStatus";
 
@@ -50,6 +51,7 @@ export default function Profile() {
   const [original, setOriginal] = useState({ firstName: "", lastName: "", contact: "", username: "", category: "" as MarketCategory | "" });
   const [isEditing, setIsEditing] = useState(false);
   const [showToast, setShowToast] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
 
   // Fully separate from `isEditing` (the profile-fields toggle) -- this
   // section unlocks independently via its own "Change Password" button.
@@ -68,6 +70,7 @@ export default function Profile() {
   const toastTranslateY = useRef(new Animated.Value(20)).current;
 
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
   const helpRef = useRef<View>(null);
   const identityRef = useRef<View>(null);
   const categoryRef = useRef<View>(null);
@@ -187,9 +190,26 @@ export default function Profile() {
       if (!snap.exists()) return;
       setStallId((snap.data().stallId as string) || "");
       if (isEditingRef.current) return;
-      const liveCategory = ((snap.data().category as string) || "") as MarketCategory | "";
+      const liveData = snap.data();
+      const liveFirstName = String(liveData.firstName ?? "");
+      const liveLastName = String(liveData.lastName ?? "");
+      const liveContact = String(liveData.contactNo ?? "");
+      const liveUsername = String(liveData.username ?? "");
+      const liveCategory = ((liveData.category as string) || "") as MarketCategory | "";
+      setFirstName(liveFirstName);
+      setLastName(liveLastName);
+      setContact(liveContact);
+      setUsername(liveUsername);
       setCategory(liveCategory);
-      setOriginal((prev) => ({ ...prev, category: liveCategory }));
+      setOriginal({
+        firstName: liveFirstName,
+        lastName: liveLastName,
+        contact: liveContact,
+        username: liveUsername,
+        category: liveCategory,
+      });
+    }, (error) => {
+      if (auth.currentUser) console.error("TENANT PROFILE LISTENER ERROR:", error);
     });
     return unsub;
   }, []);
@@ -218,22 +238,20 @@ export default function Profile() {
         setContact(data.contactNo || "");
         setUsername(data.username || "");
         setStallId(data.stallId || "");
+        const loadedCategory = ((data.category as string) || "") as MarketCategory | "";
+        setCategory(loadedCategory);
         const createdAt = (data as any).createdAt;
         if (createdAt?.toDate) {
           setMemberSince(
             createdAt.toDate().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
           );
         }
-
-        // Category itself is populated by the live listener below (it
-        // lives on the tenant's own doc) — this just seeds a blank default
-        // until that listener's first snapshot arrives.
         setOriginal({
           firstName: data.firstName || "",
           lastName: data.lastName || "",
           contact: data.contactNo || "",
           username: data.username || "",
-          category: "",
+          category: loadedCategory,
         });
       }
     } catch (error) {
@@ -305,11 +323,12 @@ export default function Profile() {
       // on a stale session.
       await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, oldPassword));
       await updatePassword(user, newPassword);
+      await finalizeTenantPasswordChange();
       setOldPassword("");
       setNewPassword("");
       setConfirmPassword("");
       setPwEditing(false);
-      Alert.alert("Success", "Password updated!");
+      Alert.alert("Password updated", "For security, all sessions will sign out. Use your new password to sign in again.");
     } catch (err: any) {
       if (err?.code === "auth/wrong-password" || err?.code === "auth/invalid-credential") {
         setOldPwError("Current password is incorrect.");
@@ -389,46 +408,47 @@ export default function Profile() {
   }
 
   async function saveProfile() {
-    if (!(await requireOnlineAction("Saving your profile"))) return;
-    const fn = firstName.trim();
-    const ln = lastName.trim();
-    const cn = contact.trim();
-
-    if (!fn || !ln || !cn) {
-      Alert.alert("Missing Information", "Name and contact no. are required.");
-      return;
-    }
-    if (!/^9\d{9}$/.test(cn)) {
-      Alert.alert("Invalid Contact Number", "Enter a valid 10-digit number starting with 9.");
-      return;
-    }
-
+    if (savingProfile) return;
+    setSavingProfile(true);
     try {
-      const user = auth.currentUser;
-      if (!user) return;
+      if (!(await requireOnlineAction("Saving your profile"))) return;
+      const fn = firstName.trim();
+      const ln = lastName.trim();
+      const cn = contact.trim();
 
-      const profileUpdates: Record<string, any> = { firstName: fn, lastName: ln, contactNo: cn };
-      if (category !== original.category) {
-        // Tenant's own doc is the source of truth; the stall doc keeps a
-        // denormalized copy purely so the guest app's public listing stays
-        // accurate for this space.
-        profileUpdates.category = category;
+      if (!fn || !ln || !cn) {
+        Alert.alert("Missing Information", "Name and contact no. are required.");
+        return;
       }
-      await updateTenantProfile(user.uid, profileUpdates);
-
-      if (category !== original.category && stallId) {
-        await updateDoc(doc(db, "stalls", stallId), { category });
+      if (!/^9\d{9}$/.test(cn)) {
+        Alert.alert("Invalid Contact Number", "Enter a valid 10-digit number starting with 9.");
+        return;
       }
 
-      setFirstName(fn);
-      setLastName(ln);
-      setContact(cn);
-      setOriginal({ firstName: fn, lastName: ln, contact: cn, username, category });
-      setIsEditing(false);
-      triggerToast();
-    } catch (error) {
-      console.log("Save Error:", error);
-      Alert.alert("Error", "Cannot update profile");
+      try {
+        const user = auth.currentUser;
+        if (!user) return;
+
+        const profileUpdates: Record<string, any> = { firstName: fn, lastName: ln, contactNo: cn };
+        if (category !== original.category) profileUpdates.category = category;
+        await updateTenantProfile(user.uid, profileUpdates);
+
+        setFirstName(fn);
+        setLastName(ln);
+        setContact(cn);
+        setOriginal({ firstName: fn, lastName: ln, contact: cn, username, category });
+        setIsEditing(false);
+        triggerToast();
+      } catch (error: any) {
+        console.log("Save Error:", error);
+        if (error?.code === "functions/unauthenticated") {
+          Alert.alert("Sign in again", "Please sign out and sign in again before changing your recovery number.");
+        } else {
+          Alert.alert("Error", "Cannot update profile");
+        }
+      }
+    } finally {
+      setSavingProfile(false);
     }
   }
 
@@ -444,7 +464,7 @@ export default function Profile() {
         <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
           <Text style={styles.headerTitle}>Profile</Text>
           <View ref={helpRef} collapsable={false}>
-            <Pressable onPress={() => setTourVisible(true)} hitSlop={8} style={styles.helpBtn}>
+            <Pressable onPress={() => setHelpSupportVisible(true)} hitSlop={8} style={styles.helpBtn}>
               <HelpCircle size={20} color={colors.ink} />
             </Pressable>
           </View>
@@ -606,15 +626,18 @@ export default function Profile() {
               contact !== original.contact ||
               category !== original.category;
             const hasEmptyField = !firstName.trim() || !lastName.trim() || !contact.trim();
-            const disabled = isEditing && (!hasChanges || hasEmptyField);
+            const invalidProfileChanges = isEditing && (!hasChanges || hasEmptyField);
+            const disabled = invalidProfileChanges || savingProfile;
             return isEditing ? (
               <View style={styles.pwActionsRow}>
                 <Pressable
                   style={({ pressed }) => [
                     styles.pwCancelBtn,
-                    pressed && { backgroundColor: colors.error, borderColor: colors.error, transform: [{ scale: 0.97 }] },
+                    savingProfile && styles.saveButtonDisabled,
+                    pressed && !savingProfile && { backgroundColor: colors.error, borderColor: colors.error, transform: [{ scale: 0.97 }] },
                   ]}
                   onPress={handleCancelEditProfile}
+                  disabled={savingProfile}
                 >
                   {({ pressed }) => (
                     <Text style={[styles.pwCancelBtnText, pressed && styles.pwCancelBtnTextPressed]}>Cancel</Text>
@@ -625,13 +648,15 @@ export default function Profile() {
                   style={({ pressed }) => [
                     styles.saveButton,
                     styles.pwUpdateBtn,
-                    disabled && styles.saveButtonDisabled,
+                    invalidProfileChanges && styles.saveButtonDisabled,
                     pressed && !disabled && { backgroundColor: colors.white, transform: [{ scale: 0.97 }] },
                   ]}
                   onPress={() => setConfirmTarget("profile")}
                   disabled={disabled}
                 >
-                  {({ pressed }) => (
+                  {({ pressed }) => savingProfile ? (
+                    <ActivityIndicator color={colors.white} size="small" />
+                  ) : (
                     <Text
                       style={[
                         styles.saveText,
@@ -838,6 +863,7 @@ export default function Profile() {
         </Animated.View>
       )}
 
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
       <HelpTour
         visible={tourVisible}
         steps={tourSteps}

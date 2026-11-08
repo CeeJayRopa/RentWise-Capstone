@@ -12,11 +12,13 @@ config.watchFolders = [monorepoRoot];
 // When shared/ files import firebase/* or react-native, resolve from this module's node_modules
 config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, "node_modules"),
+  path.resolve(monorepoRoot, "node_modules"),
 ];
 
 // Exclude Android and iOS build output from Metro's file watcher.
 // Without this, native build artifacts cause scandir errors on Windows.
 config.resolver.blockList = [
+  /[\\/]\.git[\\/].*/,
   /android[\\/]app[\\/]build\/.*/,
   /android[\\/]build\/.*/,
   /ios[\\/]build\/.*/,

@@ -17,19 +17,30 @@ import {
 import { router, useLocalSearchParams } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc, onSnapshot, updateDoc } from "firebase/firestore";
+import { doc, getDoc, onSnapshot } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, House, Ruler, CheckCircle2, HelpCircle } from "lucide-react-native";
+import { ArrowLeft, House, Ruler, CheckCircle2, Circle, HelpCircle, Store, Archive, Waves } from "lucide-react-native";
 
 import { auth } from "../shared/services/auth";
 import { db } from "../shared/services/firestore";
 import { logDetailedUpdate } from "../shared/services/updatesService";
 import HelpTour, { HelpStep } from "./components/HelpTour";
+import HelpSupportModal from "./components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
+import { requireOnlineAction } from "../shared/services/networkStatus";
+import { updateStallRentalTermsSafely } from "../shared/services/accountServices";
 import { Button } from "../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 type Schedule = "daily" | "weekly" | "semi-monthly" | "monthly";
+const SCHEDULE_DAYS: Record<Schedule, number> = {
+  daily: 1,
+  weekly: 7,
+  "semi-monthly": 15,
+  monthly: 30,
+};
+const scheduleDayLabel = (schedule: Schedule) =>
+  SCHEDULE_DAYS[schedule] === 1 ? "Daily" : `${SCHEDULE_DAYS[schedule]} days`;
 type MarketCategory = "Wet Market" | "Dry Market" | "Home Essential";
 
 // The "Rental Rate" field on this screen is monthly-first (what the admin
@@ -103,6 +114,7 @@ export default function EditRentalInfo() {
   }, [isEditing]);
 
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
   const helpRef = useRef<View>(null);
   const stallPillRef = useRef<View>(null);
   const categoryRef = useRef<View>(null);
@@ -155,7 +167,7 @@ export default function EditRentalInfo() {
     { key: "category", ref: categoryRef, title: "Market category", description: "The kind of goods sold at this stall.", edgeInset: "top" },
     { key: "dimensions", ref: dimensionsRef, title: "Length & width", description: "The stall's physical dimensions, in meters.", edgeInset: "top" },
     { key: "rate", ref: rateRef, title: "Rental rate", description: "The stall's charge per billing period.", edgeInset: "top" },
-    { key: "schedule", ref: scheduleRef, title: "Payment schedule", description: "How often rent is due — daily, weekly, semi-monthly, or monthly.", edgeInset: "top" },
+    { key: "schedule", ref: scheduleRef, title: "Payment interval", description: "Choose whether rent is due every 1, 7, 15, or 30 days.", edgeInset: "top" },
     { key: "modify", ref: modifyBtnRef, title: "Modify Rental Info", description: "Unlocks the fields above so you can update them, then saves your changes.", edgeInset: "top" },
   ];
 
@@ -264,17 +276,16 @@ export default function EditRentalInfo() {
         if (tenantSnap.exists()) {
           const td = tenantSnap.data();
           setTenantName([td.firstName, td.middleName, td.lastName].filter(Boolean).join(" "));
-          // The tenant's OWN price/paymentSchedule/category are the source
-          // of truth once occupied -- the stall's copy (just read above)
-          // is only a denormalized display value that can lag behind if
-          // this tenant relocated here after it was last edited.
-          setRentalRate(String((td.price ?? data.price ?? 0) * DAYS_PER_MONTH));
+          // Rental rate is a property of THIS stall. `td.price` is the
+          // tenant's combined rate across as many as three stalls and must
+          // never be loaded into one stall's editor.
+          setRentalRate(String((data.price ?? 0) * DAYS_PER_MONTH));
           setPaymentSchedule(((td.paymentSchedule as string) || (data.paymentSchedule as string) || "monthly") as Schedule);
           const tenantCategory = ((td.category as string) || loadedCategory) as MarketCategory | "";
           setCategory(tenantCategory);
           originalRef.current = {
             ...originalRef.current!,
-            rentalRate: String((td.price ?? data.price ?? 0) * DAYS_PER_MONTH),
+            rentalRate: String((data.price ?? 0) * DAYS_PER_MONTH),
             paymentSchedule: ((td.paymentSchedule as string) || (data.paymentSchedule as string) || "monthly") as Schedule,
             category: tenantCategory,
           };
@@ -336,6 +347,7 @@ export default function EditRentalInfo() {
 
   const handleSave = async () => {
     if (!validate() || !stallId) return;
+    if (!(await requireOnlineAction("Saving stall information"))) return;
 
     setSaving(true);
     setSaveError("");
@@ -350,21 +362,14 @@ export default function EditRentalInfo() {
       // screen/function reading it keeps working unchanged.
       const dailyPrice = parseFloat(rentalRate) / DAYS_PER_MONTH;
 
-      await updateDoc(doc(db, "stalls", stallId), {
+      await updateStallRentalTermsSafely({
+        stallId,
         length: parseFloat(length),
         width: parseFloat(width),
-        price: dailyPrice, // field in Firestore is `price`, not `rentalRate`
+        dailyRate: dailyPrice,
         paymentSchedule,
         category,
       });
-
-      if (tenantId) {
-        await updateDoc(doc(db, "users", tenantId), {
-          price: dailyPrice,
-          paymentSchedule,
-          category,
-        });
-      }
 
       const orig = originalRef.current;
       if (orig) {
@@ -383,8 +388,8 @@ export default function EditRentalInfo() {
         if (paymentSchedule !== orig.paymentSchedule) {
           changes.push({
             field: "Payment Schedule",
-            old: cap(orig.paymentSchedule),
-            newV: cap(paymentSchedule),
+            old: scheduleDayLabel(orig.paymentSchedule),
+            newV: scheduleDayLabel(paymentSchedule),
           });
         }
         if (category !== orig.category) {
@@ -460,7 +465,7 @@ export default function EditRentalInfo() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Edit rental info</Text>
         <View ref={helpRef} collapsable={false}>
-          <TouchableOpacity style={styles.headerIconBtn} onPress={() => setTourVisible(true)} activeOpacity={0.7} hitSlop={8}>
+          <TouchableOpacity style={styles.headerIconBtn} onPress={() => setHelpSupportVisible(true)} activeOpacity={0.7} hitSlop={8}>
             <HelpCircle size={22} color={colors.white} />
           </TouchableOpacity>
         </View>
@@ -511,14 +516,15 @@ export default function EditRentalInfo() {
 
               {/* MARKET CATEGORY */}
               <View style={styles.field} ref={categoryRef} collapsable={false}>
-                <Text style={styles.fieldLabel}>Market category</Text>
-                <View style={[styles.scheduleRow, !isEditing && styles.scheduleRowReadOnly]}>
+                <Text style={styles.sectionLabel}>MARKET CLASSIFICATION</Text>
+                <View style={[styles.categoryGrid, !isEditing && styles.scheduleRowReadOnly]}>
                   {(["Wet Market", "Dry Market", "Home Essential"] as const).map((c) => (
                     <TouchableOpacity
                       key={c}
                       style={[
-                        styles.scheduleTab,
-                        category === c && styles.scheduleTabActive,
+                        styles.categoryTab,
+                        c === "Home Essential" && styles.categoryTabWide,
+                        category === c && styles.categoryTabActive,
                       ]}
                       onPress={() => {
                         setCategory(c);
@@ -527,14 +533,16 @@ export default function EditRentalInfo() {
                       activeOpacity={0.7}
                       disabled={!isEditing || saving || saved}
                     >
+                      {c === "Wet Market" ? <Waves size={14} color={category === c ? colors.white : colors.ink} /> : c === "Dry Market" ? <Archive size={14} color={category === c ? colors.white : colors.ink} /> : <Store size={14} color={category === c ? colors.white : colors.ink} />}
                       <Text
                         style={[
-                          styles.scheduleTabText,
-                          category === c && styles.scheduleTabTextActive,
+                          styles.categoryTabText,
+                          category === c && styles.categoryTabTextActive,
                         ]}
                       >
                         {c}
                       </Text>
+                      {category === c ? <CheckCircle2 size={13} color={colors.white} style={styles.categoryCheck} /> : null}
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -542,9 +550,10 @@ export default function EditRentalInfo() {
               </View>
 
               {/* LENGTH & WIDTH */}
+              <Text style={styles.sectionLabel}>SPACE MEASUREMENTS</Text>
               <View style={styles.dimensionsRow} ref={dimensionsRef} collapsable={false}>
                 <View style={[styles.field, styles.dimensionField]}>
-                  <Text style={styles.fieldLabel}>Length (m)</Text>
+                  <Text style={styles.measureLabel}>LENGTH</Text>
                   <View
                     style={[
                       styles.inputWrapper,
@@ -568,12 +577,13 @@ export default function EditRentalInfo() {
                       onBlur={() => setFocusedField(null)}
                       editable={isEditing && !saving && !saved}
                     />
+                    <Text style={styles.unitBadge}>m</Text>
                   </View>
                   {lengthError ? <Text style={styles.fieldError}>{lengthError}</Text> : null}
                 </View>
 
                 <View style={[styles.field, styles.dimensionField]}>
-                  <Text style={styles.fieldLabel}>Width (m)</Text>
+                  <Text style={styles.measureLabel}>WIDTH</Text>
                   <View
                     style={[
                       styles.inputWrapper,
@@ -597,6 +607,7 @@ export default function EditRentalInfo() {
                       onBlur={() => setFocusedField(null)}
                       editable={isEditing && !saving && !saved}
                     />
+                    <Text style={styles.unitBadge}>m</Text>
                   </View>
                   {widthError ? <Text style={styles.fieldError}>{widthError}</Text> : null}
                 </View>
@@ -634,7 +645,7 @@ export default function EditRentalInfo() {
 
               {/* PAYMENT SCHEDULE */}
               <View style={[styles.field, { marginTop: 4, marginBottom: 24 }]} ref={scheduleRef} collapsable={false}>
-                <Text style={styles.fieldLabel}>Payment schedule</Text>
+                <Text style={styles.sectionLabel}>PAYMENT SCHEDULE &amp; CADENCE</Text>
                 <View style={[styles.scheduleRow, !isEditing && styles.scheduleRowReadOnly]}>
                   {(["daily", "weekly", "semi-monthly", "monthly"] as const).map((s) => (
                     <TouchableOpacity
@@ -650,21 +661,24 @@ export default function EditRentalInfo() {
                       activeOpacity={0.7}
                       disabled={!isEditing || saving || saved}
                     >
+                      <View style={styles.scheduleTabHeader}>
                       <Text
                         style={[
                           styles.scheduleTabText,
                           paymentSchedule === s && styles.scheduleTabTextActive,
                         ]}
                       >
-                        {s.charAt(0).toUpperCase() + s.slice(1)}
+                        {scheduleDayLabel(s)}
                       </Text>
+                      {paymentSchedule === s ? <CheckCircle2 size={13} color={colors.emerald} /> : <Circle size={13} color={colors.textMuted} />}
+                      </View>
                       <Text
                         style={[
                           styles.scheduleTabAmount,
                           paymentSchedule === s && styles.scheduleTabAmountActive,
                         ]}
                       >
-                        {scheduleAmounts[s].toFixed(2)}
+                        ₱{scheduleAmounts[s].toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </Text>
                     </TouchableOpacity>
                   ))}
@@ -701,6 +715,7 @@ export default function EditRentalInfo() {
       )}
 
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
     </View>
   );
 }
@@ -803,6 +818,53 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs + 2,
   },
 
+  sectionLabel: {
+    fontSize: 9,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
+    marginBottom: 8,
+  },
+
+  categoryGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+  },
+  categoryTab: {
+    position: "relative",
+    flexBasis: "47%",
+    flexGrow: 1,
+    minHeight: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: "#F0F1EF",
+  },
+  categoryTabWide: {
+    flexBasis: "100%",
+  },
+  categoryTabActive: {
+    backgroundColor: colors.ink,
+    borderColor: colors.ink,
+  },
+  categoryTabText: {
+    fontSize: 11,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
+  },
+  categoryTabTextActive: {
+    color: colors.white,
+    fontFamily: fontFamily.semibold,
+  },
+  categoryCheck: {
+    position: "absolute",
+    right: 9,
+  },
+
   tenantLabel: {
     fontSize: fontSize.xs,
     fontFamily: fontFamily.semibold,
@@ -823,6 +885,13 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
 
+  measureLabel: {
+    fontSize: 8,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
+    marginBottom: 4,
+  },
+
   dimensionField: {
     flex: 1,
   },
@@ -832,10 +901,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: colors.white,
-    borderRadius: radius.lg,
-    borderWidth: 1.5,
-    borderColor: "transparent",
-    ...shadow.subtle,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#F0F1EF",
   },
 
   inputWrapperFocused: {
@@ -843,7 +911,7 @@ const styles = StyleSheet.create({
   },
 
   inputWrapperReadOnly: {
-    opacity: 0.65,
+    opacity: 1,
   },
 
   inputWrapperError: {
@@ -860,10 +928,22 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 13,
     paddingLeft: 40,
-    paddingRight: spacing.md,
-    fontSize: fontSize.base,
-    fontFamily: fontFamily.medium,
+    paddingRight: 32,
+    fontSize: 13,
+    fontFamily: fontFamily.semibold,
     color: colors.ink,
+  },
+
+  unitBadge: {
+    position: "absolute",
+    right: 8,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 3,
+    backgroundColor: colors.mist,
+    fontSize: 8,
+    fontFamily: fontFamily.medium,
+    color: colors.textSecondary,
   },
 
   textInputReadOnly: {
@@ -895,49 +975,62 @@ const styles = StyleSheet.create({
   },
 
   scheduleRowReadOnly: {
-    opacity: 0.6,
+    opacity: 1,
   },
 
   scheduleTab: {
     flexBasis: "47%",
     flexGrow: 1,
-    paddingVertical: spacing.md - 1,
-    paddingHorizontal: spacing.sm - 2,
-    borderRadius: radius.pill,
-    alignItems: "center",
-    backgroundColor: colors.mist,
+    minHeight: 80,
+    paddingVertical: 12,
+    paddingHorizontal: 11,
+    borderRadius: 9,
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: "#F0F1EF",
   },
 
   scheduleTabActive: {
-    backgroundColor: colors.ink,
+    backgroundColor: "#DDF8EE",
+    borderColor: "#DDF8EE",
+  },
+
+  scheduleTabHeader: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
 
   scheduleTabText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.medium,
     color: colors.textSecondary,
-    textAlign: "center",
+    textAlign: "left",
   },
 
   scheduleTabTextActive: {
-    color: colors.white,
+    color: colors.ink,
     fontFamily: fontFamily.bold,
   },
 
   scheduleTabAmount: {
-    fontSize: fontSize.xs,
+    fontSize: 15,
     fontFamily: fontFamily.semibold,
     color: colors.textMuted,
-    textAlign: "center",
-    marginTop: 2,
+    textAlign: "left",
+    marginTop: 6,
   },
 
   scheduleTabAmountActive: {
-    color: colors.white,
+    color: colors.ink,
   },
 
   modifyBtn: {
-    borderRadius: radius.pill,
+    minHeight: 40,
+    borderRadius: 8,
     backgroundColor: colors.ink,
   },
 

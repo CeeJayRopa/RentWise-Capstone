@@ -1,91 +1,14 @@
-import {
-  doc,
-  getDoc,
-  writeBatch,
-} from "firebase/firestore";
-import { getFunctions, httpsCallable } from "firebase/functions";
-import { firebaseApp } from "../firebaseConfig";
-import { auth } from "./auth";
-import { db } from "./firestore";
+import {getFunctions, httpsCallable} from "firebase/functions";
+
+import {firebaseApp} from "../firebaseConfig";
+import {auth} from "./auth";
 
 const cloudFunctions = getFunctions(firebaseApp);
 
-export type ArchiveEligibility = {
-  canArchive: boolean;
-  outstandingBalance: number;
-  hasPendingPayment: boolean;
-};
-
-export const checkTenantArchiveEligibility = async (
-  uid: string,
-): Promise<ArchiveEligibility> => {
-  if (!auth.currentUser?.uid) throw new Error("Owner not authenticated.");
-
-  const checkEligibility = httpsCallable<
-    { uid: string },
-    ArchiveEligibility
-  >(cloudFunctions, "checkTenantArchiveEligibility");
-  const result = await checkEligibility({ uid });
-  return result.data;
-};
-
-// Disables/re-enables the tenant's Firebase Auth login itself — separate
-// from the Firestore `status` field, which only controls what the app
-// shows. Without this, an "archived" tenant's account still works and
-// they can keep signing in.
-const setTenantAccountDisabled = async (
-  uid: string,
-  disabled: boolean,
-): Promise<void> => {
-  if (!auth.currentUser?.uid) throw new Error("Owner not authenticated.");
-  const setDisabledFn = httpsCallable(cloudFunctions, "adminSetAccountDisabled");
-  await setDisabledFn({ uid, disabled });
-};
-
-export const deleteArchivedTenant = async (uid: string): Promise<void> => {
-  const archiveSnap = await getDoc(doc(db, "archives", uid));
-  if (!archiveSnap.exists()) throw new Error("Archive record not found.");
-
-  // Deletes Firebase Auth account so the username can be reused
-  if (!auth.currentUser?.uid) throw new Error("Owner not authenticated.");
-  const deleteFn = httpsCallable(cloudFunctions, "adminDeleteTenant");
-  await deleteFn({ uid });
-
-  const batch = writeBatch(db);
-  batch.delete(doc(db, "archives", uid));
-  batch.delete(doc(db, "users", uid));
-  await batch.commit();
-};
-
 export const restoreTenant = async (uid: string): Promise<void> => {
-  const archiveSnap = await getDoc(doc(db, "archives", uid));
-  if (!archiveSnap.exists()) throw new Error("Archive record not found.");
-
-  const archive = archiveSnap.data();
-  const stallId = (archive.stallId as string) ?? "";
-  const tenantName = `${archive.firstName ?? ""} ${archive.lastName ?? ""}`.trim();
-
-  // Re-enable login before committing the restore.
-  await setTenantAccountDisabled(uid, false);
-
-  const batch = writeBatch(db);
-
-  batch.update(doc(db, "users", uid), { status: "active" });
-
-  if (stallId) {
-    const stallSnap = await getDoc(doc(db, "stalls", stallId));
-    if (stallSnap.exists() && stallSnap.data().status === "unoccupied") {
-      batch.update(doc(db, "stalls", stallId), {
-        tenantId: uid,
-        tenantName,
-        status: "occupied",
-      });
-    }
-  }
-
-  batch.delete(doc(db, "archives", uid));
-
-  await batch.commit();
+  if (!auth.currentUser?.uid) throw new Error("Owner not authenticated.");
+  const restore = httpsCallable(cloudFunctions, "ownerRestoreArchivedTenant");
+  await restore({uid});
 };
 
 export const restoreTenantToNewStall = async (
@@ -93,59 +16,7 @@ export const restoreTenantToNewStall = async (
   newStallId: string,
   transferPreviousInfo: boolean,
 ): Promise<void> => {
-  const archiveSnap = await getDoc(doc(db, "archives", uid));
-  if (!archiveSnap.exists()) throw new Error("Archive record not found.");
-
-  const archive = archiveSnap.data();
-  const tenantName = `${archive.firstName ?? ""} ${archive.lastName ?? ""}`.trim();
-
-  // Verify the new stall is still unoccupied before committing
-  const stallSnap = await getDoc(doc(db, "stalls", newStallId));
-  if (!stallSnap.exists()) throw new Error("Selected stall not found.");
-  const stallData = stallSnap.data();
-  if (stallData.status !== "unoccupied") {
-    throw new Error("Selected stall is no longer available.");
-  }
-
-  // The tenant's own price/paymentSchedule/category never left their doc
-  // while archived -- fetched here for the transfer-info resolution below.
-  const userSnap = await getDoc(doc(db, "users", uid));
-  const user = userSnap.exists() ? userSnap.data() : {};
-
-  // Rental Rate always adopts the new stall's own listed price -- unlike
-  // category/paymentSchedule below, this is never carried over from the
-  // tenant's previous stall, regardless of transferPreviousInfo.
-  const resolvedPrice = Number(stallData.price ?? 0);
-  const resolvedPaymentSchedule = transferPreviousInfo
-    ? (user.paymentSchedule ?? "monthly")
-    : (stallData.paymentSchedule ?? "monthly");
-  const resolvedCategory = transferPreviousInfo
-    ? (user.category ?? "")
-    : (stallData.category ?? "");
-
-  // Re-enable login before committing the restore.
-  await setTenantAccountDisabled(uid, false);
-
-  const batch = writeBatch(db);
-
-  batch.update(doc(db, "users", uid), {
-    status: "active",
-    stallId: newStallId,
-    price: resolvedPrice,
-    paymentSchedule: resolvedPaymentSchedule,
-    category: resolvedCategory,
-  });
-
-  batch.update(doc(db, "stalls", newStallId), {
-    tenantId: uid,
-    tenantName,
-    status: "occupied",
-    price: resolvedPrice,
-    paymentSchedule: resolvedPaymentSchedule,
-    category: resolvedCategory,
-  });
-
-  batch.delete(doc(db, "archives", uid));
-
-  await batch.commit();
+  if (!auth.currentUser?.uid) throw new Error("Owner not authenticated.");
+  const restore = httpsCallable(cloudFunctions, "ownerRestoreArchivedTenant");
+  await restore({uid, newStallId, transferPreviousInfo});
 };

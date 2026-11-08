@@ -120,7 +120,12 @@ export async function removeLocalCache(cacheKey: string): Promise<void> {
 }
 
 export async function clearLocalCache(): Promise<void> {
-  if (Platform.OS === "web") return;
+  if (Platform.OS === "web") {
+    const keys = await AsyncStorage.getAllKeys();
+    const cacheKeys = keys.filter((key) => key.startsWith(WEB_CACHE_PREFIX));
+    if (cacheKeys.length) await AsyncStorage.multiRemove(cacheKeys);
+    return;
+  }
   const database = await getDatabase();
   await database.runAsync("DELETE FROM cache_entries");
 }

@@ -7,17 +7,20 @@ import {
   ActivityIndicator,
   StyleSheet,
   RefreshControl,
+  Modal,
+  Pressable,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, getDocs, onSnapshot, query, where, type DocumentData, type QueryDocumentSnapshot } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { House, HelpCircle, ChevronDown, Building2 } from "lucide-react-native";
+import { House, HelpCircle, Building2, SlidersHorizontal, ChevronsUpDown, Check, UserRound, Phone, AtSign } from "lucide-react-native";
 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import HelpSupportModal from "../components/HelpSupportModal";
 import OwnerBellIcon from "../components/OwnerBellIcon";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import { EmptyState } from "../../shared/components/ui";
@@ -31,6 +34,9 @@ type StallDoc = {
   name: string;
   price: number;
   paymentSchedule: string;
+  category: string;
+  length: number | null;
+  width: number | null;
   status: "occupied" | "unoccupied" | "maintenance";
   tenantId: string | null;
 };
@@ -38,6 +44,11 @@ type StallDoc = {
 type TenantInfo = {
   firstName: string;
   lastName: string;
+  username: string;
+  contactNo: string;
+  paymentSchedule: string;
+  price: number | null;
+  category: string;
 };
 
 export default function Building() {
@@ -54,8 +65,14 @@ export default function Building() {
   const [filter, setFilter] = useState<"All" | "Unoccupied" | "Occupied">("All");
   const [filterSheetVisible, setFilterSheetVisible] = useState(false);
   const [sheetVisible, setSheetVisible] = useState(false);
+  const [selectedStall, setSelectedStall] = useState<StallDoc | null>(null);
+  const liveDocsRef = useRef<{
+    stalls: QueryDocumentSnapshot<DocumentData>[] | null;
+    users: QueryDocumentSnapshot<DocumentData>[] | null;
+  }>({stalls: null, users: null});
 
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
   const homeRef = useRef<View>(null);
   const bellRef = useRef<View>(null);
   const buildingDropdownRef = useRef<View>(null);
@@ -76,10 +93,61 @@ export default function Building() {
     const unsub = onAuthStateChanged(auth, (user) => {
       if (!user) { router.replace("/login"); return; }
       setChecking(false);
-      fetchData();
     });
     return unsub;
   }, []);
+
+  useEffect(() => {
+    if (checking) return;
+    const applyLiveData = () => {
+      const live = liveDocsRef.current;
+      if (!live.stalls || !live.users) return;
+      const stalls: StallDoc[] = live.stalls.map((stallDoc) => {
+        const data = stallDoc.data();
+        return {
+          id: stallDoc.id,
+          buildingNumber: Number(data.buildingNumber ?? 0),
+          spaceId: data.spaceId ?? "",
+          name: data.name ?? "",
+          price: Number(data.price ?? 0),
+          paymentSchedule: data.paymentSchedule ?? "",
+          category: data.category ?? "",
+          length: Number.isFinite(Number(data.length)) ? Number(data.length) : null,
+          width: Number.isFinite(Number(data.width)) ? Number(data.width) : null,
+          status: data.status ?? "unoccupied",
+          tenantId: data.tenantId ?? null,
+        };
+      });
+      const map = new Map<string, TenantInfo>();
+      live.users.forEach((userDoc) => {
+        const data = userDoc.data();
+        map.set(userDoc.id, {
+          firstName: data.firstName ?? "",
+          lastName: data.lastName ?? "",
+          username: data.username ?? "",
+          contactNo: data.contactNo ?? "",
+          paymentSchedule: data.paymentSchedule ?? "",
+          price: Number.isFinite(Number(data.price)) ? Number(data.price) : null,
+          category: data.category ?? "",
+        });
+      });
+      setAllStalls(stalls);
+      setTenantMap(map);
+      setLoading(false);
+      void saveLocalCache("owner:stalls", {stalls, tenants: Array.from(map.entries())});
+    };
+    const unsubscribeStalls = onSnapshot(
+      collection(db, "stalls"),
+      (snap) => { liveDocsRef.current.stalls = snap.docs; applyLiveData(); },
+      () => { void fetchData(); },
+    );
+    const unsubscribeUsers = onSnapshot(
+      query(collection(db, "users"), where("role", "==", "tenant")),
+      (snap) => { liveDocsRef.current.users = snap.docs; applyLiveData(); },
+      () => { void fetchData(); },
+    );
+    return () => { unsubscribeStalls(); unsubscribeUsers(); };
+  }, [checking]);
 
   // Auto-opens the guided tour the first time the owner ever lands on this
   // page — never again after that, since it flips a persisted per-device
@@ -112,6 +180,9 @@ export default function Building() {
           name: data.name ?? "",
           price: Number(data.price ?? 0),
           paymentSchedule: data.paymentSchedule ?? "",
+          category: data.category ?? "",
+          length: Number.isFinite(Number(data.length)) ? Number(data.length) : null,
+          width: Number.isFinite(Number(data.width)) ? Number(data.width) : null,
           status: data.status ?? "unoccupied",
           tenantId: data.tenantId ?? null,
         };
@@ -125,6 +196,11 @@ export default function Building() {
         map.set(doc.id, {
           firstName: data.firstName ?? "",
           lastName: data.lastName ?? "",
+          username: data.username ?? "",
+          contactNo: data.contactNo ?? "",
+          paymentSchedule: data.paymentSchedule ?? "",
+          price: Number.isFinite(Number(data.price)) ? Number(data.price) : null,
+          category: data.category ?? "",
         });
       });
 
@@ -146,7 +222,6 @@ export default function Building() {
     useCallback(() => {
       if (!checking) {
         setSelectedBuilding(null);
-        fetchData();
       }
     }, [checking]),
   );
@@ -207,7 +282,7 @@ export default function Building() {
             <View ref={bellRef} collapsable={false}>
               <OwnerBellIcon />
             </View>
-            <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
+            <TouchableOpacity onPress={() => setHelpSupportVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
               <HelpCircle size={24} color={colors.emeraldSoft} />
             </TouchableOpacity>
           </View>
@@ -222,6 +297,32 @@ export default function Building() {
 
       {/* BODY */}
       <View style={styles.body}>
+        <View style={styles.capacityCard} ref={statsRef} collapsable={false}>
+          <View style={styles.capacityTotalBlock}>
+            <Text style={styles.capacityEyebrow}>TOTAL UNITS</Text>
+            <View style={styles.capacityValueRow}>
+              <Text style={styles.capacityValue}>{buildingStalls.length}</Text>
+              <Text style={styles.capacityUnit}>units</Text>
+            </View>
+            <Text style={styles.capacityCaption}>Allocated Market Capacity</Text>
+          </View>
+          <View style={styles.capacityStatusBlock}>
+            <View style={styles.capacityStatusRow}>
+              <View style={[styles.capacityDot, styles.capacityDotOccupied]} />
+              <View>
+                <Text style={styles.capacityStatusValue}>{String(occupiedCount).padStart(2, "0")} <Text style={styles.capacityOccupiedLabel}>Occupied</Text></Text>
+                <Text style={styles.capacityStatusCaption}>Active Leases</Text>
+              </View>
+            </View>
+            <View style={styles.capacityStatusRow}>
+              <View style={[styles.capacityDot, styles.capacityDotVacant]} />
+              <View>
+                <Text style={styles.capacityStatusValue}>{String(vacantCount).padStart(2, "0")} <Text style={styles.capacityVacantLabel}>Vacant</Text></Text>
+                <Text style={styles.capacityStatusCaption}>Available Spaces</Text>
+              </View>
+            </View>
+          </View>
+        </View>
         {/* DROPDOWN + FILTER — same row, elevated when a dropdown is open */}
         <View
           style={[
@@ -242,9 +343,9 @@ export default function Building() {
               <Text style={styles.dropdownCaption}>Stalls</Text>
               <View style={styles.dropdownValueWrap}>
                 <Text style={styles.dropdownValue} numberOfLines={1}>
-                  {selectedBuilding !== null ? selectedBuilding : "All"}
+                  {selectedBuilding !== null ? `Building ${selectedBuilding}` : "All Spaces"}
                 </Text>
-                <ChevronDown size={14} color={colors.ink} />
+                <ChevronsUpDown size={14} color={colors.ink} />
               </View>
             </TouchableOpacity>
 
@@ -262,14 +363,8 @@ export default function Building() {
                     }}
                     activeOpacity={0.7}
                   >
-                    <Text
-                      style={[
-                        styles.dropdownItemText,
-                        selectedBuilding === null && styles.dropdownItemTextActive,
-                      ]}
-                    >
-                      All Buildings
-                    </Text>
+                    <Text style={[styles.dropdownItemText, selectedBuilding === null && styles.dropdownItemTextActive]}>All Spaces</Text>
+                    {selectedBuilding === null && <Check size={15} color={colors.emerald} />}
                   </TouchableOpacity>
                   {buildingNumbers.map((num) => (
                     <TouchableOpacity
@@ -292,6 +387,7 @@ export default function Building() {
                       >
                         Building {num}
                       </Text>
+                      {selectedBuilding === num && <Check size={15} color={colors.emerald} />}
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -302,7 +398,7 @@ export default function Building() {
           {/* STATUS FILTER DROPDOWN */}
           <View style={styles.filterDropdownWrapper} ref={statusDropdownRef} collapsable={false}>
             <TouchableOpacity
-              style={styles.dropdownTrigger}
+              style={[styles.dropdownTrigger, styles.filterDropdownTrigger]}
               onPress={() => {
                 setSheetVisible(false);
                 setFilterSheetVisible((v) => !v);
@@ -312,9 +408,9 @@ export default function Building() {
               <Text style={styles.dropdownCaption}>Filter</Text>
               <View style={styles.dropdownValueWrap}>
                 <Text style={styles.dropdownValue} numberOfLines={1}>
-                  {filter}
+                  {filter === "All" ? "All Statuses" : filter}
                 </Text>
-                <ChevronDown size={14} color={colors.ink} />
+                <SlidersHorizontal size={15} color={colors.ink} />
               </View>
             </TouchableOpacity>
 
@@ -340,8 +436,9 @@ export default function Building() {
                           filter === item && styles.dropdownItemTextActive,
                         ]}
                       >
-                        {item}
+                        {item === "All" ? "All Statuses" : item}
                       </Text>
+                      {filter === item && <Check size={15} color={colors.emerald} />}
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -351,21 +448,6 @@ export default function Building() {
         </View>
 
         {/* STATS ROW */}
-        <View style={styles.statsRow} ref={statsRef} collapsable={false}>
-          <View style={styles.statCard}>
-            <Text style={styles.statCaption}>Units</Text>
-            <Text style={styles.statValue}>{buildingStalls.length}</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statCaption}>Occupied</Text>
-            <Text style={styles.statValue}>{occupiedCount}</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statCaption}>Vacant</Text>
-            <Text style={styles.statValue}>{vacantCount}</Text>
-          </View>
-        </View>
-
         {/* STALL LIST — all spaces live in one card; the card itself scrolls
             internally as more stalls get added over time */}
         <View style={styles.listCard} ref={listRef} collapsable={false}>
@@ -384,13 +466,13 @@ export default function Building() {
             <ScrollView
               style={styles.listScroll}
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xl }}
+              contentContainerStyle={[styles.stallGrid, { paddingBottom: insets.bottom + spacing.xl }]}
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
               }
             >
               {displayedStalls.map((item) => (
-                <StallRow key={item.id} stall={item} tenantMap={tenantMap} />
+                <StallRow key={item.id} stall={item} tenantMap={tenantMap} onPress={() => setSelectedStall(item)} />
               ))}
             </ScrollView>
           )}
@@ -410,13 +492,20 @@ export default function Building() {
       )}
 
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
+
+      <StallDetailsModal
+        stall={selectedStall}
+        tenant={selectedStall?.tenantId ? tenantMap.get(selectedStall.tenantId) : undefined}
+        onClose={() => setSelectedStall(null)}
+      />
     </View>
   );
 }
 
 const STATUS_LABEL: Record<StallDoc["status"], string> = {
   occupied: "Occupied",
-  unoccupied: "Unoccupied",
+  unoccupied: "Vacant",
   maintenance: "Maintenance",
 };
 
@@ -429,30 +518,132 @@ const STATUS_PILL: Record<StallDoc["status"], { bg: string; fg: string }> = {
 function StallRow({
   stall,
   tenantMap,
+  onPress,
 }: {
   stall: StallDoc;
   tenantMap: Map<string, TenantInfo>;
+  onPress: () => void;
 }) {
   const tenant = stall.tenantId ? tenantMap.get(stall.tenantId) : undefined;
   const tenantName = tenant ? `${tenant.firstName} ${tenant.lastName}`.trim() : "";
   const pill = STATUS_PILL[stall.status];
+  const isOccupied = stall.status === "occupied";
 
   return (
-    <View style={styles.row}>
-      <View style={styles.rowAvatar}>
-        <Text style={styles.rowAvatarText}>{`B${stall.buildingNumber}`}</Text>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`View details for ${stall.spaceId}`}
+      style={({ pressed }) => [styles.stallCard, isOccupied && styles.stallCardOccupied, pressed && styles.stallCardPressed]}
+    >
+      <View style={styles.stallCardTop}>
+        <View style={[styles.buildingBadge, isOccupied && styles.buildingBadgeOccupied]}>
+          <Text style={[styles.buildingBadgeText, isOccupied && styles.buildingBadgeTextOccupied]}>{`B${stall.buildingNumber}`}</Text>
+        </View>
+        <View style={[styles.statusPill, { backgroundColor: pill.bg }]}>
+          <View style={[styles.statusDot, { backgroundColor: pill.fg }]} />
+          <Text style={[styles.statusPillText, { color: isOccupied ? colors.ink : pill.fg }]}>{STATUS_LABEL[stall.status]}</Text>
+        </View>
       </View>
-      <View style={styles.rowInfo}>
-        <Text style={styles.rowSpace} numberOfLines={1}>{stall.spaceId}</Text>
-        {!!tenantName && (
-          <Text style={styles.rowTenantName} numberOfLines={1} ellipsizeMode="tail">
-            {tenantName}
-          </Text>
-        )}
+      <Text style={styles.stallSpace} numberOfLines={1}>{stall.spaceId}</Text>
+      <View style={[styles.stallCardFooter, isOccupied && styles.stallCardFooterOccupied]}>
+        <Text style={[styles.stallTenantName, !isOccupied && styles.stallVacantName]} numberOfLines={1} ellipsizeMode="tail">
+          {isOccupied ? (tenantName || "Tenant assigned") : "No tenant assigned"}
+        </Text>
+        <Text style={[styles.stallFooterCaption, isOccupied && styles.stallFooterCaptionOccupied]}>
+          {isOccupied ? "Active Lease" : "Available Space"}
+        </Text>
       </View>
-      <View style={[styles.statusPill, { backgroundColor: pill.bg }]}>
-        <View style={[styles.statusDot, { backgroundColor: pill.fg }]} />
-        <Text style={[styles.statusPillText, { color: pill.fg }]}>{STATUS_LABEL[stall.status]}</Text>
+    </Pressable>
+  );
+}
+
+function titleCaseSchedule(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return "Not set";
+  if (normalized === "semi-monthly" || normalized === "semimonthly") return "Semi-monthly";
+  return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`;
+}
+
+function StallDetailsModal({
+  stall,
+  tenant,
+  onClose,
+}: {
+  stall: StallDoc | null;
+  tenant?: TenantInfo;
+  onClose: () => void;
+}) {
+  if (!stall) return null;
+
+  const occupied = stall.status === "occupied";
+  const tenantName = tenant ? `${tenant.firstName} ${tenant.lastName}`.trim() : "";
+  // This modal describes one physical stall. A tenant's `price` may be the
+  // combined rate for as many as three stalls, so use the stall's own rate.
+  const effectivePrice = stall.price;
+  const effectiveSchedule = tenant?.paymentSchedule || stall.paymentSchedule;
+  const effectiveCategory = tenant?.category || stall.category;
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable style={styles.detailsModal} onPress={(event) => event.stopPropagation()}>
+          <View style={styles.detailsHeader}>
+            <View>
+              <Text style={styles.detailsEyebrow}>STALL INFORMATION</Text>
+              <Text style={styles.detailsTitle}>{stall.spaceId}</Text>
+            </View>
+          </View>
+
+          <View style={[styles.detailsStatus, { backgroundColor: STATUS_PILL[stall.status].bg }]}>
+            <View style={[styles.statusDot, { backgroundColor: STATUS_PILL[stall.status].fg }]} />
+            <Text style={[styles.detailsStatusText, { color: STATUS_PILL[stall.status].fg }]}>{STATUS_LABEL[stall.status]}</Text>
+          </View>
+
+          <View style={styles.detailsSection}>
+            <Text style={styles.detailsSectionTitle}>Space details</Text>
+            <DetailRow label="Building" value={`Building ${stall.buildingNumber}`} />
+            <DetailRow label="Space" value={stall.spaceId || "Not set"} />
+            {stall.name ? <DetailRow label="Stall name" value={stall.name} /> : null}
+            <DetailRow label="Category" value={effectiveCategory || "Not set"} />
+            {stall.length !== null && stall.width !== null ? <DetailRow label="Dimensions" value={`${stall.length} m × ${stall.width} m`} /> : null}
+            <DetailRow label="Rent rate" value={`₱${effectivePrice.toLocaleString()} / day`} />
+            <DetailRow label="Schedule" value={titleCaseSchedule(effectiveSchedule)} last />
+          </View>
+
+          <View style={styles.detailsSection}>
+            <View style={styles.detailsSectionHeading}>
+              <UserRound size={16} color={colors.emerald} />
+              <Text style={styles.detailsSectionTitle}>Tenant information</Text>
+            </View>
+            {occupied ? (
+              <>
+                <DetailRow label="Tenant" value={tenantName || "Tenant assigned"} />
+                {tenant?.username ? <DetailRow label="Username" value={tenant.username} icon={<AtSign size={14} color={colors.textSecondary} />} /> : null}
+                {tenant?.contactNo ? <DetailRow label="Contact" value={tenant.contactNo} icon={<Phone size={14} color={colors.textSecondary} />} /> : null}
+                <DetailRow label="Lease" value="Active Lease" last />
+              </>
+            ) : (
+              <Text style={styles.noTenantText}>No tenant is currently assigned to this space.</Text>
+            )}
+          </View>
+
+          <TouchableOpacity style={styles.detailsDoneButton} onPress={onClose} activeOpacity={0.85}>
+            <Text style={styles.detailsDoneText}>Done</Text>
+          </TouchableOpacity>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+function DetailRow({ label, value, icon, last = false }: { label: string; value: string; icon?: React.ReactNode; last?: boolean }) {
+  return (
+    <View style={[styles.detailRow, !last && styles.detailRowBorder]}>
+      <Text style={styles.detailLabel}>{label}</Text>
+      <View style={styles.detailValueWrap}>
+        {icon}
+        <Text style={styles.detailValue}>{value}</Text>
       </View>
     </View>
   );
@@ -522,8 +713,36 @@ const styles = StyleSheet.create({
   body: {
     flex: 1,
     paddingHorizontal: spacing.md,
-    paddingTop: spacing.lg,
+    paddingTop: spacing.md,
   },
+
+  capacityCard: {
+    minHeight: 132,
+    flexDirection: "row",
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    marginBottom: spacing.lg,
+    paddingHorizontal: 22,
+    paddingVertical: 18,
+    borderTopWidth: 4,
+    borderTopColor: colors.emerald,
+    ...shadow.card,
+  },
+  capacityTotalBlock: { flex: 1.45, justifyContent: "center" },
+  capacityEyebrow: { fontSize: 10, fontFamily: fontFamily.semibold, color: colors.textPrimary, letterSpacing: 1.1 },
+  capacityValueRow: { flexDirection: "row", alignItems: "baseline", gap: 6, marginTop: 5 },
+  capacityValue: { fontSize: 43, lineHeight: 47, fontFamily: fontFamily.extrabold, color: colors.ink },
+  capacityUnit: { fontSize: fontSize.xs, fontFamily: fontFamily.medium, color: colors.textPrimary },
+  capacityCaption: { marginTop: 3, fontSize: fontSize.xs, fontFamily: fontFamily.regular, color: colors.textSecondary },
+  capacityStatusBlock: { flex: 1, justifyContent: "center", gap: 12, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: colors.border, paddingLeft: 18 },
+  capacityStatusRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  capacityDot: { width: 11, height: 11, borderRadius: 6, ...shadow.card },
+  capacityDotOccupied: { backgroundColor: colors.emerald },
+  capacityDotVacant: { backgroundColor: "#E87500" },
+  capacityStatusValue: { fontSize: fontSize.md, lineHeight: 20, fontFamily: fontFamily.bold, color: colors.ink },
+  capacityOccupiedLabel: { fontSize: fontSize.xs, color: colors.emerald },
+  capacityVacantLabel: { fontSize: fontSize.xs, color: colors.error },
+  capacityStatusCaption: { fontSize: 9, fontFamily: fontFamily.regular, color: colors.textSecondary },
 
   // ── Top row (building dropdown + filter tabs) ─────────────────────────────────
 
@@ -542,19 +761,19 @@ const styles = StyleSheet.create({
   },
 
   dropdownTrigger: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+    minHeight: 51,
+    alignItems: "flex-start",
+    justifyContent: "center",
     backgroundColor: colors.white,
-    borderRadius: radius.pill,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 7,
   },
 
   dropdownCaption: {
-    fontSize: fontSize.xs,
+    fontSize: 9,
     fontFamily: fontFamily.bold,
     color: colors.emerald,
     textTransform: "uppercase",
@@ -562,46 +781,56 @@ const styles = StyleSheet.create({
   },
 
   dropdownValueWrap: {
+    width: "100%",
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     gap: 4,
   },
 
   dropdownValue: {
-    fontSize: fontSize.base,
+    fontSize: fontSize.sm,
     fontFamily: fontFamily.bold,
     color: colors.ink,
   },
 
   dropdown: {
     position: "absolute",
-    top: 54,
+    top: 57,
     left: 0,
-    minWidth: 150,
+    right: 0,
+    width: "100%",
     backgroundColor: colors.white,
-    borderWidth: 1.5,
+    borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radius.sm,
+    borderRadius: radius.md,
     zIndex: 200,
+    overflow: "hidden",
     ...shadow.raised,
   },
 
   dropdownInner: {
-    borderRadius: radius.sm,
+    borderRadius: radius.md,
     overflow: "hidden",
   },
 
   dropdownItem: {
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
+    minHeight: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 8,
+    paddingHorizontal: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
   },
 
   dropdownItemActive: {
-    backgroundColor: colors.emeraldSoft,
+    backgroundColor: "#DDF3EA",
   },
 
   dropdownItemText: {
-    fontSize: fontSize.base,
+    fontSize: fontSize.sm,
     fontFamily: fontFamily.regular,
     color: colors.textSecondary,
   },
@@ -616,6 +845,10 @@ const styles = StyleSheet.create({
   filterDropdownWrapper: {
     position: "relative",
     flex: 1,
+  },
+
+  filterDropdownTrigger: {
+    paddingHorizontal: spacing.md,
   },
 
   // ── Stats row ─────────────────────────────────────────────────────────────────
@@ -660,6 +893,11 @@ const styles = StyleSheet.create({
   listScroll: {
     flex: 1,
   },
+  stallGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.md,
+  },
 
   listCardCenteredBox: {
     alignItems: "center",
@@ -669,64 +907,100 @@ const styles = StyleSheet.create({
 
   // ── Stall row ─────────────────────────────────────────────────────────────────
 
-  row: {
+  stallCard: {
+    width: "48%",
+    minHeight: 165,
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    overflow: "hidden",
+    ...shadow.card,
+  },
+  stallCardOccupied: { backgroundColor: "#F0F9F5" },
+  stallCardPressed: { opacity: 0.78, transform: [{ scale: 0.985 }] },
+  stallCardTop: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.white,
-    borderRadius: radius.xl + 4,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: spacing.md + 2,
-    paddingVertical: spacing.md + 2,
-    marginBottom: spacing.sm + 2,
-    gap: spacing.md,
+    justifyContent: "space-between",
+    paddingHorizontal: 14,
+    paddingTop: 14,
   },
-
-  rowAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.emeraldSoft,
-    alignItems: "center",
-    justifyContent: "center",
+  buildingBadge: {
+    borderRadius: 5,
+    backgroundColor: "#E7E9E8",
+    paddingHorizontal: 7,
+    paddingVertical: 4,
   },
-
-  rowAvatarText: {
-    fontSize: fontSize.sm,
+  buildingBadgeOccupied: { backgroundColor: colors.ink },
+  buildingBadgeText: {
+    fontSize: 10,
     fontFamily: fontFamily.bold,
-    color: colors.emerald,
+    color: colors.textPrimary,
   },
-
-  rowInfo: {
+  buildingBadgeTextOccupied: { color: colors.white },
+  stallSpace: {
     flex: 1,
-  },
-
-  rowSpace: {
-    fontSize: fontSize.md,
-    fontFamily: fontFamily.bold,
+    paddingHorizontal: 14,
+    paddingTop: 20,
+    fontSize: 29,
+    lineHeight: 34,
+    fontFamily: fontFamily.extrabold,
     color: colors.ink,
-    marginBottom: 2,
   },
-
-  rowTenantName: {
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.regular,
-    color: colors.textSecondary,
+  stallCardFooter: {
+    minHeight: 54,
+    justifyContent: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    backgroundColor: "#FAFBFA",
   },
+  stallCardFooterOccupied: { backgroundColor: "#D9F1E7" },
+  stallTenantName: { fontSize: fontSize.xs, fontFamily: fontFamily.bold, color: colors.ink },
+  stallVacantName: { fontFamily: fontFamily.regular, fontStyle: "italic", color: colors.textPrimary },
+  stallFooterCaption: { marginTop: 2, fontSize: 10, fontFamily: fontFamily.regular, color: colors.textSecondary },
+  stallFooterCaptionOccupied: { color: colors.emerald },
 
   statusPill: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    paddingHorizontal: spacing.sm + 2,
-    paddingVertical: 5,
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
     borderRadius: radius.pill,
   },
 
   statusDot: { width: 6, height: 6, borderRadius: 3 },
 
   statusPillText: {
-    fontSize: fontSize.xs,
-    fontFamily: fontFamily.bold,
+    fontSize: 10,
+    fontFamily: fontFamily.medium,
   },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: "center",
+    paddingHorizontal: spacing.lg,
+    backgroundColor: "rgba(5, 35, 29, 0.55)",
+  },
+  detailsModal: {
+    maxHeight: "88%",
+    padding: spacing.lg,
+    borderRadius: radius.xl,
+    backgroundColor: colors.white,
+    ...shadow.card,
+  },
+  detailsHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  detailsEyebrow: { fontSize: 10, fontFamily: fontFamily.bold, color: colors.textSecondary, letterSpacing: 0.8 },
+  detailsTitle: { marginTop: 3, fontSize: 28, fontFamily: fontFamily.extrabold, color: colors.ink },
+  detailsStatus: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 5, marginTop: spacing.sm, paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.pill },
+  detailsStatusText: { fontSize: fontSize.xs, fontFamily: fontFamily.bold },
+  detailsSection: { marginTop: spacing.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.lg, backgroundColor: "#F5F8F6" },
+  detailsSectionHeading: { flexDirection: "row", alignItems: "center", gap: 7 },
+  detailsSectionTitle: { marginBottom: 3, fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.ink },
+  detailRow: { minHeight: 38, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.md, paddingVertical: 8 },
+  detailRowBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  detailLabel: { flexShrink: 0, fontSize: fontSize.xs, fontFamily: fontFamily.regular, color: colors.textSecondary },
+  detailValueWrap: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 5 },
+  detailValue: { flexShrink: 1, textAlign: "right", fontSize: fontSize.xs, fontFamily: fontFamily.bold, color: colors.ink },
+  noTenantText: { paddingVertical: spacing.sm, fontSize: fontSize.xs, lineHeight: 18, fontFamily: fontFamily.regular, color: colors.textSecondary },
+  detailsDoneButton: { minHeight: 46, alignItems: "center", justifyContent: "center", marginTop: spacing.lg, borderRadius: radius.md, backgroundColor: colors.ink },
+  detailsDoneText: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.white },
 });

@@ -1,6 +1,6 @@
 import { View, TouchableOpacity, StyleSheet } from "react-native";
 import { useEffect, useState } from "react";
-import { collection, query, where, onSnapshot } from "firebase/firestore";
+import { collection, limit, query, where, onSnapshot } from "firebase/firestore";
 import { router } from "expo-router";
 import { Bell } from "lucide-react-native";
 
@@ -19,10 +19,14 @@ export default function BellIcon() {
       collection(db, "notifications"),
       where("userId", "==", user.uid),
       where("read", "==", false),
+      limit(1),
     );
 
     const unsub = onSnapshot(q, (snap) => {
       setUnreadCount(snap.size);
+    }, (error) => {
+      if (!auth.currentUser) return;
+      console.error("TENANT BELL LISTENER ERROR:", error);
     });
 
     return () => unsub();

@@ -85,7 +85,7 @@ export default function BottomNavBar({ state, navigation, insets }: BottomTabBar
 
   return (
     <View style={styles.barBackdrop}>
-      <View style={[styles.bar, { paddingBottom: Math.max(insets.bottom - 10, 6) }]}>
+      <View style={[styles.bar, { paddingBottom: Math.max(insets.bottom, 12) }]}>
         <Animated.View
           pointerEvents="none"
           style={[styles.pill, { opacity: pillOpacity, transform: [{ translateX: pillX }] }]}

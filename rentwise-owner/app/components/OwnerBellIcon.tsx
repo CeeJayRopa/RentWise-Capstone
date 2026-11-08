@@ -1,6 +1,6 @@
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { useEffect, useState } from "react";
-import { collection, query, where, onSnapshot } from "firebase/firestore";
+import { collection, query, where, onSnapshot, limit } from "firebase/firestore";
 import { router } from "expo-router";
 import { Bell } from "lucide-react-native";
 
@@ -20,21 +20,28 @@ export default function OwnerBellIcon() {
       collection(db, "notifications"),
       where("userId", "==", user.uid),
       where("read", "==", false),
+      limit(10),
     );
+
+    const handleListenerError = (error: unknown) => {
+      if (!auth.currentUser) return;
+      console.error("OWNER BELL LISTENER ERROR:", error);
+    };
 
     const unsub = onSnapshot(q, (snap) => {
       setUnreadCount(snap.size);
-    });
+    }, handleListenerError);
 
     const resetQ = query(
       collection(db, "passwordResetRequests"),
       where("requestedRole", "==", "admin"),
       where("status", "==", "pending"),
+      limit(10),
     );
 
     const unsubResets = onSnapshot(resetQ, (snap) => {
       setPendingResetCount(snap.size);
-    });
+    }, handleListenerError);
 
     return () => {
       unsub();

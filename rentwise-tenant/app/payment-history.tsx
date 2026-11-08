@@ -10,8 +10,6 @@ import {
   FlatList,
   Image,
   TextInput,
-  Animated,
-  Easing,
   StatusBar,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
@@ -28,9 +26,9 @@ import { MONTHS } from "../services/billingSchedule";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 import ReceiptCardContent, { ReceiptActionsBar } from "./components/ReceiptCardContent";
 import HelpTour, { HelpStep } from "./components/HelpTour";
+import HelpSupportModal from "./components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
 
-const AnimatedLinearGradient = Animated.createAnimatedComponent(LinearGradient);
 const YEAR_ROW_HEIGHT = 30;
 const YEAR_WHEEL_HEIGHT = 150;
 const YEAR_CENTER_PADDING = (YEAR_WHEEL_HEIGHT - YEAR_ROW_HEIGHT) / 2;
@@ -53,12 +51,11 @@ export default function PaymentHistoryScreen() {
   const [draftYear, setDraftYear] = useState(new Date().getFullYear());
   const [showYearPicker, setShowYearPicker] = useState(false);
   const currentYear = new Date().getFullYear();
-  const latestYear = currentYear + 20;
+  // Never offer a future year. This automatically advances when the device's
+  // calendar year changes (for example, 2027 appears once it is actually 2027).
+  const latestYear = currentYear;
   const YEARS = Array.from({ length: latestYear - EARLIEST_YEAR + 1 }, (_, i) => latestYear - i);
   const yearListRef = useRef<FlatList<number>>(null);
-
-  const progressAnim = useRef(new Animated.Value(0)).current;
-  const [focusTick, setFocusTick] = useState(0);
 
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -67,6 +64,7 @@ export default function PaymentHistoryScreen() {
   const [selectedPayment, setSelectedPayment] = useState<any>(null);
 
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
   const helpRef = useRef<View>(null);
   const searchRef = useRef<View>(null);
   const summaryRef = useRef<View>(null);
@@ -94,7 +92,7 @@ export default function PaymentHistoryScreen() {
 
   const tourSteps: HelpStep[] = [
     { key: "search", ref: searchRef, title: "Search", description: "Find a transaction by amount, date, or payment method.", edgeInset: "top", round: true },
-    { key: "summary", ref: summaryRef, title: "Monthly total", description: "How much you've paid this month, and your progress toward the full month's charge.", edgeInset: "top", insetXPercent: 0.045 },
+    { key: "summary", ref: summaryRef, title: "Coverage total", description: "Confirmed payments whose rent coverage begins in the selected month.", edgeInset: "top", insetXPercent: 0.015 },
     { key: "picker", ref: pickerRef, title: "Month & year", description: "Switch to a different month or year to see that period's transactions.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(pickerRef) },
     { key: "list", ref: listRef, title: "Transactions", description: "Every payment for the selected period. Tap a card with a receipt to view it.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(listRef), clipBottom: -25 },
   ];
@@ -107,7 +105,15 @@ export default function PaymentHistoryScreen() {
       (async () => {
         const tenantData = await getTenantData(user.uid);
         if (tenantData) {
-          setBilling({ price: (tenantData as any).price, paymentSchedule: (tenantData as any).paymentSchedule });
+          const stallIds = [...new Set(((tenantData as any).stallIds ?? []).map(String))].slice(0, 3) as string[];
+          const stallSnaps = await Promise.all(stallIds.map((id) => getDoc(doc(db, "stalls", id))));
+          const stalls = stallSnaps.filter((snap) => snap.exists()).map((snap) => ({
+            stallId: snap.id,
+            buildingNumber: String(snap.data()?.buildingNumber ?? ""),
+            spaceId: String(snap.data()?.spaceId ?? snap.id),
+            dailyRate: Number(snap.data()?.price ?? 0),
+          }));
+          setBilling({ price: (tenantData as any).price, paymentSchedule: (tenantData as any).paymentSchedule, stalls });
         }
       })();
 
@@ -123,11 +129,6 @@ export default function PaymentHistoryScreen() {
           setLoading(false);
         },
       );
-
-      // Bumps on every focus (fresh page open and every navigate-back-to
-      // alike) so the progress-bar animation below replays each time, not
-      // just the first time real data arrives.
-      setFocusTick((t) => t + 1);
 
       return unsubscribe;
     }, [])
@@ -159,6 +160,13 @@ export default function PaymentHistoryScreen() {
     return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
   }
 
+  function coverageDate(payment: any): Date | null {
+    const raw = payment.coverageStartAt ?? payment.date;
+    if (!raw) return null;
+    const date = raw.toDate ? raw.toDate() : new Date(raw);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
   function openReceipt(payment: any) {
     setSelectedPayment(payment);
     setShowReceiptModal(true);
@@ -181,8 +189,8 @@ export default function PaymentHistoryScreen() {
     .filter((p) => p.status === "approved" || p.status === "pending")
     .filter((p) => {
       if (searching) return true;
-      if (!p.date) return false;
-      const d = p.date.toDate ? p.date.toDate() : new Date(p.date);
+      const d = coverageDate(p);
+      if (!d) return false;
       return MONTHS[d.getMonth()] === selectedMonth && d.getFullYear() === selectedYear;
     })
     .filter((p) => {
@@ -196,13 +204,12 @@ export default function PaymentHistoryScreen() {
     })
     .sort(
       (a, b) =>
-        new Date(b.date?.toDate ? b.date.toDate() : b.date).getTime() -
-        new Date(a.date?.toDate ? a.date.toDate() : a.date).getTime(),
+        (coverageDate(b)?.getTime() ?? 0) - (coverageDate(a)?.getTime() ?? 0),
     );
 
   const selectedMonthHistory = history.filter((p) => {
-    if (!p.date) return false;
-    const d = p.date.toDate ? p.date.toDate() : new Date(p.date);
+    const d = coverageDate(p);
+    if (!d) return false;
     return MONTHS[d.getMonth()] === selectedMonth && d.getFullYear() === selectedYear;
   });
 
@@ -213,43 +220,21 @@ export default function PaymentHistoryScreen() {
     .filter((p) => p.status === "approved")
     .reduce((sum, p) => sum + Number(p.amount || 0), 0);
 
-  // "of ₱X" reference figure for the progress bar — the selected month's
-  // full charge at the tenant's current daily rate (pricing isn't tracked
-  // historically, so this is always today's rate applied to that month's
-  // day count).
-  const periodRate = Number(billing?.price || 0);
-  const monthIndex = MONTHS.indexOf(selectedMonth);
-  const daysInSelectedMonth = new Date(selectedYear, monthIndex + 1, 0).getDate();
-  const monthTotalCharge = periodRate * daysInSelectedMonth;
-  const targetPercent =
-    monthTotalCharge > 0 ? Math.max(0, Math.min(100, (totalAmount / monthTotalCharge) * 100)) : 0;
-
-  // Resets to 0 and animates back up whenever the selected month/year (or
-  // the underlying totals) change, instead of the fill just snapping
-  // straight to the new percentage.
-  useEffect(() => {
-    Animated.sequence([
-      Animated.timing(progressAnim, {
-        toValue: 0,
-        duration: 250,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: false,
-      }),
-      Animated.timing(progressAnim, {
-        toValue: targetPercent,
-        duration: 500,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: false,
-      }),
-    ]).start();
-  }, [selectedMonth, selectedYear, targetPercent, focusTick]);
-
   function methodLabel(item: any): string {
     const m = String(item.paymentMethod ?? "");
+    if (m.toLowerCase().includes("qrph") || m.toLowerCase().includes("qr ph")) return "QR Ph";
     if (m.toLowerCase().includes("gcash") && !m.toLowerCase().includes("maya")) return "GCash";
     if (m.toLowerCase().includes("maya")) return "Maya";
     if (item.method === "online") return "Online";
     return "Cash";
+  }
+
+  function includesAdvanceCoverage(item: any): boolean {
+    if (Number(item.periodsAdvance ?? 0) > 0) return true;
+    const breakdown = item.receiptData?.breakdown;
+    return Array.isArray(breakdown) && breakdown.some((line: any) =>
+      String(line?.label ?? "").trim().toLowerCase().startsWith("advance"),
+    );
   }
 
   return (
@@ -282,7 +267,7 @@ export default function PaymentHistoryScreen() {
               </TouchableOpacity>
             </View>
             <View ref={helpRef} collapsable={false}>
-              <TouchableOpacity style={styles.headerIconBtn} onPress={() => setTourVisible(true)} hitSlop={8}>
+              <TouchableOpacity style={styles.headerIconBtn} onPress={() => setHelpSupportVisible(true)} hitSlop={8}>
                 <HelpCircle size={20} color={colors.white} />
               </TouchableOpacity>
             </View>
@@ -316,6 +301,7 @@ export default function PaymentHistoryScreen() {
           showsVerticalScrollIndicator={false}
         >
           {!searching && (
+            <>
             <View ref={pickerRef} collapsable={false}>
               <View style={styles.archiveTopRow}>
                 <View collapsable={false}>
@@ -361,10 +347,11 @@ export default function PaymentHistoryScreen() {
                   ))}
                 </ScrollView>
               </View>
+            </View>
 
               <View style={styles.summaryBlock} ref={summaryRef} collapsable={false}>
                 <View style={styles.summaryHeadingRow}>
-                  <Text style={styles.summaryLabel}>Total paid in {selectedMonth} {selectedYear}</Text>
+                  <Text style={styles.summaryLabel}>Coverage starting in {selectedMonth} {selectedYear}</Text>
                   <View style={styles.transactionCountBadge}>
                     <Text style={styles.transactionCountText}>
                       {selectedMonthHistory.length} transaction{selectedMonthHistory.length !== 1 ? "s" : ""}
@@ -373,32 +360,8 @@ export default function PaymentHistoryScreen() {
                 </View>
                 <Text style={styles.summaryAmount}>₱{totalAmount.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
 
-                {monthTotalCharge > 0 && (
-                  <>
-                    <View style={styles.progressTrack}>
-                      <AnimatedLinearGradient
-                        colors={[colors.emeraldBright, colors.emerald]}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 0 }}
-                        style={[
-                          styles.progressFill,
-                          {
-                            width: progressAnim.interpolate({
-                              inputRange: [0, 100],
-                              outputRange: ["0%", "100%"],
-                            }),
-                          },
-                        ]}
-                      />
-                    </View>
-                    <View style={styles.progressSummaryRow}>
-                      <Text style={styles.progressSettledText}>{Math.round(targetPercent)}% settled</Text>
-                      <Text style={styles.progressTargetText}>Target: ₱{monthTotalCharge.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
-                    </View>
-                  </>
-                )}
               </View>
-            </View>
+            </>
           )}
 
           <View ref={listRef} collapsable={false}>
@@ -420,11 +383,9 @@ export default function PaymentHistoryScreen() {
               {history.map((item, index) => {
                 const hasReceipt = !!(item.receiptData || item.receipt);
                 const Row = hasReceipt ? TouchableOpacity : View;
-                const itemDate = item.date?.toDate ? item.date.toDate() : new Date(item.date);
+                const itemDate = coverageDate(item) ?? new Date();
                 const previous = index > 0 ? history[index - 1] : null;
-                const previousDate = previous
-                  ? (previous.date?.toDate ? previous.date.toDate() : new Date(previous.date))
-                  : null;
+                const previousDate = previous ? coverageDate(previous) : null;
                 const startsMonth = !previousDate
                   || itemDate.getMonth() !== previousDate.getMonth()
                   || itemDate.getFullYear() !== previousDate.getFullYear();
@@ -463,7 +424,14 @@ export default function PaymentHistoryScreen() {
                           )}
                         </View>
                         <View style={styles.rowInfo}>
-                          <Text style={styles.rowMethodName}>{methodLabel(item)}</Text>
+                          <View style={styles.rowMethodLine}>
+                            <Text style={styles.rowMethodName}>{methodLabel(item)}</Text>
+                            {includesAdvanceCoverage(item) && (
+                              <View style={styles.advanceBadge}>
+                                <Text style={styles.advanceBadgeText}>INCLUDES ADVANCE</Text>
+                              </View>
+                            )}
+                          </View>
                           <Text style={styles.rowDate}>{formatDateShort(item.date)}</Text>
                         </View>
                         <View style={styles.rowRight}>
@@ -588,7 +556,11 @@ export default function PaymentHistoryScreen() {
           <View style={styles.receiptPreviewCard}>
             <ScrollView style={styles.receiptScrollArea} showsVerticalScrollIndicator={false}>
               {selectedPayment?.receiptData ? (
-                <ReceiptCardContent data={selectedPayment.receiptData} billing={billing} showActions={false} />
+                <ReceiptCardContent
+                  data={{...selectedPayment.receiptData, periodsCovered: selectedPayment.periodsCovered, periodsAdvance: selectedPayment.periodsAdvance, paymentSchedule: selectedPayment.paymentSchedule, stalls: selectedPayment.receiptData?.stalls ?? selectedPayment.stalls}}
+                  billing={billing}
+                  showActions={false}
+                />
               ) : selectedPayment?.receipt ? (
                 <>
                   <Image source={{ uri: selectedPayment.receipt }} style={styles.receiptImage} />
@@ -622,7 +594,7 @@ export default function PaymentHistoryScreen() {
                 the receipt content. */}
             {selectedPayment?.receiptData && (
               <ReceiptActionsBar
-                data={selectedPayment.receiptData}
+                data={{...selectedPayment.receiptData, periodsCovered: selectedPayment.periodsCovered, periodsAdvance: selectedPayment.periodsAdvance, paymentSchedule: selectedPayment.paymentSchedule, stalls: selectedPayment.receiptData?.stalls ?? selectedPayment.stalls}}
                 billing={billing}
                 onClose={() => {
                   setShowReceiptModal(false);
@@ -634,6 +606,7 @@ export default function PaymentHistoryScreen() {
         </View>
       </Modal>
 
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
       <HelpTour
         visible={tourVisible}
         steps={tourSteps}
@@ -1041,6 +1014,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
+  rowMethodLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+
   rowAmount: {
     fontSize: fontSize.base,
     fontFamily: fontFamily.bold,
@@ -1051,6 +1031,22 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     fontFamily: fontFamily.bold,
     color: colors.ink,
+  },
+
+  advanceBadge: {
+    borderRadius: radius.pill,
+    backgroundColor: "#E8F4EF",
+    borderWidth: 1,
+    borderColor: "#B8DDCE",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+
+  advanceBadgeText: {
+    fontSize: 8,
+    fontFamily: fontFamily.bold,
+    color: colors.emerald,
+    letterSpacing: 0.2,
   },
 
   rowDate: {

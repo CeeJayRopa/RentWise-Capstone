@@ -19,7 +19,7 @@ export const getUserById = async (uid: string) => {
 
 export const updateUserProfile = async (
   uid: string,
-  data: { firstName?: string; lastName?: string; contactNo?: string; username?: string },
+  data: { firstName?: string; middleName?: string; lastName?: string; contactNo?: string; username?: string },
 ) => {
   await updateDoc(doc(db, "users", uid), data);
 };
@@ -29,11 +29,12 @@ export const isUsernameTaken = async (
   role: string,
   excludeUid: string,
 ): Promise<boolean> => {
-  const q = query(
+  const canonical = username.toUpperCase();
+  const variants = [...new Set([username, canonical, canonical.toLowerCase()])];
+  const snapshots = await Promise.all(variants.map((variant) => getDocs(query(
     collection(db, "users"),
-    where("username", "==", username),
+    where("username", "==", variant),
     where("role", "==", role),
-  );
-  const snap = await getDocs(q);
-  return snap.docs.some((d: any) => d.id !== excludeUid);
+  ))));
+  return snapshots.some((snap) => snap.docs.some((d: any) => d.id !== excludeUid));
 };

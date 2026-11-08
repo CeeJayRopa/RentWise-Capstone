@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   StyleSheet,
   RefreshControl,
-  Modal,
   Animated,
   Easing,
 } from "react-native";
@@ -30,19 +29,17 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   User,
   Wallet,
-  CheckCircle2,
-  AlertCircle,
-  TrendingUp,
-  TrendingDown,
   HelpCircle,
+  Store,
 } from "lucide-react-native";
 
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
-import { isTenantPaidThisMonth } from "../../shared/services/financeServices";
+import { isTenantCaughtUp } from "../../shared/services/financeServices";
 import { hasSeenAdminDashboardTour, markAdminDashboardTourSeen } from "../../shared/services/onboardingTour";
 import NotificationBell from "../components/NotificationBell";
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import HelpSupportModal from "../components/HelpSupportModal";
 import { bottomNavRefs } from "../../shared/services/bottomNavRefs";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 
@@ -108,18 +105,7 @@ function calculateDashboardStats(
 
   const paidCount = activeTenants.filter((d) => {
     const tenant = d.data();
-    const paidThisMonth = monthPayments
-      .filter((payment) => payment.data().userId === d.id)
-      .reduce(
-        (sum, payment) => sum + Number(payment.data().amount ?? payment.data().paymentAmount ?? 0),
-        0,
-      );
-    return isTenantPaidThisMonth(
-      tenant.price ?? 0,
-      tenant.paymentSchedule ?? "monthly",
-      paidThisMonth,
-      now,
-    );
+    return isTenantCaughtUp(tenant.nextDueAt ?? tenant.billingStartedAt ?? tenant.createdAt, now);
   }).length;
 
   return {
@@ -134,11 +120,6 @@ function calculateDashboardStats(
   };
 }
 
-function pctChange(current: number, previous: number): number {
-  if (previous <= 0) return current > 0 ? 100 : 0;
-  return ((current - previous) / previous) * 100;
-}
-
 function formatCurrency(amount: number): string {
   const [integer, decimal] = amount.toFixed(2).split(".");
   return `₱${integer.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${decimal}`;
@@ -149,14 +130,13 @@ export default function Dashboard() {
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [isOffline, setIsOffline] = useState(false);
-  const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [stats, setStats] = useState<Stats>(ZERO_STATS);
   const [focusTick, setFocusTick] = useState(0);
   const donutAnim = useRef(new Animated.Value(0)).current;
   const progressAnim = useRef(new Animated.Value(0)).current;
 
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
   const profileRef = useRef<View>(null);
   const bellRef = useRef<View>(null);
   const helpRef = useRef<View>(null);
@@ -181,9 +161,6 @@ export default function Dashboard() {
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       if (!user) {
-        if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-        offlineTimerRef.current = null;
-        setIsOffline(false);
         router.replace("/");
         return;
       }
@@ -223,31 +200,20 @@ export default function Dashboard() {
       setLoading(false);
     };
 
-    const unsubscribeUsers = onSnapshot(
-      tenantsQuery,
-      { includeMetadataChanges: true },
-      (snapshot) => {
-        users = snapshot.docs;
-        updateDashboard();
-        if (!snapshot.metadata.fromCache) {
-          if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-          offlineTimerRef.current = null;
-          setIsOffline(false);
-          return;
-        }
-        if (!offlineTimerRef.current) {
-          offlineTimerRef.current = setTimeout(() => {
-            if (auth.currentUser) setIsOffline(true);
-            offlineTimerRef.current = null;
-          }, 5000);
-        }
-      },
-    );
+    const unsubscribeUsers = onSnapshot(tenantsQuery, (snapshot) => {
+      users = snapshot.docs;
+      updateDashboard();
+    });
     const unsubscribeStalls = onSnapshot(collection(db, "stalls"), (snapshot) => {
       stalls = snapshot.docs;
       updateDashboard();
     });
-    const unsubscribePayments = onSnapshot(collection(db, "payments"), (snapshot) => {
+    const paymentWindowStart = Timestamp.fromDate(new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1));
+    const unsubscribePayments = onSnapshot(query(
+      collection(db, "payments"),
+      where("status", "==", "approved"),
+      where("date", ">=", paymentWindowStart),
+    ), (snapshot) => {
       payments = snapshot.docs;
       updateDashboard();
     });
@@ -256,9 +222,6 @@ export default function Dashboard() {
       unsubscribeUsers();
       unsubscribeStalls();
       unsubscribePayments();
-      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-      offlineTimerRef.current = null;
-      setIsOffline(false);
     };
   }, [checking]);
 
@@ -287,7 +250,11 @@ export default function Dashboard() {
       const [usersSnap, stallsSnap, paymentsSnap] = await Promise.all([
         getDocs(query(collection(db, "users"), where("role", "==", "tenant"))),
         getDocs(collection(db, "stalls")),
-        getDocs(query(collection(db, "payments"), where("status", "==", "approved"))),
+        getDocs(query(
+          collection(db, "payments"),
+          where("status", "==", "approved"),
+          where("date", ">=", lastMonthStartTS),
+        )),
       ]);
 
       const activeTenants = usersSnap.docs.filter((d) => d.data().status === "active");
@@ -318,10 +285,7 @@ export default function Dashboard() {
       // overcounted tenants who'd only partially paid what's due.
       const paidCount = activeTenants.filter((d) => {
         const u = d.data();
-        const paidThisMonth = monthPayments
-          .filter((p) => p.data().userId === d.id)
-          .reduce((sum, p) => sum + Number(p.data().amount ?? p.data().paymentAmount ?? 0), 0);
-        return isTenantPaidThisMonth(u.price ?? 0, u.paymentSchedule ?? "monthly", paidThisMonth, now);
+        return isTenantCaughtUp(u.nextDueAt ?? u.billingStartedAt ?? u.createdAt, now);
       }).length;
 
       setStats({
@@ -387,8 +351,9 @@ export default function Dashboard() {
     );
   }
 
-  const todayChange = pctChange(stats.collectedToday, stats.collectedYesterday);
-  const monthChange = pctChange(stats.collectedThisMonth, stats.collectedLastMonth);
+  const recentDailyTotal = stats.collectedToday + stats.collectedYesterday;
+  const todayShare = recentDailyTotal > 0 ? (stats.collectedToday / recentDailyTotal) * 100 : 0;
+  const yesterdayShare = recentDailyTotal > 0 ? (stats.collectedYesterday / recentDailyTotal) * 100 : 0;
 
   return (
     <View style={styles.screen}>
@@ -419,7 +384,7 @@ export default function Dashboard() {
               <NotificationBell />
             </View>
             <View ref={helpRef} collapsable={false}>
-              <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
+              <TouchableOpacity onPress={() => setHelpSupportVisible(true)} activeOpacity={0.7} style={styles.headerIconBtn}>
                 <HelpCircle size={24} color={colors.emeraldSoft} />
               </TouchableOpacity>
             </View>
@@ -433,9 +398,12 @@ export default function Dashboard() {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + spacing.xl }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + spacing.lg }]}
         showsVerticalScrollIndicator={false}
-        scrollEnabled={false}
+        scrollEnabled
+        nestedScrollEnabled
+        keyboardShouldPersistTaps="handled"
+        overScrollMode="always"
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.emerald} />
         }
@@ -449,19 +417,23 @@ export default function Dashboard() {
             <Text style={styles.sectionTitle}>Market overview</Text>
             <View style={styles.overviewCard}>
               <OccupancyDonut percent={occupancyPercent} animatedPercent={donutAnim} />
-
-              <View style={styles.overviewDivider} />
-
               <View style={styles.overviewRight}>
-                <View style={styles.overviewSplitRow}>
-                  <View style={styles.overviewSplitItem}>
-                    <Text style={styles.overviewSplitLabelGreen}>Occupied</Text>
-                    <Text style={styles.overviewSplitValue}>{stats.occupiedCount}</Text>
+                <View style={styles.stallOverviewItem}>
+                  <View style={[styles.stallIconBox, styles.stallIconBoxOccupied]}>
+                    <Store size={23} color={colors.emerald} strokeWidth={2.3} />
                   </View>
-                  <View style={styles.overviewSplitDivider} />
-                  <View style={styles.overviewSplitItem}>
-                    <Text style={styles.overviewSplitLabel}>Vacant</Text>
-                    <Text style={styles.overviewSplitValue}>{stats.unoccupiedCount}</Text>
+                  <View>
+                    <Text style={styles.stallOverviewValue}>{stats.occupiedCount}</Text>
+                    <Text style={styles.stallOverviewLabel}>Occupied stalls</Text>
+                  </View>
+                </View>
+                <View style={styles.stallOverviewItem}>
+                  <View style={styles.stallIconBox}>
+                    <Store size={23} color={colors.textMuted} strokeWidth={2.3} />
+                  </View>
+                  <View>
+                    <Text style={styles.stallOverviewValue}>{stats.unoccupiedCount}</Text>
+                    <Text style={styles.stallOverviewLabel}>Vacant stalls</Text>
                   </View>
                 </View>
               </View>
@@ -471,82 +443,72 @@ export default function Dashboard() {
             {/* Financial performance */}
             <View ref={financeChartRef} collapsable={false}>
             <Text style={[styles.sectionTitle, styles.financeSectionTitle]}>Financial performance</Text>
-            <View style={styles.financeRow}>
-              <View style={[styles.financeCard, { backgroundColor: colors.emerald }]}>
-                <Text style={styles.financeCardLabel}>Today</Text>
-                <Text style={styles.financeCardAmount}>{formatCurrency(stats.collectedToday)}</Text>
-                <View style={styles.financeTrend}>
-                  {todayChange >= 0 ? (
-                    <TrendingUp size={13} color={colors.emeraldSoft} />
-                  ) : (
-                    <TrendingDown size={13} color={colors.emeraldSoft} />
-                  )}
-                  <Text style={styles.financeTrendText}>
-                    {Math.abs(todayChange).toFixed(1)}% vs yesterday
-                  </Text>
-                </View>
-              </View>
+            <View style={styles.financeSummaryCard}>
+              <Text style={styles.financeSummaryLabel}>This month total</Text>
+              <Text style={styles.financeSummaryAmount}>{formatCurrency(stats.collectedThisMonth)}</Text>
+            </View>
 
-              <View style={[styles.financeCard, { backgroundColor: colors.ink }]}>
-                <Text style={styles.financeCardLabel}>This month</Text>
-                <Text style={styles.financeCardAmount}>{formatCurrency(stats.collectedThisMonth)}</Text>
-                <View style={styles.financeTrend}>
-                  {monthChange >= 0 ? (
-                    <TrendingUp size={13} color={colors.emeraldSoft} />
-                  ) : (
-                    <TrendingDown size={13} color={colors.emeraldSoft} />
-                  )}
-                  <Text style={styles.financeTrendText}>
-                    {Math.abs(monthChange).toFixed(1)}% vs last month
-                  </Text>
+            <View style={styles.financeDayRow}>
+              <View style={styles.financeDayCard}>
+                <View style={styles.financeDayHeader}>
+                  <Text style={styles.financeDayLabel}>Today</Text>
+                  <Text style={styles.financeDayPercent}>{todayShare.toFixed(1)}%</Text>
                 </View>
+                <Text style={styles.financeDayAmount}>{formatCurrency(stats.collectedToday)}</Text>
+              </View>
+              <View style={styles.financeDayCard}>
+                <View style={styles.financeDayHeader}>
+                  <Text style={styles.financeDayLabel}>Yesterday</Text>
+                  <Text style={styles.financeYesterdayPercent}>+{yesterdayShare.toFixed(0)}%</Text>
+                </View>
+                <Text style={styles.financeDayAmount}>{formatCurrency(stats.collectedYesterday)}</Text>
               </View>
             </View>
             </View>
 
             <View style={styles.paymentStatusCard} ref={paymentStatusRef} collapsable={false}>
               <View style={styles.paymentStatusHeader}>
-                <View>
-                  <Text style={styles.paymentStatusTitle}>Payment status</Text>
-                  <Text style={styles.paymentStatusSubtitle}>Current billing cycle</Text>
+                <Text style={styles.paymentStatusTitle}>Payment Status</Text>
+                <View style={styles.paymentStatusBadge}>
+                  <Text style={styles.paymentStatusUnpaid}>{stats.unpaidCount} Unpaid</Text>
                 </View>
-                <Text style={styles.paymentStatusUnpaid}>{stats.unpaidCount} Unpaid</Text>
               </View>
 
-              <View style={styles.paymentProgressTrack}>
-                <Animated.View
-                  style={[
-                    styles.paymentProgressFill,
-                    {
-                      width: progressAnim.interpolate({
-                        inputRange: [0, 100],
-                        outputRange: ["0%", "100%"],
-                        extrapolate: "clamp",
-                      }),
-                    },
-                  ]}
-                />
+              <View style={styles.paymentSegments}>
+                {Array.from({ length: 10 }, (_, index) => {
+                  const segmentStart = index * 10;
+                  const segmentEnd = segmentStart + 10;
+                  return (
+                    <View
+                      key={index}
+                      style={[styles.paymentSegmentTrack, hasFinanceData && styles.paymentSegmentUnpaid]}
+                    >
+                      <Animated.View
+                        style={[
+                          styles.paymentSegmentPaid,
+                          {
+                            width: progressAnim.interpolate({
+                              inputRange: [segmentStart, segmentEnd],
+                              outputRange: ["0%", "100%"],
+                              extrapolate: "clamp",
+                            }),
+                          },
+                        ]}
+                      />
+                    </View>
+                  );
+                })}
               </View>
 
               <View style={styles.paymentStatusRow}>
                 <View style={styles.paymentStatusItem}>
-                  <View style={styles.paymentStatusIconGreen}>
-                    <CheckCircle2 size={16} color={colors.emerald} />
-                  </View>
-                  <View>
-                    <Text style={styles.paymentStatusItemLabel}>PAID</Text>
-                    <Text style={styles.paymentStatusItemValue}>{stats.paidCount}</Text>
-                  </View>
+                  <View style={styles.paymentPaidDot} />
+                  <Text style={styles.paymentStatusItemText}>Paid: <Text style={styles.paymentPaidValue}>{stats.paidCount}</Text></Text>
                 </View>
 
                 <View style={styles.paymentStatusItem}>
-                  <View style={styles.paymentStatusIconRed}>
-                    <AlertCircle size={16} color={colors.error} />
-                  </View>
-                  <View>
-                    <Text style={styles.paymentStatusItemLabel}>UNPAID</Text>
-                    <Text style={styles.paymentStatusItemValue}>{stats.unpaidCount}</Text>
-                  </View>
+                  <View style={styles.paymentUnpaidDot} />
+                  <Text style={styles.paymentStatusItemText}>Unpaid: <Text style={styles.paymentUnpaidValue}>{stats.unpaidCount}</Text></Text>
                 </View>
               </View>
             </View>
@@ -556,20 +518,8 @@ export default function Dashboard() {
       </ScrollView>
 
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
 
-      <Modal visible={isOffline && !!auth.currentUser} transparent animationType="fade" onRequestClose={() => {}}>
-        <View style={styles.offlineOverlay}>
-          <View style={styles.offlineCard}>
-            <View style={styles.offlineIcon}>
-              <AlertCircle size={28} color={colors.error} />
-            </View>
-            <Text style={styles.offlineTitle}>No internet connection</Text>
-            <Text style={styles.offlineMessage}>
-              Your device is offline. Connect to the internet to view the latest market information.
-            </Text>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -577,8 +527,8 @@ export default function Dashboard() {
 function OccupancyDonut({
   percent,
   animatedPercent,
-  size = 92,
-  strokeWidth = 12,
+  size = 106,
+  strokeWidth = 11,
 }: {
   percent: number;
   animatedPercent: Animated.Value;
@@ -587,39 +537,63 @@ function OccupancyDonut({
 }) {
   const radiusVal = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radiusVal;
-  const animatedOffset = animatedPercent.interpolate({
-    inputRange: [0, 100],
-    outputRange: [circumference, 0],
-    extrapolate: "clamp",
-  });
+  const segmentCount = 10;
+  const segmentSlot = circumference / segmentCount;
+  const segmentLength = segmentSlot * 0.5;
+  const clampedPercent = Math.max(0, Math.min(100, percent));
+  const displayedPercent = Number.isInteger(clampedPercent)
+    ? clampedPercent.toFixed(0)
+    : clampedPercent.toFixed(1);
 
   return (
     <View style={{ width: size, height: size }}>
       <Svg width={size} height={size}>
-        <Circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radiusVal}
-          stroke={colors.emeraldSoft}
-          strokeWidth={strokeWidth}
-          fill="none"
-        />
-        <AnimatedCircle
-          cx={size / 2}
-          cy={size / 2}
-          r={radiusVal}
-          stroke={colors.emerald}
-          strokeWidth={strokeWidth}
-          strokeDasharray={`${circumference} ${circumference}`}
-          strokeDashoffset={animatedOffset}
-          strokeLinecap="round"
-          fill="none"
-          rotation={-90}
-          origin={`${size / 2}, ${size / 2}`}
-        />
+        {Array.from({ length: segmentCount }, (_, index) => (
+          <Circle
+            key={index}
+            cx={size / 2}
+            cy={size / 2}
+            r={radiusVal}
+            stroke={colors.emeraldSoft}
+            strokeWidth={strokeWidth}
+            strokeDasharray={`${segmentLength} ${circumference - segmentLength}`}
+            strokeLinecap="round"
+            fill="none"
+            rotation={-90 + index * (360 / segmentCount)}
+            origin={`${size / 2}, ${size / 2}`}
+          />
+        ))}
+        {Array.from({ length: segmentCount }, (_, index) => {
+          const segmentStart = index * (100 / segmentCount);
+          const segmentEnd = segmentStart + (100 / segmentCount);
+          const fillFraction = Math.max(0, Math.min(1, (clampedPercent - segmentStart) / (segmentEnd - segmentStart)));
+          if (fillFraction <= 0) return null;
+          const activeLength = segmentLength * fillFraction;
+          const opacity = animatedPercent.interpolate({
+            inputRange: [segmentStart, Math.min(segmentEnd, Math.max(segmentStart + 0.01, clampedPercent))],
+            outputRange: [0, 1],
+            extrapolate: "clamp",
+          });
+          return (
+            <AnimatedCircle
+              key={`active-${index}`}
+              cx={size / 2}
+              cy={size / 2}
+              r={radiusVal}
+              stroke={colors.emerald}
+              strokeWidth={strokeWidth}
+              strokeDasharray={`${activeLength} ${circumference - activeLength}`}
+              strokeLinecap="round"
+              fill="none"
+              opacity={opacity}
+              rotation={-90 + index * (360 / segmentCount)}
+              origin={`${size / 2}, ${size / 2}`}
+            />
+          );
+        })}
       </Svg>
       <View style={[StyleSheet.absoluteFill, styles.donutCenter]}>
-        <Text style={styles.donutPercent}>{Math.round(percent)}%</Text>
+        <Text style={styles.donutPercent}>{displayedPercent}%</Text>
         <Text style={styles.donutLabel}>OCCUPIED</Text>
       </View>
     </View>
@@ -629,11 +603,6 @@ function OccupancyDonut({
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.parchment },
   fullCenter: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: colors.parchment },
-  offlineOverlay: { flex: 1, backgroundColor: colors.overlay, justifyContent: "center", padding: spacing.xxl },
-  offlineCard: { backgroundColor: colors.white, borderRadius: radius.lg, padding: spacing.xxl, alignItems: "center", ...shadow.raised },
-  offlineIcon: { width: 56, height: 56, borderRadius: 28, backgroundColor: "#FDECEC", alignItems: "center", justifyContent: "center", marginBottom: spacing.md },
-  offlineTitle: { fontSize: fontSize.lg, fontFamily: fontFamily.bold, color: colors.ink, textAlign: "center" },
-  offlineMessage: { fontSize: fontSize.sm, fontFamily: fontFamily.regular, color: colors.textSecondary, textAlign: "center", lineHeight: 20, marginTop: spacing.sm },
 
   headerGradient: {
     borderBottomLeftRadius: radius.xl + 4,
@@ -674,7 +643,7 @@ const styles = StyleSheet.create({
   },
   bannerText: { fontSize: fontSize.md, fontFamily: fontFamily.bold, color: colors.white },
 
-  scroll: { flex: 1 },
+  scroll: { flex: 1, minHeight: 0 },
   scrollContent: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.xl,
@@ -697,8 +666,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: colors.white,
-    borderRadius: radius.lg,
-    padding: spacing.lg + 2,
+    borderRadius: radius.xl,
+    padding: spacing.lg,
+    gap: spacing.lg,
     marginBottom: spacing.lg,
     ...shadow.card,
   },
@@ -707,7 +677,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   donutPercent: {
-    fontSize: fontSize.lg,
+    fontSize: 24,
     fontFamily: fontFamily.extrabold,
     color: colors.textPrimary,
   },
@@ -718,158 +688,186 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
     marginTop: 1,
   },
-  overviewDivider: {
-    width: StyleSheet.hairlineWidth,
-    alignSelf: "stretch",
-    backgroundColor: colors.border,
-    marginHorizontal: spacing.lg,
-  },
   overviewRight: {
     flex: 1,
-    justifyContent: "center",
+    gap: spacing.sm,
   },
-  overviewSplitRow: {
+  stallOverviewItem: {
     flexDirection: "row",
     alignItems: "center",
+    minHeight: 58,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.lg,
+    backgroundColor: colors.white,
+    gap: spacing.md,
   },
-  overviewSplitItem: {
-    flex: 1,
-  },
-  overviewSplitDivider: {
-    width: StyleSheet.hairlineWidth,
-    height: "100%",
+  stallIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.md,
+    alignItems: "center",
+    justifyContent: "center",
     backgroundColor: colors.border,
-    marginHorizontal: spacing.md,
   },
-  overviewSplitLabelGreen: {
-    fontSize: fontSize.xs,
-    fontFamily: fontFamily.medium,
-    color: colors.emerald,
+  stallIconBoxOccupied: {
+    backgroundColor: colors.emeraldSoft,
   },
-  overviewSplitLabel: {
+  stallOverviewLabel: {
     fontSize: fontSize.xs,
     fontFamily: fontFamily.medium,
     color: colors.textSecondary,
   },
-  overviewSplitValue: {
-    fontSize: fontSize.md,
-    fontFamily: fontFamily.bold,
-    color: colors.textPrimary,
-    marginTop: 2,
-  },
-
-  financeRow: {
-    flexDirection: "row",
-    gap: spacing.sm + 2,
-    marginBottom: spacing.lg,
-  },
-  financeCard: {
-    flex: 1,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    ...shadow.card,
-  },
-  financeCardLabel: {
-    fontSize: fontSize.xs,
-    fontFamily: fontFamily.semibold,
-    color: colors.emeraldSoft,
-    textTransform: "uppercase",
-    letterSpacing: 0.4,
-    marginBottom: spacing.sm,
-  },
-  financeCardAmount: {
+  stallOverviewValue: {
     fontSize: fontSize.xl,
     fontFamily: fontFamily.extrabold,
-    color: colors.white,
-    marginBottom: spacing.sm,
+    color: colors.textPrimary,
+    lineHeight: 23,
   },
-  financeTrend: {
+
+  financeSummaryCard: {
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    marginBottom: spacing.sm,
+    ...shadow.card,
+  },
+  financeSummaryLabel: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.textPrimary,
+    textTransform: "uppercase",
+    letterSpacing: 0.35,
+  },
+  financeSummaryAmount: {
+    fontSize: 29,
+    fontFamily: fontFamily.extrabold,
+    color: colors.textPrimary,
+    marginTop: spacing.md,
+  },
+  financeDayRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  financeDayCard: {
+    flex: 1,
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    ...shadow.card,
+  },
+  financeDayHeader: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    justifyContent: "space-between",
   },
-  financeTrendText: {
-    fontSize: fontSize.xs - 1,
+  financeDayLabel: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.textPrimary,
+    textTransform: "uppercase",
+  },
+  financeDayPercent: {
+    fontSize: fontSize.xs,
     fontFamily: fontFamily.medium,
-    color: colors.emeraldSoft,
+    color: colors.textSecondary,
+  },
+  financeYesterdayPercent: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.semibold,
+    color: colors.emerald,
+  },
+  financeDayAmount: {
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.bold,
+    color: colors.textPrimary,
+    marginTop: spacing.sm,
   },
 
   paymentStatusCard: {
     backgroundColor: colors.white,
     borderRadius: radius.lg,
-    padding: spacing.lg + 2,
-    marginBottom: spacing.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
     ...shadow.card,
   },
   paymentStatusHeader: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: spacing.md + 2,
+    marginBottom: spacing.md,
   },
   paymentStatusTitle: {
-    fontSize: fontSize.md,
+    fontSize: fontSize.sm,
     fontFamily: fontFamily.bold,
     color: colors.textPrimary,
   },
-  paymentStatusSubtitle: {
-    fontSize: fontSize.xs,
-    fontFamily: fontFamily.regular,
-    color: colors.textSecondary,
-    marginTop: 2,
+  paymentStatusBadge: {
+    backgroundColor: colors.errorSoft,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
   },
   paymentStatusUnpaid: {
-    fontSize: fontSize.sm,
+    fontSize: 9,
     fontFamily: fontFamily.semibold,
     color: colors.error,
   },
-  paymentProgressTrack: {
-    height: 8,
-    borderRadius: radius.pill,
-    backgroundColor: colors.mist,
-    overflow: "hidden",
-    marginBottom: spacing.lg,
+  paymentSegments: {
+    flexDirection: "row",
+    gap: 5,
+    marginBottom: spacing.md,
   },
-  paymentProgressFill: {
+  paymentSegmentTrack: {
+    flex: 1,
+    height: 10,
+    borderRadius: radius.pill,
+    overflow: "hidden",
+    backgroundColor: colors.mist,
+  },
+  paymentSegmentPaid: {
     height: "100%",
     borderRadius: radius.pill,
     backgroundColor: colors.emerald,
   },
+  paymentSegmentUnpaid: {
+    backgroundColor: "#DDE2DF",
+  },
   paymentStatusRow: {
     flexDirection: "row",
-    gap: spacing.xl,
+    justifyContent: "space-between",
   },
   paymentStatusItem: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
+    gap: 6,
   },
-  paymentStatusIconGreen: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    backgroundColor: colors.emeraldSoft,
-    alignItems: "center",
-    justifyContent: "center",
+  paymentPaidDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: colors.emerald,
   },
-  paymentStatusIconRed: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    backgroundColor: colors.errorSoft,
-    alignItems: "center",
-    justifyContent: "center",
+  paymentUnpaidDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: colors.error,
   },
-  paymentStatusItemLabel: {
-    fontSize: 10,
-    fontFamily: fontFamily.semibold,
-    color: colors.textMuted,
-    letterSpacing: 0.3,
-  },
-  paymentStatusItemValue: {
-    fontSize: fontSize.md,
-    fontFamily: fontFamily.bold,
+  paymentStatusItemText: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.medium,
     color: colors.textPrimary,
-    marginTop: 1,
+  },
+  paymentPaidValue: {
+    fontFamily: fontFamily.bold,
+    color: colors.emerald,
+  },
+  paymentUnpaidValue: {
+    fontFamily: fontFamily.bold,
+    color: colors.error,
   },
 });

@@ -9,7 +9,7 @@ import { colors, fontFamily, fontSize, lineHeight, radius, spacing, shadow } fro
 
 const cloudFunctions = getFunctions(firebaseApp);
 
-type SendResult = { status: "sent"; phoneHint?: string } | { status: "manual" };
+type SendResult = { status: "sent"; phoneHint?: string; username?: string } | { status: "manual" };
 
 // Transient loading screen between the login "Forgot password?" modal and the
 // OTP entry screen. It does the real work: ask the backend to verify the
@@ -17,8 +17,8 @@ type SendResult = { status: "sent"; phoneHint?: string } | { status: "manual" };
 // reset code is NEVER minted here -- only after the OTP is verified on
 // /reset-otp. See sendResetOtp in functions/src/index.ts and OTP_RESET_PLAN.md.
 export default function ResetSending() {
-  const { email } = useLocalSearchParams<{ email?: string }>();
-  const [phase, setPhase] = useState<"sending" | "manual" | "error">("sending");
+  const { identifier } = useLocalSearchParams<{ identifier?: string }>();
+  const [phase, setPhase] = useState<"sending" | "unavailable" | "manual" | "error">("sending");
   const [errorMsg, setErrorMsg] = useState("");
   const startedRef = useRef(false);
 
@@ -28,25 +28,29 @@ export default function ResetSending() {
     startedRef.current = true;
 
     (async () => {
-      if (!email) {
+      if (!identifier) {
         setErrorMsg("Something went wrong. Please try again from the sign-in screen.");
         setPhase("error");
         return;
       }
       try {
         const sendResetOtp = httpsCallable(cloudFunctions, "sendResetOtp");
-        const res = (await sendResetOtp({ email })).data as SendResult;
+        const res = (await sendResetOtp({ identifier })).data as SendResult;
         if (res.status === "sent") {
           router.replace({
             pathname: "/reset-otp",
-            params: { email, phoneHint: res.phoneHint ?? "" },
+            params: {
+              identifier: res.username ?? identifier,
+              phoneHint: res.phoneHint ?? "",
+            },
           });
           return;
         }
-        // Every gate failure (unknown email, unverified, no phone on file)
+        // Every gate failure (unknown username, inactive account, or no
+        // usable phone on file)
         // returns the same "manual" result with the same message below, so
         // this screen can't be used to probe which emails exist/are verified.
-        setPhase("manual");
+        setPhase("unavailable");
       } catch (err: any) {
         console.log("[reset-sending] sendResetOtp error:", err);
         const friendlyMessage =
@@ -57,7 +61,19 @@ export default function ResetSending() {
         setPhase("error");
       }
     })();
-  }, [email]);
+  }, [identifier]);
+
+  async function requestAdminHelp() {
+    if (!identifier) return;
+    try {
+      const requestRecovery = httpsCallable(cloudFunctions, "requestTenantAdminRecovery");
+      await requestRecovery({identifier});
+      setPhase("manual");
+    } catch (err: any) {
+      setErrorMsg(err?.message || "We couldn't send your request. Please try again.");
+      setPhase("error");
+    }
+  }
 
   function goToLogin() {
     router.replace("/login");
@@ -82,14 +98,30 @@ export default function ResetSending() {
       ) : (
         <AlertCircle size={48} color={colors.gold} style={styles.icon} />
       )}
-      <Text style={styles.caption}>{phase === "manual" ? "Request received" : "We hit a snag"}</Text>
+      <Text style={styles.caption}>
+        {phase === "manual" ? "Request received" : phase === "unavailable" ? "SMS unavailable" : "We hit a snag"}
+      </Text>
       <Text style={styles.subcaption}>
         {phase === "manual"
-          ? "Your reset request has been sent to the admin, who'll help you reset your password."
-          : errorMsg}
+          ? "Your recovery request was sent. Visit the admin office with identification to receive a temporary recovery code."
+          : phase === "unavailable"
+            ? "We couldn't send an SMS to the phone on this account. You can request help from the admin."
+            : errorMsg}
       </Text>
+      {(phase === "unavailable" || phase === "error") && !!identifier && (
+        <Pressable
+          style={({ pressed }) => [styles.backBtn, pressed && styles.backBtnPressed]}
+          onPress={requestAdminHelp}
+        >
+          {({ pressed }) => (
+            <Text style={[styles.backBtnText, pressed && styles.backBtnTextPressed]}>
+              Request Admin Help
+            </Text>
+          )}
+        </Pressable>
+      )}
       <Pressable
-        style={({ pressed }) => [styles.backBtn, pressed && styles.backBtnPressed]}
+        style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
         onPress={goToLogin}
       >
         {({ pressed }) => (
@@ -140,4 +172,6 @@ const styles = StyleSheet.create({
   backBtnPressed: { backgroundColor: colors.goldSoft, borderColor: colors.gold },
   backBtnText: { color: colors.ink, fontSize: fontSize.base, fontFamily: fontFamily.semibold },
   backBtnTextPressed: { color: colors.ink },
+  secondaryBtn: { marginTop: spacing.lg, paddingVertical: 10, paddingHorizontal: spacing.xl },
+  secondaryBtnPressed: { opacity: 0.65 },
 });

@@ -14,6 +14,7 @@ import {
   query,
   runTransaction,
   serverTimestamp,
+  Timestamp,
   updateDoc,
   where,
   writeBatch,
@@ -22,6 +23,14 @@ import { getFunctions, httpsCallable } from "firebase/functions";
 import { firebaseApp } from "../firebaseConfig";
 import { auth } from "./auth";
 import { db } from "./firestore";
+import { rentWiseUsernameBase } from "../../../shared/utils/username";
+
+function paymentIntervalDaysFor(schedule: string): number {
+  if (schedule === "daily") return 1;
+  if (schedule === "weekly") return 7;
+  if (schedule === "semi-monthly") return 15;
+  return 30;
+}
 
 // BLAZE PLAN ONLY — remove this line after capstone defense
 const cloudFunctions = getFunctions(firebaseApp);
@@ -35,28 +44,71 @@ type CreateTenantParams = {
   lastName: string;
   contactNo: string;
   stallId: string;
-  // Required — every tenant account is a real Gmail (or other real email)
-  // address now. That email is directly the account's Firebase Auth
-  // identity; there's no separate username/synthetic-email concept for
-  // tenants anymore (admin/owner accounts are unrelated and unaffected).
-  personalEmail: string;
 };
+
+export function usernameBase(firstName: string, lastName: string): string {
+  if (!lastName.trim()) throw new Error("Enter a valid first and last name.");
+  return rentWiseUsernameBase(firstName);
+}
+
+async function createAvailableUsername(firstName: string, lastName: string): Promise<string> {
+  const base = usernameBase(firstName, lastName);
+  for (let sequence = 1; sequence <= 99; sequence += 1) {
+    const candidate = sequence === 1 ? base : `${base}${sequence}`;
+    const [upperMatch, lowerMatch] = await Promise.all([
+      getDocs(query(collection(db, "users"), where("username", "==", candidate))),
+      getDocs(query(collection(db, "users"), where("username", "==", candidate.toLowerCase()))),
+    ]);
+    if (upperMatch.empty && lowerMatch.empty) return candidate;
+  }
+  throw new Error("Could not create a unique username. Please try again.");
+}
 
 export const createTenantAccount = async (
   params: CreateTenantParams,
-): Promise<{ uid: string }> => {
+): Promise<{ uid: string; username: string }> => {
   const {
     firstName,
     middleName = "",
     lastName,
     contactNo,
     stallId,
-    personalEmail,
-  } = params;
-  const email = personalEmail.trim().toLowerCase();
-  if (!/^[A-Z0-9._%+-]+@gmail\.com$/i.test(email)) {
-    throw new Error("Enter a valid @gmail.com email address.");
-  }
+} = params;
+  const username = await createAvailableUsername(firstName, lastName);
+  const createTenant = httpsCallable<
+    {firstName: string; middleName: string; lastName: string; contactNo: string; stallId: string; username: string; password: string},
+    {success: boolean; uid: string; username: string}
+  >(cloudFunctions, "adminCreateTenant");
+  const response = await createTenant({
+    firstName,
+    middleName,
+    lastName,
+    contactNo,
+    stallId,
+    username,
+    password: DEFAULT_TENANT_PASSWORD,
+  });
+  const uid = response.data.uid;
+  getDoc(doc(db, "stalls", stallId)).then((snap) => {
+    void logDetailedUpdate({
+      module: "Register Tenant",
+      type: "Tenant Registration",
+      tenantId: uid,
+      tenantName: [firstName, middleName, lastName].filter(Boolean).join(" "),
+      spaceNo: snap.exists() ? String(snap.data().spaceId ?? stallId) : stallId,
+      oldValue: "Unoccupied",
+      newValue: "Active Tenant",
+      changedBy: auth.currentUser?.uid ?? "",
+      approvalStatus: "pending",
+    });
+  }).catch(() => undefined);
+  return {uid, username: response.data.username || username};
+
+  /* Legacy client-side provisioning retained temporarily for rollback
+     reference. Execution returns above; production creation is server-only.
+  // Firebase email/password authentication needs an email-shaped value. The
+  // user never enters this value; login resolves their stored username.
+  const email = `${username.toLowerCase()}@rentwise.app`;
   // Tenant can log in immediately with the shared default (see the
   // mustChangePassword gate below) instead of being stuck until they
   // happen to check their email — the welcome email sent further down is
@@ -99,24 +151,41 @@ export const createTenantAccount = async (
       // starting point as before, they just own that data going forward
       // instead of sharing the stall's copy with whoever rents it next.
       const stallData = stallSnap.data();
+      const billingStartedAt = Timestamp.now();
+      const initialSchedule = String(stallData.paymentSchedule ?? "monthly");
       tx.set(doc(db, "users", uid), {
         firstName,
         middleName,
         lastName,
         email,
-        personalEmail,
+        // Keeps the existing SMS-OTP reset function compatible while the
+        // visible account identifier is the username.
+        personalEmail: email,
+        username,
         contactNo,
         role: "tenant",
         stallId,
+        primaryStallId: stallId,
+        stallIds: [stallId],
+        stallAssignments: [{
+          stallId,
+          dailyRate: Number(stallData.price ?? 0),
+          assignedAt: billingStartedAt,
+        }],
         status: "active",
         price: stallData.price ?? 0,
-        paymentSchedule: stallData.paymentSchedule ?? "monthly",
+        paymentSchedule: initialSchedule,
+        paymentIntervalDays: Number(stallData.paymentIntervalDays) || paymentIntervalDaysFor(initialSchedule),
         category: stallData.category ?? "",
         // Always starts true — every tenant starts on the shared default
         // password and must change it via the forced-change screen the
         // moment they first log in with @Tenant123.
         mustChangePassword: true,
-        createdAt: serverTimestamp(),
+        createdAt: billingStartedAt,
+        billingStartedAt,
+        nextDueAt: billingStartedAt,
+        lastApprovedPaymentAt: null,
+        paidThroughAt: null,
       });
 
       tx.update(stallRef, {
@@ -142,7 +211,7 @@ export const createTenantAccount = async (
       });
     }).catch(() => {});
 
-    return { uid };
+    return { uid, username };
   } catch (err) {
     // Rollback: remove Auth account if Firestore write failed after auth creation
     if (createdUser) {
@@ -154,12 +223,13 @@ export const createTenantAccount = async (
     }
     const e = err as { code?: string };
     if (e.code === "auth/email-already-in-use") {
-      throw new Error("This email is already in use by another account. If this tenant was recently deleted, that account may need to be fully removed first.");
+      throw new Error("This generated username is already in use. Please try again.");
     }
     throw err;
   } finally {
     await deleteApp(secondaryApp);
   }
+  */
 };
 
 // Adds/updates the CALLER's own real email — changes their Firebase Auth
@@ -181,7 +251,6 @@ export const resetTenantPasswordToDefault = async (
   if (!auth.currentUser?.uid) throw new Error("Admin not authenticated.");
   const resetFn = httpsCallable(cloudFunctions, "adminResetTenantPassword");
   await resetFn({ uid, newPassword: DEFAULT_TENANT_PASSWORD });
-  await updateDoc(doc(db, "users", uid), { mustChangePassword: true });
 };
 
 // Disables/re-enables the tenant's Firebase Auth login itself — separate
@@ -203,6 +272,71 @@ export type ArchiveEligibility = {
   hasPendingPayment: boolean;
 };
 
+export type ExistingTenantAssignmentResult = {
+  success: boolean;
+  stallIds: string[];
+  combinedDailyRate: number;
+};
+
+export const assignStallToExistingTenant = async (
+  tenantId: string,
+  stallId: string,
+): Promise<ExistingTenantAssignmentResult> => {
+  if (!auth.currentUser?.uid) throw new Error("Admin not authenticated.");
+  const assignFn = httpsCallable<
+    {tenantId: string; stallId: string},
+    ExistingTenantAssignmentResult
+  >(cloudFunctions, "assignStallToExistingTenant");
+  const result = await assignFn({tenantId, stallId});
+  return result.data;
+};
+
+export type RemoveTenantStallResult = {
+  success: boolean;
+  stallIds: string[];
+  primaryStallId: string;
+  combinedDailyRate: number;
+};
+
+export const removeStallFromTenantSafely = async (
+  tenantId: string,
+  stallId: string,
+): Promise<RemoveTenantStallResult> => {
+  if (!auth.currentUser?.uid) throw new Error("Admin not authenticated.");
+  const removeFn = httpsCallable<
+    {tenantId: string; stallId: string},
+    RemoveTenantStallResult
+  >(cloudFunctions, "removeStallFromTenantSafely");
+  const result = await removeFn({tenantId, stallId});
+  return result.data;
+};
+
+export type UpdateStallRentalTermsInput = {
+  stallId: string;
+  length: number;
+  width: number;
+  dailyRate: number;
+  paymentSchedule: string;
+  category: string;
+};
+
+export type UpdateStallRentalTermsResult = {
+  success: boolean;
+  combinedDailyRate: number;
+};
+
+export const updateStallRentalTermsSafely = async (
+  input: UpdateStallRentalTermsInput,
+): Promise<UpdateStallRentalTermsResult> => {
+  if (!auth.currentUser?.uid) throw new Error("Admin not authenticated.");
+  const updateFn = httpsCallable<
+    UpdateStallRentalTermsInput,
+    UpdateStallRentalTermsResult
+  >(cloudFunctions, "adminUpdateStallRentalTermsSafely");
+  const result = await updateFn(input);
+  return result.data;
+};
+
 export const checkTenantArchiveEligibility = async (
   uid: string,
 ): Promise<ArchiveEligibility> => {
@@ -216,6 +350,14 @@ export const checkTenantArchiveEligibility = async (
 };
 
 export const archiveTenant = async (uid: string): Promise<void> => {
+  if (!auth.currentUser?.uid) throw new Error("Admin not authenticated.");
+  const archiveFn = httpsCallable<{uid: string}, {success: boolean}>(cloudFunctions, "archiveTenantSafely");
+  await archiveFn({uid});
+};
+
+// Retained temporarily for rollback/reference while production clients move
+// to the server-coordinated archive operation above.
+const archiveTenantLegacy = async (uid: string): Promise<void> => {
   const userSnap = await getDoc(doc(db, "users", uid));
   if (!userSnap.exists()) throw new Error("User not found.");
 
@@ -364,57 +506,17 @@ export const deleteArchivedTenant = async (uid: string): Promise<void> => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const restoreTenant = async (uid: string): Promise<void> => {
-  const archiveSnap = await getDoc(doc(db, "archives", uid));
-  if (!archiveSnap.exists()) throw new Error("Archive record not found.");
-
-  const archive = archiveSnap.data();
-  const stallId = (archive.stallId as string) ?? "";
-  const tenantName = [archive.firstName, archive.middleName, archive.lastName].filter(Boolean).join(" ");
-
-  // The tenant's own price/paymentSchedule/category never left their doc
-  // while archived -- fetched here just to sync the reassigned stall's
-  // denormalized display copy (guest app) to match.
-  const userSnap = await getDoc(doc(db, "users", uid));
-  const user = userSnap.exists() ? userSnap.data() : {};
-
-  // Re-enable login before committing the restore.
-  await setTenantAccountDisabled(uid, false);
-
-  const batch = writeBatch(db);
-
-  batch.update(doc(db, "users", uid), { status: "active" });
-
-  let stallReassigned = false;
-  if (stallId) {
-    const stallSnap = await getDoc(doc(db, "stalls", stallId));
-    if (stallSnap.exists() && stallSnap.data().status === "unoccupied") {
-      batch.update(doc(db, "stalls", stallId), {
-        tenantId: uid,
-        tenantName,
-        status: "occupied",
-        price: user.price ?? 0,
-        paymentSchedule: user.paymentSchedule ?? "monthly",
-        category: user.category ?? "",
-      });
-      stallReassigned = true;
-    }
-  }
-
-  batch.delete(doc(db, "archives", uid));
-
-  await batch.commit();
-
+  if (!auth.currentUser?.uid) throw new Error("Admin not authenticated.");
+  const archiveBefore = await getDoc(doc(db, "archives", uid));
+  const archiveData = archiveBefore.data() ?? {};
+  const restoreFn = httpsCallable(cloudFunctions, "ownerRestoreArchivedTenant");
+  await restoreFn({ uid, transferPreviousInfo: true });
   void logDetailedUpdate({
-    module: "Account Archive",
-    type: "Tenant Restore",
-    tenantId: uid,
-    tenantName,
-    spaceNo: stallReassigned ? ((archive.spaceId as string) || stallId) : "",
-    buildingNo: (archive.buildingNumber as string) ?? "",
-    oldValue: "Archived",
-    newValue: stallReassigned ? "Active Tenant" : "Active (No Stall Assigned)",
-    changedBy: auth.currentUser?.uid ?? "",
-    approvalStatus: "pending",
+    module: "Account Archive", type: "Tenant Restore", tenantId: uid,
+    tenantName: [archiveData.firstName, archiveData.middleName, archiveData.lastName].filter(Boolean).join(" "),
+    spaceNo: String(archiveData.spaceId ?? archiveData.stallId ?? "N/A"),
+    buildingNo: String(archiveData.buildingNumber ?? "N/A"), oldValue: "Archived", newValue: "Active Tenant",
+    changedBy: auth.currentUser.uid, approvalStatus: "pending",
   });
 };
 
@@ -427,6 +529,33 @@ export const relocateActiveTenant = async (
   newStallId: string,
   transferPreviousInfo: boolean,
 ): Promise<void> => {
+  if (!auth.currentUser?.uid) throw new Error("Admin not authenticated.");
+  const relocateFn = httpsCallable(cloudFunctions, "adminRelocateTenant");
+  await relocateFn({ uid, oldStallId, newStallId, transferPreviousInfo });
+  const [tenantAfter, oldStallAfter, newStallAfter] = await Promise.all([
+    getDoc(doc(db, "users", uid)),
+    getDoc(doc(db, "stalls", oldStallId)),
+    getDoc(doc(db, "stalls", newStallId)),
+  ]);
+  const tenantData = tenantAfter.data() ?? {};
+  const oldStallData = oldStallAfter.data() ?? {};
+  const newStallData = newStallAfter.data() ?? {};
+  void logDetailedUpdate({
+    module: "Manage Account",
+    type: "Tenant Relocated",
+    tenantId: uid,
+    tenantName: [tenantData.firstName, tenantData.middleName, tenantData.lastName].filter(Boolean).join(" "),
+    spaceNo: String(newStallData.spaceId ?? newStallId),
+    buildingNo: String(newStallData.buildingNumber ?? ""),
+    oldValue: `Building ${String(oldStallData.buildingNumber ?? "N/A")} · Space ${String(oldStallData.spaceId ?? oldStallId)}`,
+    newValue: `Building ${String(newStallData.buildingNumber ?? "N/A")} · Space ${String(newStallData.spaceId ?? newStallId)}`,
+    changedBy: auth.currentUser.uid,
+    approvalStatus: "pending",
+  });
+  return;
+
+  /* Legacy client-side relocation removed from execution; retained temporarily
+     for history while the server transaction is rolled out.
   const userSnap = await getDoc(doc(db, "users", uid));
   if (!userSnap.exists()) throw new Error("User not found.");
   const user = userSnap.data();
@@ -475,6 +604,7 @@ export const relocateActiveTenant = async (
     stallId: newStallId,
     price: resolvedPrice,
     paymentSchedule: resolvedPaymentSchedule,
+    paymentIntervalDays: paymentIntervalDaysFor(resolvedPaymentSchedule),
     category: resolvedCategory,
   });
 
@@ -483,6 +613,7 @@ export const relocateActiveTenant = async (
     tenantName,
     status: "occupied",
     price: resolvedPrice,
+    paymentIntervalDays: paymentIntervalDaysFor(resolvedPaymentSchedule),
     paymentSchedule: resolvedPaymentSchedule,
     category: resolvedCategory,
   });
@@ -509,6 +640,7 @@ export const relocateActiveTenant = async (
     changedBy: auth.currentUser?.uid ?? "",
     approvalStatus: "pending",
   });
+  */
 };
 
 export const restoreTenantToNewStall = async (
@@ -516,6 +648,23 @@ export const restoreTenantToNewStall = async (
   newStallId: string,
   transferPreviousInfo: boolean,
 ): Promise<void> => {
+  if (!auth.currentUser?.uid) throw new Error("Admin not authenticated.");
+  const archiveBefore = await getDoc(doc(db, "archives", uid));
+  const archiveData = archiveBefore.data() ?? {};
+  const restoreFn = httpsCallable(cloudFunctions, "ownerRestoreArchivedTenant");
+  await restoreFn({ uid, newStallId, transferPreviousInfo });
+  const destination = await getDoc(doc(db, "stalls", newStallId));
+  const destinationData = destination.data() ?? {};
+  void logDetailedUpdate({
+    module: "Account Archive", type: "Tenant Restore", tenantId: uid,
+    tenantName: [archiveData.firstName, archiveData.middleName, archiveData.lastName].filter(Boolean).join(" "),
+    spaceNo: String(destinationData.spaceId ?? newStallId), buildingNo: String(destinationData.buildingNumber ?? "N/A"),
+    oldValue: "Archived", newValue: "Active Tenant", changedBy: auth.currentUser.uid, approvalStatus: "pending",
+  });
+  return;
+
+  /* Legacy client-side restore removed from execution; retained temporarily
+     for history while the server transaction is rolled out.
   const archiveSnap = await getDoc(doc(db, "archives", uid));
   if (!archiveSnap.exists()) throw new Error("Archive record not found.");
 
@@ -558,6 +707,7 @@ export const restoreTenantToNewStall = async (
     stallId: newStallId,
     price: resolvedPrice,
     paymentSchedule: resolvedPaymentSchedule,
+    paymentIntervalDays: paymentIntervalDaysFor(resolvedPaymentSchedule),
     category: resolvedCategory,
   });
 
@@ -566,6 +716,7 @@ export const restoreTenantToNewStall = async (
     tenantName,
     status: "occupied",
     price: resolvedPrice,
+    paymentIntervalDays: paymentIntervalDaysFor(resolvedPaymentSchedule),
     paymentSchedule: resolvedPaymentSchedule,
     category: resolvedCategory,
   });
@@ -586,4 +737,5 @@ export const restoreTenantToNewStall = async (
     changedBy: auth.currentUser?.uid ?? "",
     approvalStatus: "pending",
   });
+  */
 };

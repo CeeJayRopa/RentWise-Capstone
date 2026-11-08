@@ -6,6 +6,26 @@ export const getPaidTenantUserIds = (
   return new Set(paymentDocs.map((d) => d.data().userId as string));
 };
 
+function scheduleIntervalDays(schedule: string): number {
+  if (schedule === "daily") return 1;
+  if (schedule === "weekly") return 7;
+  if (schedule === "semi-monthly") return 15;
+  return 30;
+}
+
+/** Uses the server-maintained first uncovered date as the billing source of truth. */
+export function outstandingFromNextDue(
+  dailyRate: number,
+  schedule: string,
+  nextDueAt: Date | null | undefined,
+  now: Date = new Date(),
+): number {
+  if (!nextDueAt || Number.isNaN(nextDueAt.getTime()) || now < nextDueAt) return 0;
+  const days = scheduleIntervalDays(schedule);
+  const periodsDue = Math.floor((now.getTime() - nextDueAt.getTime()) / (days * 86400000)) + 1;
+  return Math.max(0, dailyRate) * days * periodsDue;
+}
+
 // Advances `d` to the start of the next billing period for `schedule`.
 // Mirrors rentwise-admin/app/financials.tsx's nextPeriodStart exactly — kept
 // in sync there since financials.tsx owns the canonical per-tenant status

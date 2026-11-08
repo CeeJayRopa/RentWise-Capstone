@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { ArrowRight } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Svg, { Defs, Mask, Rect as SvgRect, Circle as SvgCircle } from "react-native-svg";
 import { colors, fontFamily, fontSize, radius, spacing } from "../../shared/theme";
 
@@ -105,6 +106,69 @@ const TEXT_REVEAL_DELAY_MS = 100;
 // actual content.
 const DEFAULT_TOOLTIP_HEIGHT = 150;
 
+export type TourLanguage = "en" | "tl";
+const HELP_LANGUAGE_KEY = "helpLanguagePreference";
+export async function loadHelpLanguage(): Promise<TourLanguage> { return (await AsyncStorage.getItem(HELP_LANGUAGE_KEY)) === "tl" ? "tl" : "en"; }
+export async function saveHelpLanguage(value: TourLanguage): Promise<void> { await AsyncStorage.setItem(HELP_LANGUAGE_KEY, value); }
+
+const TAGALOG_TITLES: Record<string, string> = {
+  Home: "Home", Profile: "Profile", Notifications: "Mga Abiso", Search: "Maghanap",
+  Help: "Tulong", Payments: "Mga Bayad", Financials: "Pananalapi", Reports: "Mga Ulat",
+  Archives: "Mga Archive", Stalls: "Mga Puwesto", Admin: "Admin", Tenants: "Mga Nangungupahan",
+  "Payment history": "Kasaysayan ng Bayad", "Coverage total": "Kabuuang Saklaw",
+  "Month & year": "Buwan at Taon", Transactions: "Mga Transaksyon",
+  "Total balance due": "Kabuuang Natitirang Bayarin",
+  "Add advance payment": "Magdagdag ng Paunang Bayad",
+  "Payment method": "Paraan ng Pagbabayad", "Pay Now": "Magbayad Ngayon",
+  "AR Stall Designer": "AR Disenyo ng Puwesto", "Rental payment": "Bayad sa Upa",
+  "Upcoming schedule": "Susunod na Iskedyul", "Your space": "Iyong Puwesto",
+  "Market category": "Kategorya ng Pamilihan", "Your details": "Iyong mga Detalye",
+  "Edit Profile": "I-edit ang Profile", "Change password": "Palitan ang Password",
+  "Sign out": "Mag-sign Out", "Mark all read": "Markahang Nabasa Lahat",
+  "Clear all": "Burahin Lahat",
+};
+
+const TAGALOG_DESCRIPTIONS: Record<string, string> = {
+  "Find a transaction by amount, date, or payment method.": "Maghanap ng transaksyon gamit ang halaga, petsa, o paraan ng pagbabayad.",
+  "Confirmed payments whose rent coverage begins in the selected month.": "Mga kumpirmadong bayad na nagsisimula ang saklaw ng upa sa napiling buwan.",
+  "Switch to a different month or year to see that period's transactions.": "Pumili ng ibang buwan o taon upang makita ang mga transaksyon sa panahong iyon.",
+  "Every payment for the selected period. Tap a card with a receipt to view it.": "Lahat ng bayad sa napiling panahon. Pindutin ang card na may resibo upang makita ito.",
+  "View past payments and download receipts.": "Tingnan ang mga nakaraang bayad at mag-download ng mga resibo.",
+  "What you currently owe for this billing period, after any payments already made.": "Ang kasalukuyang natitirang bayarin sa panahong ito matapos ibawas ang mga naibayad na.",
+  "Pre-filled with what's currently due. You can pay more, but not less.": "Nakalagay na ang kasalukuyang dapat bayaran. Maaari kang magbayad nang higit, ngunit hindi mas mababa.",
+  "Choose GCash or Maya for the PayMongo test demonstration.": "Pumili ng GCash o Maya para sa PayMongo test demonstration.",
+  "Opens PayMongo's test checkout. No real money is charged.": "Binubuksan ang test checkout ng PayMongo. Walang totoong perang sisingilin.",
+  "Come back here anytime for a guided tour of this page.": "Bumalik dito anumang oras para sa gabay sa pahinang ito.",
+  "Takes you back to the dashboard.": "Ibinabalik ka sa dashboard.",
+  "Marks every notification in your list as read, in one tap.": "Minamarkahan bilang nabasa ang lahat ng abiso sa isang pindot.",
+  "Pay your rent online, and view your payment and receipt history.": "Magbayad ng upa online at tingnan ang kasaysayan ng mga bayad at resibo.",
+  "Preview and arrange market fixtures in your space using your phone's camera.": "Tingnan at ayusin ang mga kagamitan sa iyong puwesto gamit ang camera ng iyong telepono.",
+  "Removes every notification from your list. This can't be undone.": "Binubura ang lahat ng abiso sa listahan. Hindi na ito maibabalik.",
+  "Rent reminders, payment updates, and other alerts. Tap one to mark it read.": "Mga paalala sa upa, update sa bayad, at iba pang abiso. Pindutin ang isa upang markahang nabasa.",
+  "Set a new login password without needing the Forgot Password flow. Must be 8-12 characters with an uppercase letter, a number, and a special character.": "Magtakda ng bagong password nang hindi ginagamit ang Nakalimutang Password. Dapat ay 8-12 character na may malaking titik, numero, at espesyal na character.",
+  "Signs you out of your account.": "Ini-sign out ka mula sa iyong account.",
+  "Unlocks the fields above so you can update them.": "Binubuksan ang mga field sa itaas upang ma-update mo ang mga ito.",
+  "Updates from the admin, like payment confirmations and account changes.": "Mga update mula sa admin, gaya ng kumpirmasyon ng bayad at mga pagbabago sa account.",
+  "View and edit your account details, and sign out.": "Tingnan at baguhin ang detalye ng iyong account, o mag-sign out.",
+  "Your current schedule, next payment date, settled amount, and amount due.": "Ang kasalukuyan mong iskedyul, susunod na petsa ng bayad, halagang nabayaran, at halagang dapat bayaran.",
+  "Your current balance is locked for safety. Use Add advance payment to include complete billing periods.": "Naka-lock ang kasalukuyang balanse para sa kaligtasan. Gamitin ang Magdagdag ng Paunang Bayad upang isama ang buong panahon ng pagsingil.",
+  "Your name, contact number, and assigned login username. SMS OTP secures password recovery.": "Ang iyong pangalan, contact number, at nakatalagang username. Pinoprotektahan ng SMS OTP ang pagbawi ng password.",
+  "Your next rent installments and when they're due.": "Ang mga susunod mong hulog sa upa at ang petsa ng kanilang pagbabayad.",
+  "Your space ID and how long you've been a tenant.": "Ang ID ng iyong puwesto at kung gaano ka na katagal na nangungupahan.",
+  "The kind of goods sold at your stall. Tap Edit Profile to change it — updates here sync with the admin's records too.": "Ang uri ng produktong ibinebenta sa iyong puwesto. Pindutin ang I-edit ang Profile upang baguhin ito—magsi-sync din ang update sa rekord ng admin.",
+  "Your dashboard — rental payment status and upcoming schedule.": "Ang iyong dashboard—katayuan ng bayad sa upa at paparating na iskedyul.",
+};
+
+export function tagalogStepText(step: Pick<HelpStep, "title" | "description">) {
+  const title = TAGALOG_TITLES[step.title] ?? step.title;
+  return {
+    title,
+    // Preserve the exact instruction when its matching translation is not
+    // available; a generic sentence can describe the wrong highlighted UI.
+    description: TAGALOG_DESCRIPTIONS[step.description] ?? step.description,
+  };
+}
+
 function measure(ref: React.RefObject<View | null>): Promise<Rect | null> {
   return new Promise((resolve) => {
     const node = findNodeHandle(ref.current);
@@ -166,6 +230,7 @@ export default function HelpTour({
   onClose: () => void;
 }) {
   const [stepIndex, setStepIndex] = useState(0);
+  const [language, setLanguage] = useState<TourLanguage>("en");
   const [rect, setRect] = useState<Rect | null>(null);
   const [endRect, setEndRect] = useState<Rect | null>(null);
   const mountedRef = useRef(true);
@@ -178,13 +243,6 @@ export default function HelpTour({
   // tooltip overlap page content instead of clearing it.
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-
-  // Diagnostic only: the Modal's own actual rendered container height, via
-  // onLayout, compared against screenHeight (from useWindowDimensions) in
-  // the debug readout below -- if these disagree, particularly on a REOPEN
-  // of an already-shown tour, that would point to the Modal reusing a
-  // stale/undersized native container instead of the real full screen.
-  const [containerHeight, setContainerHeight] = useState<number | null>(null);
 
   // Real rendered height of the tooltip card, captured via onLayout below.
   // Deliberately NOT reset to null on step change -- a stale-but-real height
@@ -286,7 +344,10 @@ export default function HelpTour({
   useEffect(() => {
     if (!visible) return;
     setStepIndex(0);
+    loadHelpLanguage().then((value) => { if (mountedRef.current) setLanguage(value); });
   }, [visible]);
+
+  const changeLanguage = (value: TourLanguage) => { setLanguage(value); saveHelpLanguage(value).catch(() => {}); };
 
   useEffect(() => {
     if (!visible) return;
@@ -333,6 +394,11 @@ export default function HelpTour({
   const displayEndRect = lastGoodRef.current?.endRect ?? null;
   const displayStep = lastGoodRef.current?.step ?? step;
   const displayStepIndex = lastGoodRef.current?.stepIndex ?? stepIndex;
+  const sourceText = {
+    title: displayedText?.title ?? displayStep.title,
+    description: displayedText?.description ?? displayStep.description,
+  };
+  const translatedText = language === "tl" ? tagalogStepText(sourceText) : sourceText;
 
   const spot: Rect = displayRect
     ? (() => {
@@ -412,7 +478,6 @@ export default function HelpTour({
     >
       <View
         style={[StyleSheet.absoluteFill, styles.overlayRoot]}
-        onLayout={(e) => setContainerHeight(e.nativeEvent.layout.height)}
       >
         {displayRect ? (
           <Animated.View style={[StyleSheet.absoluteFill, { opacity: contentOpacity }]}>
@@ -513,27 +578,24 @@ export default function HelpTour({
             style={styles.tooltipCard}
             onLayout={(e) => setTooltipHeight(e.nativeEvent.layout.height)}
           >
-            <Text style={styles.stepCount}>
-              Step {(displayedText?.stepIndex ?? displayStepIndex) + 1} of {steps.length}
-            </Text>
-            <Text style={styles.tooltipTitle}>{displayedText?.title ?? displayStep.title}</Text>
-            <Text style={styles.tooltipDesc}>{displayedText?.description ?? displayStep.description}</Text>
-            {__DEV__ && (
-              // Temporary calibration readout -- remove once the spotlight
-              // offset is confirmed correct across devices. Screenshot this
-              // to report exact numbers instead of eyeballing pixel gaps.
-              <Text style={styles.debugText} selectable>
-                step={displayStep.key} rect.x={Math.round(displayRect?.x ?? -1)} rect.y={Math.round(displayRect?.y ?? -1)}{"\n"}
-                rect.w={Math.round(displayRect?.width ?? -1)} rect.h={Math.round(displayRect?.height ?? -1)}{"\n"}
-                spot.x={Math.round(spot.x)} spot.y={Math.round(spot.y)} spot.w={Math.round(spot.width)}{"\n"}
-                insets.top={Math.round(insets.top)} insets.bottom={Math.round(insets.bottom)} screenH={Math.round(screenHeight)}{"\n"}
-                containerH={containerHeight != null ? Math.round(containerHeight) : -1}
+            <View style={styles.tooltipHeader}>
+              <Text style={styles.stepCount}>
+                {language === "tl" ? "Hakbang" : "Step"} {(displayedText?.stepIndex ?? displayStepIndex) + 1} {language === "tl" ? "sa" : "of"} {steps.length}
               </Text>
-            )}
+              <View style={styles.languageToggle}>
+                {(["en", "tl"] as TourLanguage[]).map((value) => (
+                  <Pressable key={value} onPress={() => changeLanguage(value)} style={[styles.languageOption, language === value && styles.languageOptionActive]}>
+                    <Text style={[styles.languageText, language === value && styles.languageTextActive]}>{value.toUpperCase()}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+            <Text style={styles.tooltipTitle}>{translatedText.title}</Text>
+            <Text style={styles.tooltipDesc}>{translatedText.description}</Text>
             <View style={styles.tooltipActions}>
               <Pressable onPress={onClose} hitSlop={8}>
                 {({ pressed }) => (
-                  <Text style={[styles.skipText, pressed && styles.skipTextPressed]}>Skip</Text>
+                  <Text style={[styles.skipText, pressed && styles.skipTextPressed]}>{language === "tl" ? "Laktawan" : "Skip"}</Text>
                 )}
               </Pressable>
               <Pressable
@@ -543,7 +605,7 @@ export default function HelpTour({
                 {({ pressed }) => (
                   <>
                     <Text style={[styles.nextBtnText, pressed && styles.nextBtnTextPressed]}>
-                      {isLast ? "Got it" : "Next"}
+                      {isLast ? (language === "tl" ? "Naintindihan" : "Got it") : (language === "tl" ? "Susunod" : "Next")}
                     </Text>
                     {!isLast && (
                       <ArrowRight
@@ -589,11 +651,15 @@ const styles = StyleSheet.create({
     color: colors.emeraldBright,
     textTransform: "uppercase",
     letterSpacing: 0.4,
-    marginBottom: 4,
   },
+  tooltipHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
+  languageToggle: { flexDirection: "row", padding: 2, borderRadius: 14, backgroundColor: colors.parchment },
+  languageOption: { minWidth: 34, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 12, alignItems: "center" },
+  languageOptionActive: { backgroundColor: colors.emerald },
+  languageText: { fontSize: fontSize.xs - 1, fontFamily: fontFamily.bold, color: colors.textSecondary },
+  languageTextActive: { color: colors.white },
   tooltipTitle: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.ink, marginBottom: 3 },
   tooltipDesc: { fontSize: fontSize.xs + 1, color: colors.textSecondary, fontFamily: fontFamily.regular, lineHeight: 16 },
-  debugText: { fontSize: 10, color: "#D22", fontFamily: "monospace", marginTop: 6, lineHeight: 13 },
   tooltipActions: {
     flexDirection: "row",
     alignItems: "center",

@@ -6,11 +6,25 @@
 # outputs too - bloating the upload and occasionally failing outright with
 # EBUSY errors on locked Gradle cache/lock files left behind by local builds.
 node_modules/
+**/node_modules/
+.git/
+.eas-icon-inspect-admin/
+.env*.local
+**/.env*.local
+*-debug.log
+.firebase/
+.gradle-local/
+.vercel/
+.vercel-guest-staging/
 **/android/.gradle/
 **/android/build/
 **/android/app/build/
 **/ios/Pods/
 **/ios/build/
 **/.expo/
+**/.claude/
+**/dist/
+**/*.apk
+**/*.aab
 rentwise-tenant/android/
 rentwise-tenant/ios/

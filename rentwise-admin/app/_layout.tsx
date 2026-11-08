@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { BackHandler, View, StyleSheet, Platform, ToastAndroid } from "react-native";
+import { Alert, AppState, BackHandler, View, StyleSheet, Platform, ToastAndroid } from "react-native";
 import { Stack, router, usePathname } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import * as NavigationBar from "expo-navigation-bar";
@@ -22,7 +22,9 @@ import {
 } from "../shared/services/pushNotifications";
 import { useResponsive, MAX_CONTENT_WIDTH } from "../shared/hooks/useResponsive";
 import { colors } from "../shared/theme";
-import { initializeLocalCache } from "../shared/services/localCache";
+import { clearLocalCache, initializeLocalCache } from "../shared/services/localCache";
+import { setRememberMe } from "../shared/services/rememberMe";
+import NetworkStatusBanner from "../shared/components/NetworkStatusBanner";
 
 configurePushNotifications();
 
@@ -36,6 +38,7 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 export default function RootLayout() {
   const pathname = usePathname();
   const lastDashboardBack = useRef(0);
+  const forcedLogoutInProgress = useRef(false);
   const [fontsLoaded, fontError] = useFonts({
     PlusJakartaSans_400Regular,
     PlusJakartaSans_500Medium,
@@ -90,9 +93,9 @@ export default function RootLayout() {
   }, [pathname]);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        registerForPushNotificationsAsync(user.uid);
+        await registerForPushNotificationsAsync(user.uid);
       }
     });
     return unsub;
@@ -100,23 +103,65 @@ export default function RootLayout() {
 
   useEffect(() => {
     let unsubscribeProfile: (() => void) | undefined;
+    let authenticatedAt = 0;
+
+    const forcePasswordChangeLogout = async () => {
+      if (forcedLogoutInProgress.current) return;
+      forcedLogoutInProgress.current = true;
+      await Promise.all([
+        clearLocalCache().catch(() => {}),
+        setRememberMe(false),
+      ]);
+      await signOut(auth).catch(() => {});
+      router.replace("/login");
+      Alert.alert(
+        "Session ended",
+        "Your account credentials or access changed. Please sign in again.",
+      );
+    };
+
+    const verifyRevokedSession = async () => {
+      const user = auth.currentUser;
+      if (!user || forcedLogoutInProgress.current) return;
+      try {
+        // Auth-only check: this does not consume a Firestore document read.
+        await user.getIdToken(true);
+      } catch (error: any) {
+        if (["auth/user-token-expired", "auth/invalid-user-token", "auth/user-disabled"].includes(error?.code)) {
+          await forcePasswordChangeLogout();
+        }
+      }
+    };
+
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       unsubscribeProfile?.();
       unsubscribeProfile = undefined;
-      if (!user) return;
+      if (!user) {
+        authenticatedAt = 0;
+        forcedLogoutInProgress.current = false;
+        return;
+      }
 
       const token = await user.getIdTokenResult();
-      const authenticatedAt = new Date(token.authTime).getTime();
+      authenticatedAt = new Date(token.authTime).getTime();
       unsubscribeProfile = onSnapshot(doc(db, "users", user.uid), async (snapshot) => {
-        const revokedAt = snapshot.data()?.sessionRevokedAt?.toMillis?.() ?? 0;
-        if (revokedAt > authenticatedAt) {
-          await signOut(auth);
-          router.replace("/login");
+        const profile = snapshot.data();
+        const revokedAt = profile?.sessionRevokedAt?.toMillis?.() ?? 0;
+        if (!snapshot.exists() || profile?.role !== "admin" || profile?.status === "disabled" || revokedAt > authenticatedAt) {
+          await forcePasswordChangeLogout();
         }
+      }, (error) => {
+        if (!auth.currentUser) return;
+        console.error("ADMIN SESSION LISTENER ERROR:", error);
       });
     });
 
+    const appStateSubscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void verifyRevokedSession();
+    });
+
     return () => {
+      appStateSubscription.remove();
       unsubscribeProfile?.();
       unsubscribeAuth();
     };
@@ -136,6 +181,7 @@ export default function RootLayout() {
             animationDuration: 200,
           }}
         />
+        <NetworkStatusBanner />
       </View>
     </View>
   );

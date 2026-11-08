@@ -3,6 +3,7 @@ import {
   View,
   Text,
   TouchableOpacity,
+  Pressable,
   StyleSheet,
   Modal,
   useWindowDimensions,
@@ -13,6 +14,7 @@ import {
 } from "react-native";
 import { ArrowRight } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Svg, { Defs, Mask, Rect as SvgRect, Circle as SvgCircle } from "react-native-svg";
 import { colors, fontFamily, fontSize, radius, spacing } from "../../shared/theme";
 
@@ -104,6 +106,39 @@ const TEXT_REVEAL_DELAY_MS = 100;
 // actual content.
 const DEFAULT_TOOLTIP_HEIGHT = 150;
 
+export type TourLanguage = "en" | "tl";
+const HELP_LANGUAGE_KEY = "helpLanguagePreference";
+export async function loadHelpLanguage(): Promise<TourLanguage> { return (await AsyncStorage.getItem(HELP_LANGUAGE_KEY)) === "tl" ? "tl" : "en"; }
+export async function saveHelpLanguage(value: TourLanguage): Promise<void> { await AsyncStorage.setItem(HELP_LANGUAGE_KEY, value); }
+const TAGALOG_TITLES: Record<string, string> = {
+  Home: "Home", Profile: "Profile", Notifications: "Mga Abiso", Search: "Maghanap", Help: "Tulong",
+  Financials: "Pananalapi", Reports: "Mga Ulat", Archives: "Mga Archive", Stalls: "Mga Puwesto", Admin: "Admin",
+  "Market overview": "Buod ng Pamilihan", "Financial performance": "Kalagayang Pinansyal", "Payment status": "Katayuan ng Bayad",
+  "Report status": "Katayuan ng Ulat", "Payment summary": "Buod ng Bayad", "Period & status filters": "Filter ng Panahon at Katayuan",
+  "Paid / Unpaid badge": "Bayad / Hindi Bayad", "Payment receipt": "Resibo ng Bayad", "Building filter": "Filter ng Gusali",
+  "Status filter": "Filter ng Katayuan", "Units / Occupied / Vacant": "Mga Puwesto / Okupado / Bakante",
+  "Occupied / Unoccupied": "Okupado / Bakante", "Archived count": "Bilang ng Naka-archive", "Archived tenant": "Naka-archive na Nangungupahan",
+  Restore: "Ibalik", "Report period": "Panahon ng Ulat", "Download Report": "I-download ang Ulat", "Report list": "Listahan ng Ulat",
+  "Admin profile": "Profile ng Admin", Save: "I-save", "Change password": "Palitan ang Password", "Update Password": "I-update ang Password",
+  "Your details": "Iyong mga Detalye", "Edit Profile": "I-edit ang Profile", "Security questions": "Mga Tanong sa Seguridad",
+  "Category filter": "Filter ng Kategorya", "Automatic report": "Awtomatikong Ulat", "Check Report": "Suriin ang Ulat",
+  "Available stalls": "Mga Bakanteng Puwesto", "Restore account": "Ibalik ang Account", "Previous vs. Updated": "Dati at Binago",
+  Amount: "Halaga", Acknowledge: "Kumpirmahin",
+};
+const TAGALOG_DESCRIPTIONS: Record<string, string> = {
+  "Takes you back to the dashboard.": "Ibinabalik ka sa dashboard.",
+  "Come back here anytime for a guided tour of this page.": "Bumalik dito anumang oras para sa gabay sa pahinang ito.",
+  "Switch between buildings to see only that building's stalls.": "Lumipat ng gusali upang makita lamang ang mga puwesto rito.",
+  "Narrow the list to occupied or unoccupied stalls.": "Ipakita lamang ang mga okupado o bakanteng puwesto.",
+  "Choose Daily, Monthly, Annual, or a From–To date range to review.": "Pumili ng Arawan, Buwanan, Taunan, o saklaw ng petsa na susuriin.",
+};
+export function tagalogStepText(step: Pick<HelpStep, "title" | "description">) {
+  const title = TAGALOG_TITLES[step.title] ?? step.title;
+  // Preserve the exact instruction when its matching translation is not
+  // available; a generic sentence can describe the wrong highlighted UI.
+  return { title, description: TAGALOG_DESCRIPTIONS[step.description] ?? step.description };
+}
+
 function measure(ref: React.RefObject<View | null>): Promise<Rect | null> {
   return new Promise((resolve) => {
     const node = findNodeHandle(ref.current);
@@ -165,6 +200,7 @@ export default function HelpTour({
   onClose: () => void;
 }) {
   const [stepIndex, setStepIndex] = useState(0);
+  const [language, setLanguage] = useState<TourLanguage>("en");
   const [rect, setRect] = useState<Rect | null>(null);
   const [endRect, setEndRect] = useState<Rect | null>(null);
   const mountedRef = useRef(true);
@@ -285,7 +321,10 @@ export default function HelpTour({
   useEffect(() => {
     if (!visible) return;
     setStepIndex(0);
+    loadHelpLanguage().then((value) => { if (mountedRef.current) setLanguage(value); });
   }, [visible]);
+
+  const changeLanguage = (value: TourLanguage) => { setLanguage(value); saveHelpLanguage(value).catch(() => {}); };
 
   useEffect(() => {
     if (!visible) return;
@@ -332,6 +371,8 @@ export default function HelpTour({
   const displayEndRect = lastGoodRef.current?.endRect ?? null;
   const displayStep = lastGoodRef.current?.step ?? step;
   const displayStepIndex = lastGoodRef.current?.stepIndex ?? stepIndex;
+  const sourceText = { title: displayedText?.title ?? displayStep.title, description: displayedText?.description ?? displayStep.description };
+  const translatedText = language === "tl" ? tagalogStepText(sourceText) : sourceText;
 
   const spot: Rect = displayRect
     ? (() => {
@@ -498,7 +539,11 @@ export default function HelpTour({
           <View style={[styles.dim, StyleSheet.absoluteFill]} />
         )}
 
-        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+        <TouchableOpacity
+          style={StyleSheet.absoluteFill}
+          activeOpacity={1}
+          onPress={() => (isLast ? onClose() : setStepIndex((i) => i + 1))}
+        />
 
         <Animated.View
           style={[styles.tooltip, { top: tooltipTop, opacity: contentOpacity, transform: [{ scale: popScale }] }]}
@@ -508,11 +553,16 @@ export default function HelpTour({
             style={styles.tooltipCard}
             onLayout={(e) => setTooltipHeight(e.nativeEvent.layout.height)}
           >
-            <Text style={styles.stepCount}>
-              Step {(displayedText?.stepIndex ?? displayStepIndex) + 1} of {steps.length}
-            </Text>
-            <Text style={styles.tooltipTitle}>{displayedText?.title ?? displayStep.title}</Text>
-            <Text style={styles.tooltipDesc}>{displayedText?.description ?? displayStep.description}</Text>
+            <View style={styles.tooltipHeader}>
+              <Text style={styles.stepCount}>{language === "tl" ? "Hakbang" : "Step"} {(displayedText?.stepIndex ?? displayStepIndex) + 1} {language === "tl" ? "sa" : "of"} {steps.length}</Text>
+              <View style={styles.languageToggle}>{(["en", "tl"] as TourLanguage[]).map((value) => (
+                <Pressable key={value} onPress={() => changeLanguage(value)} style={[styles.languageOption, language === value && styles.languageOptionActive]}>
+                  <Text style={[styles.languageText, language === value && styles.languageTextActive]}>{value.toUpperCase()}</Text>
+                </Pressable>
+              ))}</View>
+            </View>
+            <Text style={styles.tooltipTitle}>{translatedText.title}</Text>
+            <Text style={styles.tooltipDesc}>{translatedText.description}</Text>
             {__DEV__ && (
               // Temporary calibration readout -- remove once the spotlight
               // offset is confirmed correct across devices. Screenshot this
@@ -527,14 +577,14 @@ export default function HelpTour({
             )}
             <View style={styles.tooltipActions}>
               <TouchableOpacity onPress={onClose} activeOpacity={0.7}>
-                <Text style={styles.skipText}>Skip</Text>
+                <Text style={styles.skipText}>{language === "tl" ? "Laktawan" : "Skip"}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.nextBtn}
                 activeOpacity={0.8}
                 onPress={() => (isLast ? onClose() : setStepIndex((i) => i + 1))}
               >
-                <Text style={styles.nextBtnText}>{isLast ? "Got it" : "Next"}</Text>
+                <Text style={styles.nextBtnText}>{isLast ? (language === "tl" ? "Naintindihan" : "Got it") : (language === "tl" ? "Susunod" : "Next")}</Text>
                 {!isLast && <ArrowRight size={14} color={colors.white} style={{ marginLeft: 6 }} />}
               </TouchableOpacity>
             </View>
@@ -571,8 +621,13 @@ const styles = StyleSheet.create({
     color: colors.emeraldBright,
     textTransform: "uppercase",
     letterSpacing: 0.4,
-    marginBottom: 4,
   },
+  tooltipHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
+  languageToggle: { flexDirection: "row", padding: 2, borderRadius: 14, backgroundColor: colors.parchment },
+  languageOption: { minWidth: 34, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 12, alignItems: "center" },
+  languageOptionActive: { backgroundColor: colors.emerald },
+  languageText: { fontSize: fontSize.xs - 1, fontFamily: fontFamily.bold, color: colors.textSecondary },
+  languageTextActive: { color: colors.white },
   tooltipTitle: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.ink, marginBottom: 3 },
   tooltipDesc: { fontSize: fontSize.xs + 1, color: colors.textSecondary, fontFamily: fontFamily.regular, lineHeight: 16 },
   debugText: { fontSize: 10, color: "#D22", fontFamily: "monospace", marginTop: 6, lineHeight: 13 },

@@ -36,12 +36,13 @@ service cloud.firestore {
       // plain tenant does a `list` here.
       allow list: if isStaff();
 
-      // Admin's client-side tenant-creation flow (accountServices.ts)
-      // writes the new tenant's user doc directly with a fresh Auth uid.
-      allow create: if isAdmin()
-        && request.resource.data.role == "tenant";
+      // Account provisioning is server-only so Auth, user, and stall state
+      // are committed through one guarded workflow.
+      allow create: if false;
 
-      // Self-updates (profile edits, mustChangePassword flag, push token)
+      // Sensitive profile and session fields are updated only through Cloud
+      // Functions, where recent-authentication and cross-document consistency
+      // can be enforced. Direct self-writes are limited to device metadata.
       // may never change their own role/status -- otherwise a tenant could
       // simply write role:"admin" on their own doc. price/paymentSchedule
       // are a tenant's actual billing terms (moved here from the stall doc
@@ -55,28 +56,14 @@ service cloud.firestore {
       // lower-level accounts, nobody may rewrite a role, and self-service
       // writes are limited to fields used by profile/session screens.
       allow update: if
-        (isOwner()
-          && resource.data.role in ["admin", "tenant"]
-          && request.resource.data.role == resource.data.role)
-        || (isAdmin()
-          && resource.data.role == "tenant"
-          && request.resource.data.role == "tenant")
-        || (isSignedIn()
+        (isSignedIn()
           && request.auth.uid == userId
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            "firstName",
-            "lastName",
-            "contactNo",
-            "username",
-            "category",
-            "mustChangePassword",
             "expoPushToken",
             "emailVerified"
           ]));
 
-      allow delete: if
-        (isOwner() && resource.data.role in ["admin", "tenant"])
-        || (isAdmin() && resource.data.role == "tenant");
+      allow delete: if false;
     }
 
     // ── stalls ─────────────────────────────────────────────────────────
@@ -84,15 +71,9 @@ service cloud.firestore {
     // Function; raw documents remain available only to authenticated apps.
     match /stalls/{stallId} {
       allow read: if isSignedIn();
-      allow create, delete: if isStaff();
-      allow update: if isStaff()
-        || (isTenant()
-            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.stallId == stallId
-            && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(["category"])
-            && request.resource.data.category is string
-            && request.resource.data.category in
-                 ["Wet Market", "Dry Market", "Home Essential"]);
+      // Occupancy and rent changes must remain coordinated with the tenant
+      // document, so every mutation goes through Cloud Functions.
+      allow create, update, delete: if false;
     }
 
     // One sanitized cache document powers the public Guest map. The backend
@@ -108,18 +89,10 @@ service cloud.firestore {
       allow read: if isStaff()
         || (isTenant() && resource.data.userId == request.auth.uid);
 
-      // Tenant online payments are created by createTenantPendingPayment,
-      // where identity and protected financial fields are server-controlled.
-      // Staff may still record cash payments directly.
-      allow create: if isStaff();
-
-      // Staff confirm/approve any payment. A tenant may only attach their
-      // own receipt image to a payment they already own -- never touch
-      // amount/status/userId.
-      allow update: if isStaff()
-        || (isTenant() && resource.data.userId == request.auth.uid
-            && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(["receipt"]));
+      // All payment creation and mutation goes through authenticated Cloud
+      // Functions. This prevents modified Admin/Owner/Tenant clients from
+      // fabricating amounts, statuses, provider references, or approvals.
+      allow create, update, delete: if false;
     }
 
     // ── updates (audit log / tenant reports) ──────────────────────────
@@ -129,7 +102,8 @@ service cloud.firestore {
       // Owner flips approvalStatus when reviewing; admin stamps notifiedAt
       // on its own previously-created updates once it's reported them to
       // the owner (UpdatesReportFAB's "Apply Changes").
-      allow update: if isStaff();
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["notifiedAt"]);
     }
 
     // ── notifications ──────────────────────────────────────────────────
@@ -143,7 +117,10 @@ service cloud.firestore {
       // all, so it satisfies Firestore's list-query proof regardless of
       // how the query is filtered.
       allow read: if isStaff() || (isSignedIn() && resource.data.userId == request.auth.uid);
-      allow update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["read"]);
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
       // Staff fan notifications out to other users (tenant<->owner<->admin).
       allow create: if isStaff() || (isSignedIn() && request.resource.data.userId == request.auth.uid);
     }
@@ -177,6 +154,14 @@ service cloud.firestore {
     // Server-created PayMongo sessions bind a validated amount and payment
     // intent to one tenant and are consumed atomically by Cloud Functions.
     match /paymentSessions/{sessionId} {
+      allow read, write: if false;
+    }
+
+    // Server-only payment creation mutexes and webhook idempotency records.
+    match /paymentAttemptLocks/{tenantId} {
+      allow read, write: if false;
+    }
+    match /paymongoWebhookEvents/{eventId} {
       allow read, write: if false;
     }
 
@@ -216,10 +201,12 @@ service cloud.firestore {
 
     // ── archives / dailyReports (owner + admin only) ───────────────────
     match /archives/{archiveId} {
-      allow read, write: if isStaff();
+      allow read: if isStaff();
+      allow write: if false;
     }
     match /dailyReports/{reportId} {
-      allow read, create: if isStaff();
+      allow read: if isStaff();
+      allow create: if isAdmin();
       allow update, delete: if false;
     }
   }

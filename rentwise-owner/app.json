@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "RentWise",
-    "slug": "rentwiseeeee",
+    "slug": "rentwise-owner",
     "scheme": "rentwiseowner",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -13,17 +13,10 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#0E6B54",
-        "foregroundImage": "./assets/owner-icon.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "foregroundImage": "./assets/owner-icon-adaptive.png"
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
-        "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.READ_MEDIA_VIDEO",
-        "android.permission.READ_MEDIA_AUDIO",
         "android.permission.POST_NOTIFICATIONS"
       ],
       "package": "com.anonymous.rentwiseowner",
@@ -55,7 +48,7 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/rentwise-app-icon.png",
+          "image": "./assets/owner-icon.png",
           "imageWidth": 140,
           "resizeMode": "contain",
           "backgroundColor": "#0E6B54"
@@ -80,9 +73,9 @@
         "style": "dark"
       },
       "eas": {
-        "projectId": "7c17221d-0a18-48f0-88cf-f961321becf9"
+        "projectId": "7a548d60-1895-4901-93be-8508a83333b6"
       }
     },
-    "owner": "cj27"
+    "owner": "rentwise"
   }
 }

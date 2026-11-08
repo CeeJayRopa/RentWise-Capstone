@@ -7,7 +7,6 @@ import {
   Pressable,
   ActivityIndicator,
   Modal,
-  TextInput,
   Alert,
   ScrollView,
   StatusBar,
@@ -15,6 +14,8 @@ import {
   Easing,
   Linking,
   RefreshControl,
+  BackHandler,
+  AppState,
 } from "react-native";
 import { WebView } from "react-native-webview";
 
@@ -32,6 +33,7 @@ import {
   createOnlinePayment,
   reconcilePendingPayment,
   recoverPaymentSession,
+  interruptPaymentSession,
   PaymentRecordingResult,
   PaymentAttemptStatus,
 } from "../../services/paymentService";
@@ -60,7 +62,9 @@ import {
   Info,
   Lock,
   HelpCircle,
-  Pencil,
+  Plus,
+  Minus,
+  CalendarDays,
 } from "lucide-react-native";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 
@@ -78,12 +82,10 @@ export default function PaymentsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [payAmount, setPayAmount] = useState("");
-  // Tracks whether the tenant has ever typed in the amount field -- before
-  // that, the field shows the live computed default; after, it shows
-  // exactly what they typed (including empty while erasing), so nothing
-  // fights their keystrokes. See the TextInput below.
-  const [hasEditedAmount, setHasEditedAmount] = useState(false);
+  const [advancePeriods, setAdvancePeriods] = useState(0);
+  const [draftAdvancePeriods, setDraftAdvancePeriods] = useState(1);
+  const [advanceModalVisible, setAdvanceModalVisible] = useState(false);
+  const [removeAdvanceConfirmVisible, setRemoveAdvanceConfirmVisible] = useState(false);
   const [selectedMethod, setSelectedMethod] = useState<"gcash" | "paymaya" | null>(null);
   const [redirecting, setRedirecting] = useState(false);
 
@@ -94,7 +96,12 @@ export default function PaymentsScreen() {
   const [activePaymentAmount, setActivePaymentAmount] = useState(0);
   const paymentStartInFlight = useRef(false);
   const reconciliationInFlight = useRef(false);
+  const interruptionInFlight = useRef(false);
+  const checkoutVisibleRef = useRef(false);
   const recoveryPromiseRef = useRef<Promise<boolean> | null>(null);
+  const finalizationInFlight = useRef(false);
+  const paymentInteractionLockedRef = useRef(false);
+  const [paymentInteractionLocked, setPaymentInteractionLockedState] = useState(false);
 
   const [toastMsg, setToastMsg] = useState("");
   const [showToast, setShowToast] = useState(false);
@@ -111,6 +118,44 @@ export default function PaymentsScreen() {
   const methodRef = useRef<View>(null);
   const payBtnRef = useRef<View>(null);
   const scrollRef = useRef<ScrollView>(null);
+
+  const setPaymentInteractionLocked = (locked: boolean) => {
+    paymentInteractionLockedRef.current = locked;
+    setPaymentInteractionLockedState(locked);
+  };
+
+  // Android Home/Recents remain under OS control, but Back must never dismiss
+  // RentWise while a provider-confirmed payment is being recorded. The saved
+  // session still makes process death/backgrounding recoverable.
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      return paymentInteractionLockedRef.current;
+    });
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    checkoutVisibleRef.current = showWebView;
+  }, [showWebView]);
+
+  useEffect(() => {
+    let previousState = AppState.currentState;
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      const leftApp = previousState === "active" && nextState !== "active";
+      const returnedToApp = previousState !== "active" && nextState === "active";
+      previousState = nextState;
+      if (leftApp && checkoutVisibleRef.current) {
+        void interruptActivePayment("background");
+        return;
+      }
+      if (!returnedToApp || recoveryPromiseRef.current) return;
+      void recoverUnfinishedPayment().catch((error) => {
+        setPaymentInteractionLocked(false);
+        console.log("PAYMENT APP-RESUME RECONCILIATION ERROR:", error);
+      });
+    });
+    return () => subscription.remove();
+  }, []);
 
   // Scrolls a given section into view and gives the ScrollView time to
   // settle before HelpTour measures it — otherwise a section below the
@@ -136,20 +181,20 @@ export default function PaymentsScreen() {
   useFocusEffect(
     useCallback(() => {
       const user = auth.currentUser;
-      if (!user) return;
+      if (!user) {
+        setPaymentInteractionLocked(false);
+        return;
+      }
 
-      // Tabs keep this screen mounted in the background when the tenant
-      // switches to another tab, so without this, whatever was left in the
-      // amount field (including erased-to-empty) would still be sitting
-      // there on return instead of refreshing to the current computed due
-      // amount. Resetting on every focus makes each visit start clean.
-      setPayAmount("");
-      setHasEditedAmount(false);
+      // Advance selections are only a draft until checkout starts. Reset a
+      // stale selection whenever the tenant returns to this page.
+      setAdvancePeriods(0);
 
       // If Android killed the process during wallet authorization, recover
       // the verified provider payment from the persisted session. Incomplete
       // sessions stay stored so a later focus can check again safely.
       void recoverUnfinishedPayment().catch((error) => {
+        setPaymentInteractionLocked(false);
         console.log("PAYMENT RECONCILIATION ERROR:", error);
       });
 
@@ -193,7 +238,7 @@ export default function PaymentsScreen() {
     if (!showWebView) return;
     let stopped = false;
     const verify = async () => {
-      if (reconciliationInFlight.current || stopped) return;
+      if (reconciliationInFlight.current || interruptionInFlight.current || stopped) return;
       reconciliationInFlight.current = true;
       try {
         const sessionId = await getPendingCheckoutSession();
@@ -292,7 +337,7 @@ export default function PaymentsScreen() {
         try {
           const result = await reconcilePendingPayment(checkoutSessionId);
           await handleAttemptResult(result, 0, true);
-          return result.status === "recorded";
+          if (result.status !== "pending") return result.status === "recorded";
         } catch (error: any) {
           const code = String(error?.code ?? "");
           if (code !== "functions/not-found" && code !== "not-found") throw error;
@@ -306,9 +351,21 @@ export default function PaymentsScreen() {
       }
 
       const recovered = await recoverPaymentSession();
-      if (recovered.status === "none") return false;
+      if (recovered.status === "none") {
+        setPaymentInteractionLocked(false);
+        return false;
+      }
       checkoutSessionId = recovered.sessionId;
       await setPendingCheckoutSession(checkoutSessionId);
+      if (recovered.paymentMethod) await setPendingPaymentMethod(recovered.paymentMethod);
+      if (recovered.status === "pending" && recovered.redirectUrl) {
+        setActivePaymentAmount(Number(recovered.amount ?? 0));
+        setCheckoutAttemptStatus("pending");
+        setWebViewUrl(recovered.redirectUrl);
+        setShowWebView(true);
+        setPaymentInteractionLocked(false);
+        return false;
+      }
       const result = await reconcilePendingPayment(checkoutSessionId);
       await handleAttemptResult(result, 0, true);
       return result.status === "recorded";
@@ -334,21 +391,31 @@ export default function PaymentsScreen() {
       await clearPendingCheckoutSession();
       await clearPendingPaymentMethod();
       setShowWebView(false);
+      setPaymentInteractionLocked(false);
+      setAdvancePeriods(0);
       if (recovered) triggerToast("Payment recovered and sent for confirmation.");
       else setPaymentSuccess({ amount, method: recordedMethod });
       return;
     }
     if (result.status === "processing") {
+      setPaymentInteractionLocked(true);
       return;
     }
-    if (result.status === "pending") return;
+    if (result.status === "pending") {
+      setPaymentInteractionLocked(false);
+      return;
+    }
     // `paid` means the provider has confirmed funds but the verified RentWise
     // payment record has not yet been returned. Keep the recovery reference;
     // only `recorded` is allowed to clear it and show the success result.
-    if (result.status === "paid") return;
+    if (result.status === "paid") {
+      setPaymentInteractionLocked(true);
+      return;
+    }
     await clearPendingCheckoutSession();
     await clearPendingPaymentMethod();
     setShowWebView(false);
+    setPaymentInteractionLocked(false);
     if (result.status === "expired") triggerToast("Payment session expired. Please try again.");
     else if (result.status === "failed") triggerToast("Payment failed. Please try again.");
     else triggerToast("Payment cancelled.");
@@ -365,7 +432,27 @@ export default function PaymentsScreen() {
     ?? (tenant?.nextDueAt ? new Date(tenant.nextDueAt) : billingStartedAt);
   const actualPaymentDue = rollingAmountDue(periodRate, paymentSchedule, storedNextDueAt, today);
   const paymentDue = actualPaymentDue;
-  const [balanceWhole, balanceCents] = Math.max(0, paymentDue)
+  const periodCharge = computePeriodCharge(periodRate, paymentSchedule, today);
+  const advanceAmount = Math.round(advancePeriods * periodCharge * 100) / 100;
+  const totalPaymentAmount = Math.round((paymentDue + advanceAmount) * 100) / 100;
+  const advanceUnit = paymentSchedule === "daily"
+    ? "day"
+    : paymentSchedule === "weekly"
+      ? "week"
+      : paymentSchedule === "semi-monthly"
+        ? "15-day period"
+        : "month";
+  const maxAdvancePeriods = paymentSchedule === "daily"
+    ? 365
+    : paymentSchedule === "weekly"
+      ? 52
+      : paymentSchedule === "semi-monthly"
+        ? 24
+        : 12;
+  // Advance selection is a page-only preview. It changes this Payment
+  // Center total but never mutates the tenant's real balance or dashboard.
+  const displayedPaymentTotal = advancePeriods > 0 ? totalPaymentAmount : paymentDue;
+  const [balanceWhole, balanceCents] = Math.max(0, displayedPaymentTotal)
     .toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     .split(".");
 
@@ -373,6 +460,11 @@ export default function PaymentsScreen() {
     const amount = Number(payment.amount ?? 0);
     return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
   }, 0);
+  const remainingAfterPending = Math.max(0, Math.round((paymentDue - pendingAmount) * 100) / 100);
+  const formatPeso = (value: number) => value.toLocaleString("en-PH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
   const hasPendingCoverage = paymentDue > 0 && pendingAmount >= paymentDue;
   const hasPaidCurrentPeriod = paymentDue <= 0 || hasPendingCoverage;
 
@@ -381,7 +473,7 @@ export default function PaymentsScreen() {
     { key: "balance", ref: balanceRef, title: "Total balance due", description: "What you currently owe for this billing period, after any payments already made.", edgeInset: "top" },
     ...(!hasPaidCurrentPeriod
       ? [
-          { key: "amount", ref: amountRef, title: "Enter amount", description: "Pre-filled with what's currently due. You can pay more, but not less.", edgeInset: "top" as const, onBeforeMeasure: () => scrollSectionIntoView(amountRef) },
+          { key: "amount", ref: amountRef, title: "Add advance payment", description: "Your current balance is locked for safety. Use Add advance payment to include complete billing periods.", edgeInset: "top" as const, onBeforeMeasure: () => scrollSectionIntoView(amountRef) },
           { key: "method", ref: methodRef, title: "Payment method", description: "Choose GCash or Maya for the PayMongo test demonstration.", edgeInset: "top" as const, onBeforeMeasure: () => scrollSectionIntoView(methodRef) },
           { key: "pay", ref: payBtnRef, title: "Pay Now", description: "Opens PayMongo's test checkout. No real money is charged.", edgeInset: "top" as const, onBeforeMeasure: () => scrollSectionIntoView(payBtnRef) },
         ]
@@ -393,23 +485,10 @@ export default function PaymentsScreen() {
     if (!(await requireOnlineAction("Starting an online payment"))) return;
     paymentStartInFlight.current = true;
     try {
-    // The amount field falls back to displaying the computed `paymentDue`
-    // whenever the tenant hasn't typed their own value — so the amount
-    // actually being paid must fall back the same way, or a tenant who
-    // never touched the field (because the pre-filled amount was already
-    // correct) would fail this check despite the field showing a valid,
-    // correct value.
-    const effectiveAmount = payAmount ? Number(payAmount) : Math.round(paymentDue);
-
-    if (!effectiveAmount || effectiveAmount <= 0) {
-      Alert.alert("Error", "Please enter a valid amount");
-      return;
-    }
-    if (paymentDue > 0 && effectiveAmount < paymentDue) {
-      Alert.alert(
-        "Amount too low",
-        `Please enter at least ₱${Math.round(paymentDue).toLocaleString()} — partial payments are no longer accepted.`,
-      );
+    // The client sends only the selected advance quantity. The backend
+    // computes the balance and final amount from the latest billing state.
+    if (paymentDue <= 0 && advancePeriods <= 0) {
+      Alert.alert("Nothing to pay", "You have no balance due. Choose an advance payment period first.");
       return;
     }
     if (!selectedMethod) {
@@ -424,17 +503,15 @@ export default function PaymentsScreen() {
       ? `${tenant.firstName ?? ""} ${tenant.lastName ?? ""}`.trim()
       : "";
     const tenantEmail = tenant?.email || user.email || "";
-    const { paymentIntentId, redirectUrl } = await createOnlinePayment(
-      effectiveAmount,
+    const { paymentIntentId, redirectUrl, amount: authoritativeAmount } = await createOnlinePayment(
+      advancePeriods,
       selectedMethod,
       { name: tenantName, email: tenantEmail },
     );
     await setPendingCheckoutSession(paymentIntentId);
     await setPendingPaymentMethod(selectedMethod);
-    setActivePaymentAmount(effectiveAmount);
+    setActivePaymentAmount(authoritativeAmount);
     setCheckoutAttemptStatus("pending");
-    setPayAmount("");
-    setHasEditedAmount(false);
     setSelectedMethod(null);
     setWebViewUrl(redirectUrl);
     setShowWebView(true);
@@ -448,12 +525,19 @@ export default function PaymentsScreen() {
   }
 
   async function handlePaymentSuccess(amountCentavos: number) {
+    if (finalizationInFlight.current) return;
+    finalizationInFlight.current = true;
+    setPaymentInteractionLocked(true);
     try {
       const user = auth.currentUser;
-      if (!user) return;
+      if (!user) {
+        setPaymentInteractionLocked(false);
+        return;
+      }
       const paymentAmount = amountCentavos / 100;
       const sessionId = await getPendingCheckoutSession();
       if (!sessionId) {
+        setPaymentInteractionLocked(false);
         Alert.alert("Verification pending", "RentWise could not find the payment session. Reopen Payments to recover it securely.");
         return;
       }
@@ -533,12 +617,55 @@ export default function PaymentsScreen() {
         "Verification pending",
         "RentWise could not confirm the final result yet. Your payment will continue to be checked securely.",
       );
+    } finally {
+      finalizationInFlight.current = false;
+    }
+  }
+
+  async function interruptActivePayment(reason: "close" | "background" = "close") {
+    if (interruptionInFlight.current || finalizationInFlight.current) return;
+    interruptionInFlight.current = true;
+    setPaymentInteractionLocked(true);
+    try {
+      const sessionId = await getPendingCheckoutSession();
+      if (!sessionId) {
+        setShowWebView(false);
+        setPaymentInteractionLocked(false);
+        return;
+      }
+      const result = await interruptPaymentSession(sessionId);
+      if (result.status === "paid" || result.status === "processing" || result.status === "recorded") {
+        const reconciled = result.status === "recorded"
+          ? result
+          : await reconcilePendingPayment(sessionId);
+        await handleAttemptResult(reconciled, activePaymentAmount, reason === "background");
+        return;
+      }
+      if (result.status === "cancelled" || result.status === "failed" || result.status === "expired") {
+        await clearPendingCheckoutSession();
+        await clearPendingPaymentMethod();
+        setShowWebView(false);
+        setPaymentInteractionLocked(false);
+        if (reason === "close") triggerToast("Payment cancelled. No payment record was created.");
+        return;
+      }
+      // Provider still considers the attempt actionable. Keep the saved
+      // session so returning to Payments can safely resume or reconcile it.
+      setShowWebView(false);
+      setPaymentInteractionLocked(false);
+      if (reason === "close") triggerToast("Payment status is still being verified.");
+    } catch (error) {
+      console.log("PAYMENT INTERRUPTION ERROR:", error);
+      setShowWebView(false);
+      setPaymentInteractionLocked(false);
+      if (reason === "close") triggerToast("Could not safely cancel yet. RentWise will verify it again.");
+    } finally {
+      interruptionInFlight.current = false;
     }
   }
 
   function handlePaymentCancel() {
-    setShowWebView(false);
-    triggerToast("Payment window closed. RentWise will check it again when Payments is reopened.");
+    void interruptActivePayment("close");
   }
 
   if (loading) {
@@ -594,6 +721,18 @@ export default function PaymentsScreen() {
             <Text style={styles.balanceAmount}>₱{balanceWhole}</Text>
             <Text style={styles.balanceCents}>.{balanceCents}</Text>
           </View>
+          {pendingAmount > 0 && advancePeriods === 0 ? (
+            <View style={styles.pendingBalanceSummary}>
+              <View style={styles.pendingBalanceRow}>
+                <Text style={styles.pendingBalanceLabel}>Awaiting confirmation</Text>
+                <Text style={styles.pendingBalanceValue}>₱{formatPeso(pendingAmount)}</Text>
+              </View>
+              <View style={styles.pendingBalanceRow}>
+                <Text style={styles.pendingBalanceLabel}>Remaining to submit</Text>
+                <Text style={styles.pendingBalanceValue}>₱{formatPeso(remainingAfterPending)}</Text>
+              </View>
+            </View>
+          ) : null}
         </View>
       </View>
 
@@ -612,7 +751,7 @@ export default function PaymentsScreen() {
             />
           }
         >
-        {hasPaidCurrentPeriod ? (
+        {hasPaidCurrentPeriod && advancePeriods === 0 ? (
           <View style={styles.caughtUpCard}>
             <CheckCircle2 size={28} color={colors.emerald} />
             <Text style={styles.caughtUpTitle}>You're all caught up</Text>
@@ -623,30 +762,50 @@ export default function PaymentsScreen() {
                   ? `Your next payment is due ${storedNextDueAt.toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" })}.`
                   : "You have no payment due right now."}
             </Text>
+            {!hasPendingCoverage ? (
+              <Pressable
+                style={({pressed}) => [styles.advanceButton, pressed && styles.advanceButtonPressed]}
+                onPress={() => {
+                  setDraftAdvancePeriods(1);
+                  setAdvanceModalVisible(true);
+                }}
+              >
+                <CalendarDays size={16} color={colors.emerald} />
+                <Text style={styles.advanceButtonText}>Pay in advance</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : (
           <>
-            <View style={styles.amountCard} ref={amountRef} collapsable={false}>
-              <View style={styles.amountCardHeader}>
-                <Text style={styles.amountCardTitle}>Enter amount</Text>
-                <Text style={styles.amountCardCurrency}>PHP</Text>
-              </View>
+            <View ref={amountRef} collapsable={false}>
+              <Pressable
+                style={({pressed}) => [styles.advanceButton, pressed && styles.advanceButtonPressed]}
+                onPress={() => {
+                  setDraftAdvancePeriods(Math.max(1, advancePeriods));
+                  setAdvanceModalVisible(true);
+                }}
+              >
+                <CalendarDays size={16} color={colors.emerald} />
+                <Text style={styles.advanceButtonText}>{advancePeriods > 0 ? "Change advance payment" : "Add advance payment"}</Text>
+              </Pressable>
 
-              <View style={styles.amountBox}>
-                <Text style={styles.amountPeso}>₱</Text>
-                <TextInput
-                  style={styles.amountInput}
-                  placeholder="0"
-                  placeholderTextColor={colors.textMuted}
-                  keyboardType="numeric"
-                  value={hasEditedAmount ? payAmount : (paymentDue > 0 ? String(Math.round(paymentDue)) : "")}
-                  onChangeText={(text) => {
-                    if (!hasEditedAmount) setHasEditedAmount(true);
-                    setPayAmount(text);
-                  }}
-                />
-                <Pencil size={14} color={colors.textMuted} />
-              </View>
+              {advancePeriods > 0 ? (
+                <View style={styles.selectedAdvanceSummary}>
+                  <View style={styles.paymentSummaryRow}>
+                    <Text style={styles.paymentSummaryLabel}>Current balance</Text>
+                    <Text style={styles.paymentSummaryValue}>₱{paymentDue.toLocaleString("en-PH", {minimumFractionDigits: 2})}</Text>
+                  </View>
+                  <View style={styles.paymentSummaryRow}>
+                    <Text style={styles.paymentSummaryLabel}>Advance ({advancePeriods} {advanceUnit}{advancePeriods === 1 ? "" : "s"})</Text>
+                    <Text style={styles.paymentSummaryValue}>+₱{advanceAmount.toLocaleString("en-PH", {minimumFractionDigits: 2})}</Text>
+                  </View>
+                  <View style={styles.advanceTotalDivider} />
+                  <View style={styles.paymentSummaryRow}>
+                    <Text style={styles.advanceTotalLabel}>Total to pay</Text>
+                    <Text style={styles.advanceTotalValue}>₱{totalPaymentAmount.toLocaleString("en-PH", {minimumFractionDigits: 2})}</Text>
+                  </View>
+                </View>
+              ) : null}
             </View>
 
             <View style={styles.methodCard} ref={methodRef} collapsable={false}>
@@ -663,41 +822,45 @@ export default function PaymentsScreen() {
                 <Text style={styles.methodInfoText}>TEST MODE — This demonstration does not charge real money.</Text>
               </View>
 
-              <Pressable
-                style={[styles.methodOptionCard, selectedMethod === "gcash" && styles.methodOptionCardSelected]}
-                onPress={() => setSelectedMethod("gcash")}
-              >
-                <View style={styles.methodBrandIcon}>
-                  <Image
-                    source={require("../../assets/gcash.png")}
-                    style={styles.methodBrandIconImage}
-                    resizeMode="cover"
-                  />
-                </View>
-                <View style={styles.methodOptionInfo}>
-                  <Text style={styles.methodOptionName}>GCash</Text>
-                  <Text style={styles.methodOptionSub}>PayMongo test checkout</Text>
-                </View>
-                <View style={[styles.radioOuter, selectedMethod === "gcash" && styles.radioOuterSelected]}>
-                  {selectedMethod === "gcash" && <View style={styles.radioInner} />}
-                </View>
-              </Pressable>
+              <View style={styles.methodOptionsGroup}>
+                <Pressable
+                  style={[styles.methodOptionCard, selectedMethod === "gcash" && styles.methodOptionCardSelected]}
+                  onPress={() => setSelectedMethod("gcash")}
+                >
+                  <View style={styles.methodBrandIcon}>
+                    <Image
+                      source={require("../../assets/gcash.png")}
+                      style={styles.methodBrandIconImage}
+                      resizeMode="cover"
+                    />
+                  </View>
+                  <View style={styles.methodOptionInfo}>
+                    <Text style={styles.methodOptionName}>GCash</Text>
+                    <Text style={styles.methodOptionSub}>PayMongo test checkout</Text>
+                  </View>
+                  <View style={[styles.radioOuter, selectedMethod === "gcash" && styles.radioOuterSelected]}>
+                    {selectedMethod === "gcash" && <View style={styles.radioInner} />}
+                  </View>
+                </Pressable>
 
-              <Pressable
-                style={[styles.methodOptionCard, selectedMethod === "paymaya" && styles.methodOptionCardSelected]}
-                onPress={() => setSelectedMethod("paymaya")}
-              >
-                <View style={[styles.methodBrandIcon, styles.methodBrandIconDark]}>
-                  <Image source={require("../../assets/maya-icon.png")} style={styles.methodBrandIconImage} resizeMode="contain" />
-                </View>
-                <View style={styles.methodOptionInfo}>
-                  <Text style={styles.methodOptionName}>Maya</Text>
-                  <Text style={styles.methodOptionSub}>PayMongo test checkout</Text>
-                </View>
-                <View style={[styles.radioOuter, selectedMethod === "paymaya" && styles.radioOuterSelected]}>
-                  {selectedMethod === "paymaya" && <View style={styles.radioInner} />}
-                </View>
-              </Pressable>
+                <View style={styles.methodOptionDivider} />
+
+                <Pressable
+                  style={[styles.methodOptionCard, selectedMethod === "paymaya" && styles.methodOptionCardSelected]}
+                  onPress={() => setSelectedMethod("paymaya")}
+                >
+                  <View style={[styles.methodBrandIcon, styles.methodBrandIconDark]}>
+                    <Image source={require("../../assets/maya-icon.png")} style={styles.methodBrandIconImage} resizeMode="contain" />
+                  </View>
+                  <View style={styles.methodOptionInfo}>
+                    <Text style={styles.methodOptionName}>Maya</Text>
+                    <Text style={styles.methodOptionSub}>PayMongo test checkout</Text>
+                  </View>
+                  <View style={[styles.radioOuter, selectedMethod === "paymaya" && styles.radioOuterSelected]}>
+                    {selectedMethod === "paymaya" && <View style={styles.radioInner} />}
+                  </View>
+                </Pressable>
+              </View>
 
               {selectedMethod && (
                 <View style={styles.methodInfoBanner}>
@@ -734,7 +897,7 @@ export default function PaymentsScreen() {
                     >
                       {redirecting
                         ? "Opening payment..."
-                        : `Pay ₱${(Number(payAmount) || Math.round(paymentDue)).toLocaleString()}`}
+                        : `Pay ₱${totalPaymentAmount.toLocaleString()}`}
                     </Text>
                   </>
                 );
@@ -749,6 +912,140 @@ export default function PaymentsScreen() {
         )}
         </ScrollView>
       </View>
+
+      <Modal
+        visible={advanceModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (removeAdvanceConfirmVisible) setRemoveAdvanceConfirmVisible(false);
+          else setAdvanceModalVisible(false);
+        }}
+      >
+        <View style={styles.advanceModalOverlay}>
+          <View style={styles.advanceModalCard}>
+            <View style={styles.advanceModalHeader}>
+              <View>
+                <Text style={styles.advanceModalTitle}>Advance payment</Text>
+                <Text style={styles.advanceModalSubtitle}>Choose additional {advanceUnit}s to cover.</Text>
+              </View>
+            </View>
+
+            <View style={styles.advanceRateCard}>
+              <Text style={styles.advanceRateLabel}>{paymentSchedule.replace("-", " ")} rate</Text>
+              <Text style={styles.advanceRateValue}>₱{periodCharge.toLocaleString("en-PH", {minimumFractionDigits: 2})} / {advanceUnit}</Text>
+            </View>
+
+            <Text style={styles.advancePickerLabel}>Number of additional {advanceUnit}{draftAdvancePeriods === 1 ? "" : "s"}</Text>
+            <View style={styles.advancePicker}>
+              <Pressable
+                style={[styles.advancePickerButton, draftAdvancePeriods <= 1 && styles.advancePickerButtonDisabled]}
+                disabled={draftAdvancePeriods <= 1}
+                onPress={() => setDraftAdvancePeriods((value) => Math.max(1, value - 1))}
+              >
+                <Minus size={22} color={colors.emerald} />
+              </Pressable>
+              <Text style={styles.advancePickerValue}>{draftAdvancePeriods}</Text>
+              <Pressable
+                style={[styles.advancePickerButton, draftAdvancePeriods >= maxAdvancePeriods && styles.advancePickerButtonDisabled]}
+                disabled={draftAdvancePeriods >= maxAdvancePeriods}
+                onPress={() => setDraftAdvancePeriods((value) => Math.min(maxAdvancePeriods, value + 1))}
+              >
+                <Plus size={22} color={colors.emerald} />
+              </Pressable>
+            </View>
+
+            <View style={styles.advanceTotalCard}>
+              <View style={styles.paymentSummaryRow}>
+                <Text style={styles.paymentSummaryLabel}>Current balance</Text>
+                <Text style={styles.paymentSummaryValue}>₱{paymentDue.toLocaleString("en-PH", {minimumFractionDigits: 2})}</Text>
+              </View>
+              <View style={styles.paymentSummaryRow}>
+                <Text style={styles.paymentSummaryLabel}>Advance amount</Text>
+                <Text style={styles.paymentSummaryValue}>+₱{(draftAdvancePeriods * periodCharge).toLocaleString("en-PH", {minimumFractionDigits: 2})}</Text>
+              </View>
+              <View style={styles.advanceTotalDivider} />
+              <View style={styles.paymentSummaryRow}>
+                <Text style={styles.advanceTotalLabel}>Total to pay</Text>
+                <Text style={styles.advanceTotalValue}>₱{(paymentDue + draftAdvancePeriods * periodCharge).toLocaleString("en-PH", {minimumFractionDigits: 2})}</Text>
+              </View>
+            </View>
+
+            <View style={styles.advanceModalActions}>
+              {advancePeriods > 0 ? (
+                <Pressable
+                  style={styles.advanceRemoveButton}
+                  onPress={() => setRemoveAdvanceConfirmVisible(true)}
+                >
+                  <Text style={styles.advanceRemoveText}>Remove</Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  style={({pressed}) => [styles.advanceCancelButton, pressed && styles.advanceCancelButtonPressed]}
+                  onPress={() => setAdvanceModalVisible(false)}
+                >
+                  {({pressed}) => <Text style={[styles.advanceCancelText, pressed && styles.advanceCancelTextPressed]}>Cancel</Text>}
+                </Pressable>
+              )}
+              <Pressable
+                style={({pressed}) => [styles.advanceConfirmButton, pressed && styles.advanceConfirmButtonPressed]}
+                onPress={() => {
+                  setAdvancePeriods(draftAdvancePeriods);
+                  setAdvanceModalVisible(false);
+                }}
+              >
+                {({pressed}) => <Text style={[styles.advanceConfirmText, pressed && styles.advanceConfirmTextPressed]}>Confirm</Text>}
+              </Pressable>
+            </View>
+
+            {removeAdvanceConfirmVisible ? (
+              <View style={styles.removeConfirmOverlay}>
+                <View style={styles.removeConfirmCard}>
+                  <View style={styles.removeConfirmIcon}>
+                    <CalendarDays size={24} color={colors.error} />
+                  </View>
+                  <Text style={styles.removeConfirmTitle}>Remove advance payment?</Text>
+                  <Text style={styles.removeConfirmMessage}>
+                    This only removes your advance-payment selection. Your actual account balance will not be changed.
+                  </Text>
+
+                  <View style={styles.removeConfirmAmounts}>
+                    <View>
+                      <Text style={styles.removeConfirmAmountLabel}>Current preview</Text>
+                      <Text style={styles.removeConfirmOldAmount}>₱{totalPaymentAmount.toLocaleString("en-PH", {minimumFractionDigits: 2})}</Text>
+                    </View>
+                    <Text style={styles.removeConfirmArrow}>→</Text>
+                    <View style={styles.removeConfirmAmountRight}>
+                      <Text style={styles.removeConfirmAmountLabel}>Original balance</Text>
+                      <Text style={styles.removeConfirmNewAmount}>₱{paymentDue.toLocaleString("en-PH", {minimumFractionDigits: 2})}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.removeConfirmActions}>
+                    <Pressable
+                      style={({pressed}) => [styles.removeConfirmKeep, pressed && styles.removeConfirmKeepPressed]}
+                      onPress={() => setRemoveAdvanceConfirmVisible(false)}
+                    >
+                      <Text style={styles.removeConfirmKeepText}>Keep advance</Text>
+                    </Pressable>
+                    <Pressable
+                      style={({pressed}) => [styles.removeConfirmRemove, pressed && styles.removeConfirmRemovePressed]}
+                      onPress={() => {
+                        setRemoveAdvanceConfirmVisible(false);
+                        setAdvancePeriods(0);
+                        setDraftAdvancePeriods(1);
+                        setAdvanceModalVisible(false);
+                      }}
+                    >
+                      <Text style={styles.removeConfirmRemoveText}>Remove</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
 
       {/* WEBVIEW PAYMENT MODAL */}
       <Modal visible={showWebView} animationType="slide" onRequestClose={handlePaymentCancel}>
@@ -770,7 +1067,12 @@ export default function PaymentsScreen() {
                           : "Payment confirmed."}
               </Text>
             </View>
-            <TouchableOpacity style={styles.webViewClose} onPress={handlePaymentCancel} activeOpacity={0.7}>
+            <TouchableOpacity
+              style={[styles.webViewClose, paymentInteractionLocked && styles.webViewCloseDisabled]}
+              disabled={paymentInteractionLocked}
+              onPress={handlePaymentCancel}
+              activeOpacity={0.7}
+            >
               <X size={22} color={colors.white} />
             </TouchableOpacity>
           </View>
@@ -826,6 +1128,27 @@ export default function PaymentsScreen() {
               <ActivityIndicator size="large" color={colors.emerald} />
             </View>
           )}
+        </View>
+      </Modal>
+
+      <Modal
+        visible={paymentInteractionLocked}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => {}}
+      >
+        <View style={styles.paymentLockOverlay}>
+          <View style={styles.paymentLockCard}>
+            <View style={styles.paymentLockIcon}>
+              <ShieldCheck size={30} color={colors.emerald} />
+            </View>
+            <ActivityIndicator size="large" color={colors.emerald} />
+            <Text style={styles.paymentLockTitle}>Securing your payment</Text>
+            <Text style={styles.paymentLockMessage}>
+              RentWise is verifying the provider result and recording it safely. Please wait and do not submit another payment.
+            </Text>
+          </View>
         </View>
       </Modal>
 
@@ -1016,6 +1339,32 @@ const styles = StyleSheet.create({
     marginLeft: 3,
   },
 
+  pendingBalanceSummary: {
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(255,255,255,0.35)",
+    gap: 4,
+  },
+
+  pendingBalanceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  pendingBalanceLabel: {
+    color: "rgba(255,255,255,0.82)",
+    fontSize: 11,
+    fontFamily: fontFamily.medium,
+  },
+
+  pendingBalanceValue: {
+    color: colors.white,
+    fontSize: 11,
+    fontFamily: fontFamily.bold,
+  },
+
   // ── Body ────────────────────────────────────────
   body: {
     flex: 1,
@@ -1093,6 +1442,38 @@ const styles = StyleSheet.create({
     padding: 0,
   },
 
+  paymentSummary: { marginTop: spacing.md, gap: spacing.sm },
+  paymentSummaryRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.md },
+  paymentSummaryLabel: { flex: 1, fontSize: fontSize.sm, fontFamily: fontFamily.regular, color: colors.textSecondary },
+  paymentSummaryValue: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.ink },
+  selectedAdvanceSummary: {
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    gap: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: colors.mist,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  advanceButton: {
+    marginTop: spacing.lg,
+    minHeight: 44,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.emerald,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.white,
+  },
+  advanceButtonText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.emerald },
+  advanceButtonPressed: {
+    backgroundColor: colors.emeraldSoft,
+    transform: [{scale: 0.98}],
+  },
+
   // ── Caught up state ──────────────────────────────
   caughtUpCard: {
     backgroundColor: colors.white,
@@ -1151,21 +1532,31 @@ const styles = StyleSheet.create({
     color: colors.emerald,
   },
 
+  methodOptionsGroup: {
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    backgroundColor: colors.white,
+    ...shadow.card,
+  },
+
+  methodOptionDivider: {
+    height: 1,
+    marginHorizontal: spacing.md,
+    backgroundColor: colors.border,
+  },
+
   methodOptionCard: {
     flexDirection: "row",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
     backgroundColor: colors.white,
-    padding: spacing.md,
-    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.lg,
   },
 
   methodOptionCardSelected: {
-    borderWidth: 1.5,
-    borderColor: colors.emerald,
-    backgroundColor: colors.white,
+    backgroundColor: colors.emeraldSoft,
   },
 
   methodBrandIcon: {
@@ -1287,6 +1678,123 @@ const styles = StyleSheet.create({
   },
 
   // ── WebView ──────────────────────────────────────
+  advanceModalOverlay: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(5, 25, 20, 0.56)" },
+  advanceModalCard: {
+    minHeight: "68%",
+    backgroundColor: colors.white,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    padding: spacing.xl,
+    paddingBottom: spacing.xxxl,
+  },
+  advanceModalHeader: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: spacing.md },
+  advanceModalTitle: { fontSize: fontSize.lg, fontFamily: fontFamily.bold, color: colors.ink },
+  advanceModalSubtitle: { marginTop: 4, fontSize: fontSize.sm, fontFamily: fontFamily.regular, color: colors.textSecondary },
+  advanceRateCard: { marginTop: spacing.xl, padding: spacing.md, borderRadius: radius.md, backgroundColor: colors.emeraldSoft },
+  advanceRateLabel: { fontSize: fontSize.xs, fontFamily: fontFamily.medium, color: colors.textSecondary, textTransform: "uppercase" },
+  advanceRateValue: { marginTop: 3, fontSize: fontSize.md, fontFamily: fontFamily.bold, color: colors.ink },
+  advancePickerLabel: { marginTop: spacing.xl, textAlign: "center", fontSize: fontSize.sm, fontFamily: fontFamily.medium, color: colors.textSecondary },
+  advancePicker: { marginTop: spacing.md, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xl },
+  advancePickerButton: { width: 48, height: 48, alignItems: "center", justifyContent: "center", borderRadius: 24, borderWidth: 1, borderColor: colors.emerald, backgroundColor: colors.white },
+  advancePickerButtonDisabled: { opacity: 0.35 },
+  advancePickerValue: { minWidth: 64, textAlign: "center", fontSize: 32, fontFamily: fontFamily.extrabold, color: colors.ink },
+  advanceTotalCard: { marginTop: spacing.xl, padding: spacing.lg, gap: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.mist },
+  advanceTotalDivider: { height: 1, backgroundColor: colors.border, marginVertical: 2 },
+  advanceTotalLabel: { fontSize: fontSize.base, fontFamily: fontFamily.bold, color: colors.ink },
+  advanceTotalValue: { fontSize: fontSize.lg, fontFamily: fontFamily.extrabold, color: colors.emerald },
+  advanceModalActions: { marginTop: spacing.xl, flexDirection: "row", gap: spacing.sm },
+  advanceCancelButton: { flex: 1, minHeight: 48, alignItems: "center", justifyContent: "center", borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
+  advanceCancelText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.ink },
+  advanceCancelButtonPressed: { backgroundColor: colors.mist, transform: [{scale: 0.97}] },
+  advanceCancelTextPressed: { color: colors.emerald },
+  advanceRemoveButton: { flex: 1, minHeight: 48, alignItems: "center", justifyContent: "center", borderRadius: radius.md, borderWidth: 1, borderColor: colors.error },
+  advanceRemoveText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.error },
+  advanceConfirmButton: { flex: 1, minHeight: 48, alignItems: "center", justifyContent: "center", borderRadius: radius.md, backgroundColor: colors.emerald, ...shadow.button },
+  advanceConfirmText: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.white },
+  advanceConfirmButtonPressed: { backgroundColor: colors.ink, transform: [{scale: 0.97}] },
+  advanceConfirmTextPressed: { color: colors.white },
+
+  removeConfirmOverlay: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 20,
+    elevation: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: spacing.lg,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    backgroundColor: "rgba(5, 25, 20, 0.68)",
+  },
+  removeConfirmCard: {
+    width: "100%",
+    padding: spacing.xl,
+    borderRadius: radius.xl,
+    backgroundColor: colors.white,
+    ...shadow.card,
+  },
+  removeConfirmIcon: {
+    width: 48,
+    height: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 24,
+    backgroundColor: colors.errorSoft,
+  },
+  removeConfirmTitle: {
+    marginTop: spacing.md,
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+  },
+  removeConfirmMessage: {
+    marginTop: spacing.sm,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    lineHeight: 20,
+    color: colors.textSecondary,
+  },
+  removeConfirmAmounts: {
+    marginTop: spacing.lg,
+    padding: spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderRadius: radius.md,
+    backgroundColor: colors.mist,
+  },
+  removeConfirmAmountRight: { alignItems: "flex-end" },
+  removeConfirmAmountLabel: { fontSize: fontSize.xs, fontFamily: fontFamily.medium, color: colors.textMuted },
+  removeConfirmOldAmount: { marginTop: 3, fontSize: fontSize.base, fontFamily: fontFamily.bold, color: colors.textSecondary },
+  removeConfirmNewAmount: { marginTop: 3, fontSize: fontSize.base, fontFamily: fontFamily.bold, color: colors.emerald },
+  removeConfirmArrow: { fontSize: fontSize.lg, fontFamily: fontFamily.bold, color: colors.textMuted },
+  removeConfirmActions: { marginTop: spacing.xl, flexDirection: "row", gap: spacing.sm },
+  removeConfirmKeep: {
+    flex: 1,
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.emerald,
+    backgroundColor: colors.white,
+  },
+  removeConfirmKeepPressed: { backgroundColor: colors.emeraldSoft, transform: [{scale: 0.97}] },
+  removeConfirmKeepText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.emerald },
+  removeConfirmRemove: {
+    flex: 1,
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.md,
+    backgroundColor: colors.error,
+  },
+  removeConfirmRemovePressed: { opacity: 0.82, transform: [{scale: 0.97}] },
+  removeConfirmRemoveText: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.white },
+
   webViewContainer: {
     flex: 1,
     backgroundColor: colors.white,
@@ -1315,6 +1823,50 @@ const styles = StyleSheet.create({
 
   webViewClose: {
     padding: 4,
+  },
+  webViewCloseDisabled: {
+    opacity: 0.35,
+  },
+  paymentLockOverlay: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: spacing.xl,
+    backgroundColor: "rgba(5, 25, 20, 0.78)",
+  },
+  paymentLockCard: {
+    width: "100%",
+    maxWidth: 360,
+    alignItems: "center",
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.xxl,
+    borderRadius: radius.xl,
+    backgroundColor: colors.white,
+    ...shadow.card,
+  },
+  paymentLockIcon: {
+    width: 54,
+    height: 54,
+    marginBottom: spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 27,
+    backgroundColor: colors.emeraldSoft,
+  },
+  paymentLockTitle: {
+    marginTop: spacing.lg,
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+    textAlign: "center",
+  },
+  paymentLockMessage: {
+    marginTop: spacing.sm,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+    lineHeight: 20,
+    textAlign: "center",
   },
 
   paymentSuccessOverlay: {

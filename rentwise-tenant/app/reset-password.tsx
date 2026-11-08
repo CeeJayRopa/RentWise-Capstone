@@ -25,9 +25,9 @@ const cloudFunctions = getFunctions(firebaseApp);
 // outside the app itself.
 export default function ResetPassword() {
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ resetToken?: string; email?: string }>();
+  const params = useLocalSearchParams<{ resetToken?: string; identifier?: string }>();
   const [step, setStep] = useState<Step>("checking");
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -42,20 +42,20 @@ export default function ResetPassword() {
       setStep("invalid");
       return;
     }
-    setEmail(params.email ?? "your tenant account");
+    setIdentifier(params.identifier ?? "your tenant account");
     setStep("form");
-  }, [params.email, params.resetToken]);
+  }, [params.identifier, params.resetToken]);
 
   function goToLogin() {
     router.replace("/login");
   }
 
   async function handleSubmit() {
-    const pwRegex = /^(?=.*[a-zA-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
+    const pwRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
     let valid = true;
 
     if (!pwRegex.test(newPassword)) {
-      setPwError("8–12 characters with letters, numbers, and special characters.");
+      setPwError("8–12 characters with an uppercase letter, number, and special character.");
       valid = false;
     } else {
       setPwError("");
@@ -136,7 +136,7 @@ export default function ResetPassword() {
       {step === "form" && (
         <View style={styles.formBody}>
           <Text style={styles.formTitle}>Choose a new password</Text>
-          <Text style={styles.formSubtitle}>For {email}</Text>
+          <Text style={styles.formSubtitle}>For {identifier}</Text>
 
           <Text style={styles.fieldLabel}>New Password</Text>
           <View style={[styles.pwField, !!pwError && styles.pwFieldError]}>
@@ -164,7 +164,7 @@ export default function ResetPassword() {
             </Pressable>
           </View>
           {!!pwError && <Text style={styles.fieldError}>{pwError}</Text>}
-          <Text style={styles.pwHint}>Min. 8 characters with a letter, number, and special character.</Text>
+          <Text style={styles.pwHint}>8–12 characters with an uppercase letter, number, and special character.</Text>
 
           <Text style={styles.fieldLabel}>Confirm Password</Text>
           <View style={[styles.pwField, !!confirmError && styles.pwFieldError]}>

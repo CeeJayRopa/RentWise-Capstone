@@ -1,211 +1,187 @@
-import { onSchedule } from 'firebase-functions/v2/scheduler';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { semaphoreApiKey, sendSMSWithRetry } from './smsService';
-import {
-  getOutstandingBalance,
-  isPaymentDue,
-  hasReminderBeenSent,
-} from './paymentChecker';
+import {onSchedule} from "firebase-functions/v2/scheduler";
+import {FieldValue, getFirestore} from "firebase-admin/firestore";
+import {semaphoreApiKey, sendSMSWithRetry} from "./smsService";
+import {getOutstandingBalance, isPaymentDue} from "./paymentChecker";
 
-// The admin-configurable send time (rentwise-admin/app/(tabs)/financials.tsx
-// writes this doc). Cloud Scheduler's cron is fixed at deploy time -- there's
-// no API for the app to change it live -- so instead this function runs every
-// minute and immediately exits unless the current Manila time matches the
-// configured hour/minute. Falls back to the original default (2:30 PM) if
-// the admin has never set one.
 const DEFAULT_REMINDER_HOUR = 14;
 const DEFAULT_REMINDER_MINUTE = 30;
+const RETRY_LEASE_MS = 5 * 60_000;
+const NOTIFICATION_RETENTION_MS = 180 * 24 * 60 * 60_000;
 
-function getReminderPeriodKey(schedule: string, now: Date): string {
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = now.getDate();
-  if (schedule === 'daily') return `${year}-${month}-${String(day).padStart(2, '0')}`;
-  if (schedule === 'weekly') return `${year}-${month}-w${Math.floor((day - 1) / 7) + 1}`;
-  if (schedule === 'semi-monthly') return `${year}-${month}-h${day <= 15 ? 1 : 2}`;
-  return `${year}-${month}`;
+function normalizedReminderSlot(hourValue: unknown, minuteValue: unknown): {hour: number; minute: 0 | 30} {
+  let hour = Number.isInteger(Number(hourValue)) ? Number(hourValue) : DEFAULT_REMINDER_HOUR;
+  const minute = Number.isFinite(Number(minuteValue)) ? Number(minuteValue) : DEFAULT_REMINDER_MINUTE;
+  hour = ((hour % 24) + 24) % 24;
+  if (minute >= 45) return {hour: (hour + 1) % 24, minute: 0};
+  return {hour, minute: minute >= 15 ? 30 : 0};
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PAYMENT REMINDER SCHEDULER
-//
-// Ticks every minute, Asia/Manila (Philippine Time), but only actually sends
-// reminders once a day, during the single minute that matches the admin's
-// configured time (see settings/reminderSchedule below).
-// ─────────────────────────────────────────────────────────────────────────────
+function scheduleDays(schedule: string): number {
+  if (schedule === "daily") return 1;
+  if (schedule === "weekly") return 7;
+  if (schedule === "semi-monthly") return 15;
+  return 30;
+}
+
+function localDayNumber(date: Date): number {
+  return Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000);
+}
+
+function reminderPeriodKey(schedule: string, nextDueAt: Date, now: Date): string {
+  const intervalIndex = Math.max(
+    0,
+    Math.floor((localDayNumber(now) - localDayNumber(nextDueAt)) / scheduleDays(schedule)),
+  );
+  return `${localDayNumber(nextDueAt)}-${schedule}-${intervalIndex}`;
+}
+
 export const sendPaymentReminders = onSchedule(
   {
-    schedule: '* * * * *',
-    timeZone: 'Asia/Manila',
+    schedule: "*/30 * * * *",
+    timeZone: "Asia/Manila",
     maxInstances: 1,
     secrets: [semaphoreApiKey],
   },
   async () => {
-    // ── Top-level guard ───────────────────────────────────────────────────────
+    const db = getFirestore();
     try {
-      const db = getFirestore();
+      const configSnap = await db.doc("settings/reminderSchedule").get();
+      const configured = normalizedReminderSlot(configSnap.data()?.hour, configSnap.data()?.minute);
+      const nowManila = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Manila"}));
+      if (nowManila.getHours() !== configured.hour || nowManila.getMinutes() !== configured.minute) return;
 
-      // ── Gate: only proceed during the admin's configured minute ─────────────
-      const configSnap = await db.doc('settings/reminderSchedule').get();
-      const configuredHour = configSnap.data()?.hour ?? DEFAULT_REMINDER_HOUR;
-      const configuredMinute = configSnap.data()?.minute ?? DEFAULT_REMINDER_MINUTE;
-
-      const nowManila = new Date(
-        new Date().toLocaleString('en-US', { timeZone: 'Asia/Manila' }),
-      );
-      if (
-        nowManila.getHours() !== configuredHour ||
-        nowManila.getMinutes() !== configuredMinute
-      ) {
-        return;
-      }
-
-      const tenantsSnap = await db
-        .collection('users')
-        .where('role', '==', 'tenant')
-        .where('status', '==', 'active')
+      const tenantsSnap = await db.collection("users")
+        .where("role", "==", "tenant")
+        .where("status", "==", "active")
         .get();
 
-      console.log(
-        `[SCHEDULER] Running reminder check for ${tenantsSnap.size} active tenant(s)`,
-      );
-
-      // ── Per-tenant loop ─────────────────────────────────────────────────────
       for (const tenantDoc of tenantsSnap.docs) {
         try {
           const tenant = tenantDoc.data();
           const tenantId = tenantDoc.id;
+          const schedule = String(tenant.paymentSchedule ?? "monthly");
+          const storedNextDue = tenant.nextDueAt ?? tenant.billingStartedAt ?? tenant.createdAt;
+          const nextDueAt: Date | null = storedNextDue?.toDate ? storedNextDue.toDate() : null;
+          if (!nextDueAt) continue;
 
-          // ── Skip: no phone number ─────────────────────────────────────────
-          if (!tenant.contactNo) {
-            console.log(`[SKIP] No phone for tenant: ${tenantId}`);
-            continue;
-          }
-
-          // ── Skip: no stall reference ──────────────────────────────────────
-          if (!tenant.stallId) {
-            console.log(`[SKIP] No stall found for tenant: ${tenantId}`);
-            continue;
-          }
-
-          const stallDoc = await db
-            .collection('stalls')
-            .doc(tenant.stallId)
-            .get();
-
-          if (!stallDoc.exists) {
-            console.log(`[SKIP] No stall found for tenant: ${tenantId}`);
-            continue;
-          }
-
-          const stall = stallDoc.data()!;
-          // Billing terms live on the TENANT, not the stall -- otherwise a
-          // relocated tenant gets checked against whoever rented this stall
-          // before them. The stall doc is still fetched for its spaceId,
-          // used in the SMS message below.
-          const schedule: string = tenant.paymentSchedule ?? 'monthly';
-
-          // ── Skip: already paid for this period ────────────────────────────
-          // nowManila (not `new Date()`) -- see paymentChecker.ts's comment
-          // on isPaymentDue for why passing raw server/UTC time here broke
-          // every reminder scheduled between 12:00-7:59 AM Manila time.
-          const due = await isPaymentDue(tenantId, schedule, tenant.price ?? 0, nowManila);
+          const due = await isPaymentDue(
+            tenantId,
+            schedule,
+            Number(tenant.price ?? 0),
+            nowManila,
+            nextDueAt,
+          );
           if (!due) continue;
 
-          // ── Skip: reminder already sent this period ───────────────────────
-          const alreadySent = await hasReminderBeenSent(tenantId, schedule, nowManila);
-          if (alreadySent) continue;
-
-          // ── Build SMS message ─────────────────────────────────────────────
-          const fullName =
-            `${tenant.firstName ?? ''} ${tenant.lastName ?? ''}`.trim();
+          const stallSnap = tenant.stallId
+            ? await db.collection("stalls").doc(String(tenant.stallId)).get()
+            : null;
+          const stall = stallSnap?.data() ?? {};
+          const fullName = [tenant.firstName, tenant.middleName, tenant.lastName].filter(Boolean).join(" ");
           const outstandingBalance = await getOutstandingBalance(
             tenantId,
             schedule,
-            tenant.price ?? 0,
+            Number(tenant.price ?? 0),
             nowManila,
+            nextDueAt,
           );
 
-          const message = [
-            'Mahalagang Paalala Ukol sa Bayad sa Pwesto sa Palengke',
-            '',
-            `Magandang araw, ${fullName}! Nais lamang naming ipaalala ang iyong natitirang balanse para sa iyong upa sa palengke, na nagkakahalaga ng ₱${outstandingBalance.toLocaleString('en-PH', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}.`,
-            '',
-            'Maaari po itong bayaran sa pamamagitan ng ating online payment channels sa app, o magtungo sa opisina ng admin sa oras ng trabaho. Kung nakapagbayad na po, maaari na lamang balewalain ang abisong ito. Maraming salamat po!',
-          ].join('\n');
-
-          // ── Send SMS (best-effort) ─────────────────────────────────────────
-          const reminderRef = db.collection('reminder_logs').doc(
-            `${tenantId}_${schedule}_${getReminderPeriodKey(schedule, nowManila)}`,
-          );
-          const claimed = await db.runTransaction(async (transaction) => {
+          const logId = `${tenantId}_${reminderPeriodKey(schedule, nextDueAt, nowManila)}`;
+          const reminderRef = db.collection("reminder_logs").doc(logId);
+          const channelState = await db.runTransaction(async (transaction) => {
             const existing = await transaction.get(reminderRef);
-            if (existing.exists) return false;
-            transaction.create(reminderRef, {
+            const data = existing.data() ?? {};
+            const smsDone = data.smsStatus === "accepted" || data.smsStatus === "skipped";
+            const notificationDone = data.notificationStatus === "created";
+            if (smsDone && notificationDone) return {claimed: false, smsDone, notificationDone};
+            if (data.status === "sending" && Number(data.leaseUntil ?? 0) > Date.now()) {
+              return {claimed: false, smsDone, notificationDone};
+            }
+            transaction.set(reminderRef, {
               tenantId,
               schedule,
-              status: 'sending',
-              sentAt: FieldValue.serverTimestamp(),
-            });
-            return true;
+              dueAt: storedNextDue,
+              status: "sending",
+              leaseUntil: Date.now() + RETRY_LEASE_MS,
+              lastAttemptAt: FieldValue.serverTimestamp(),
+            }, {merge: true});
+            return {claimed: true, smsDone, notificationDone};
           });
-          if (!claimed) continue;
+          if (!channelState.claimed) continue;
 
-          try {
-            const smsResult = await sendSMSWithRetry(
-              tenant.contactNo,
-              message,
-              tenantId,
-              'payment-reminder',
-            );
-
-            await reminderRef.update({
-              status: 'accepted',
-              providerMessageId: smsResult.providerMessageId,
-              providerStatus: smsResult.providerStatus,
-              attempts: smsResult.attempts,
-            });
-
-            console.log(
-              `[SUCCESS] Reminder accepted for tenant ${tenantId}`,
-            );
-          } catch (smsError) {
-            await reminderRef.delete().catch(() => undefined);
-            console.error('[SMS FAILED] Reminder was not accepted', {
-              tenantId,
-              error: smsError instanceof Error ? smsError.message : 'Unknown error',
-            });
-            // Do not rethrow — continue processing remaining tenants
+          let notificationDone = channelState.notificationDone;
+          if (!notificationDone) {
+            try {
+              const notificationRef = db.collection("notifications").doc(`${logId}_inapp`);
+              const notificationSnap = await notificationRef.get();
+              const overdueDays = Math.max(0, localDayNumber(nowManila) - localDayNumber(nextDueAt));
+              const duePhrase = overdueDays === 0
+                ? "is due today"
+                : `is ${overdueDays} day${overdueDays === 1 ? "" : "s"} overdue`;
+              if (!notificationSnap.exists) {
+                await notificationRef.create({
+                  userId: tenantId,
+                  type: "payment_reminder",
+                  category: "payment",
+                  route: "/(tabs)/payments",
+                  message: `Hi ${fullName}, your ${schedule} rent for ${stall.spaceId ? `Stall ${stall.spaceId}` : "your assigned space"} ${duePhrase}. Please settle your payment with the admin at the Admin Office.`,
+                  read: false,
+                  createdAt: FieldValue.serverTimestamp(),
+                  expiresAt: Date.now() + NOTIFICATION_RETENTION_MS,
+                  reminderLogId: logId,
+                });
+              }
+              notificationDone = true;
+              await reminderRef.set({notificationStatus: "created"}, {merge: true});
+            } catch (error) {
+              await reminderRef.set({notificationStatus: "failed"}, {merge: true});
+              console.error("[NOTIFICATION FAILED]", {tenantId, error});
+            }
           }
 
-          // ── Push in-app notification (independent of SMS outcome) ──────────
-          // SMS and the in-app notification are two separate delivery
-          // channels for the same reminder -- the SMS provider failing
-          // (bad number, provider outage, quota) shouldn't silently take
-          // the in-app notification down with it. This used to live inside
-          // the SMS try block above, so any SMS failure meant the tenant
-          // never saw the reminder in-app either.
-          try {
-            await db.collection('notifications').add({
-              userId: tenantId,
-              message: `Hi ${fullName}, your ${schedule} rent for Stall ${stall.spaceId} is due today. Please settle your payment with the admin at the Admin Office.`,
-              read: false,
-              createdAt: FieldValue.serverTimestamp(),
-            });
-          } catch (notifError) {
-            console.log(`[NOTIF FAILED] Could not create in-app notification for ${tenantId}`, notifError);
+          const smsMessage = [
+            "Mahalagang Paalala Ukol sa Bayad sa Pwesto sa Palengke",
+            "",
+            `Magandang araw, ${fullName}! Ang natitirang balanse mo ay ₱${outstandingBalance.toLocaleString("en-PH", {minimumFractionDigits: 2, maximumFractionDigits: 2})}.`,
+            "",
+            "Maaari itong bayaran sa RentWise app o sa Admin Office. Kung nakapagbayad na, maaari mong balewalain ang abisong ito. Salamat!",
+          ].join("\n");
+
+          let smsDone = channelState.smsDone;
+          if (!smsDone && !tenant.contactNo) {
+            smsDone = true;
+            await reminderRef.set({smsStatus: "skipped", smsReason: "missing-contact"}, {merge: true});
+          } else if (!smsDone) {
+            try {
+              const result = await sendSMSWithRetry(tenant.contactNo, smsMessage, tenantId, "payment-reminder");
+              smsDone = true;
+              await reminderRef.set({
+                smsStatus: "accepted",
+                providerMessageId: result.providerMessageId,
+                providerStatus: result.providerStatus,
+                smsAttempts: result.attempts,
+              }, {merge: true});
+            } catch (error) {
+              await reminderRef.set({
+                smsStatus: "failed",
+                smsError: error instanceof Error ? error.message : "Unknown error",
+              }, {merge: true});
+              console.error("[SMS FAILED]", {tenantId, error});
+            }
           }
-        } catch (tenantError) {
-          // One tenant failing must not stop the rest
-          console.log(tenantError);
+
+          await reminderRef.set({
+            status: smsDone && notificationDone ? "complete" : "partial",
+            leaseUntil: 0,
+            completedAt: smsDone && notificationDone ? FieldValue.serverTimestamp() : null,
+          }, {merge: true});
+        } catch (error) {
+          console.error("[TENANT REMINDER FAILED]", {tenantId: tenantDoc.id, error});
         }
       }
     } catch (error) {
-      // Top-level failure (e.g. Firestore query failed)
-      console.log(error);
+      console.error("[SCHEDULER FAILED]", error);
+      throw error;
     }
   },
 );

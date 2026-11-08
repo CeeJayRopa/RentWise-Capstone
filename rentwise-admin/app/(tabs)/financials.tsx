@@ -13,30 +13,37 @@ import {
   RefreshControl,
   Animated,
   Easing,
+  KeyboardAvoidingView,
+  Keyboard,
+  Platform,
+  Dimensions,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useFocusEffect } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import {
-  addDoc,
   collection,
   doc,
   getDocs,
   getDoc,
   onSnapshot,
   query,
-  serverTimestamp,
+  Timestamp,
   updateDoc,
   where,
 } from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { House, HelpCircle, Users, Wallet, Receipt as ReceiptIcon, CheckCircle2, Eye, Clock, ArrowRight, Building2, AlertCircle } from "lucide-react-native";
+import { House, HelpCircle, Users, Receipt as ReceiptIcon, CheckCircle2, Eye, Clock, ArrowRight, ChevronDown, Search, X } from "lucide-react-native";
 import { auth } from "../../shared/services/auth";
 import { db } from "../../shared/services/firestore";
+import { firebaseApp } from "../../shared/firebaseConfig";
 import { readLocalCache, saveLocalCache } from "../../shared/services/localCache";
+import { requireOnlineAction } from "../../shared/services/networkStatus";
 import { logDetailedUpdate } from "../../shared/services/updatesService";
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import HelpSupportModal from "../components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../../shared/services/onboardingTour";
 import {
   getReminderSchedule,
@@ -44,12 +51,61 @@ import {
   DEFAULT_REMINDER_HOUR,
   DEFAULT_REMINDER_MINUTE,
 } from "../../shared/services/reminderSchedule";
-import { Badge } from "../../shared/components/ui";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import * as Print from "expo-print";
 import RNBlobUtil from "react-native-blob-util";
+import {
+  getSavedReceiptDirectory,
+  requestReceiptDirectoryAccess,
+  saveBase64PdfToReceiptDirectory,
+} from "../../shared/services/receiptStorage";
 
-type StatusFilter = "All" | "Paid" | "Unpaid";
+async function confirmReceiptFolderAccess(): Promise<boolean> {
+  if (Platform.OS !== "android") return true;
+  if (await getSavedReceiptDirectory()) return true;
+
+  const approved = await new Promise<boolean>((resolve) => {
+    Alert.alert(
+      "Allow receipt storage?",
+      "RentWise needs access to a folder you choose so it can save receipt soft copies. RentWise can only access the folder you select.",
+      [
+        { text: "Not now", style: "cancel", onPress: () => resolve(false) },
+        { text: "Choose folder", onPress: () => resolve(true) },
+      ],
+      { cancelable: true, onDismiss: () => resolve(false) },
+    );
+  });
+
+  if (!approved) return false;
+  return Boolean(await requestReceiptDirectoryAccess());
+}
+
+type StatusFilter = "All" | "Paid" | "Unpaid" | "Pending";
+
+function scheduleIntervalDays(schedule: string): number {
+  if (schedule === "daily") return 1;
+  if (schedule === "weekly") return 7;
+  if (schedule === "semi-monthly") return 15;
+  return 30;
+}
+
+function scheduleAdvanceLimit(schedule: string): number {
+  if (schedule === "daily") return 365;
+  if (schedule === "weekly") return 52;
+  if (schedule === "semi-monthly") return 24;
+  return 12;
+}
+
+function rollingAmountDue(dailyRate: number, schedule: string, nextDueAt: Date | null, now: Date): number {
+  const periodsDue = rollingPeriodsDue(schedule, nextDueAt, now);
+  return Math.max(0, dailyRate) * scheduleIntervalDays(schedule) * periodsDue;
+}
+
+function rollingPeriodsDue(schedule: string, nextDueAt: Date | null, now: Date): number {
+  if (!nextDueAt || Number.isNaN(nextDueAt.getTime()) || now < nextDueAt) return 0;
+  const days = scheduleIntervalDays(schedule);
+  return Math.floor((now.getTime() - nextDueAt.getTime()) / (days * 86400000)) + 1;
+}
 
 type TenantRow = {
   id: string;
@@ -61,9 +117,15 @@ type TenantRow = {
   paymentSchedule: string;
   status: "paid" | "unpaid" | "online";
   paymentId: string | null;
+  pendingAtMs: number;
+  pendingAmount: number;
   // Month-scoped balance (matches rentwise-tenant/app/dashboard.tsx): what's
   // due right now, accounting for whatever's already been paid this month.
   paymentDue: number;
+  billingDaysDue: number;
+  category: string;
+  latestReceiptNo: string;
+  latestPaidAmount: number;
 };
 
 type StallInfo = {
@@ -77,35 +139,14 @@ type StallInfo = {
 // charge is derived by multiplying that daily rate by however many days
 // fall in the period containing `date`.
 function computePeriodCharge(dailyRate: number, schedule: string, date: Date): number {
-  if (schedule === "daily") return dailyRate;
-  if (schedule === "weekly") return dailyRate * 7;
-  const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
-  if (schedule === "semi-monthly") {
-    const daysInHalf = date.getDate() <= 15 ? 15 : daysInMonth - 15;
-    return dailyRate * daysInHalf;
-  }
-  return dailyRate * daysInMonth; // monthly
+  return dailyRate * scheduleIntervalDays(schedule);
 }
 
 // Advances `d` to the start of the next billing period for `schedule`.
 function nextPeriodStart(schedule: string, d: Date): Date {
   const n = new Date(d);
-  if (schedule === "daily") {
-    n.setDate(n.getDate() + 1);
-    return n;
-  }
-  if (schedule === "weekly") {
-    n.setDate(n.getDate() + 7);
-    return n;
-  }
-  if (schedule === "semi-monthly") {
-    if (n.getDate() <= 15) {
-      n.setDate(16);
-      return n;
-    }
-    return new Date(n.getFullYear(), n.getMonth() + 1, 1);
-  }
-  return new Date(n.getFullYear(), n.getMonth() + 1, 1); // monthly
+  n.setDate(n.getDate() + scheduleIntervalDays(schedule));
+  return n;
 }
 
 // Sums each billing period's charge for every period from day 1 of the
@@ -134,11 +175,7 @@ function chargedSinceMonthStart(dailyRate: number, schedule: string, today: Date
 // reads more naturally, especially "cutoffs" for semi-monthly, which is
 // the term actually used locally for that schedule.
 function periodUnitLabel(schedule: string, count: number): string {
-  const plural = count !== 1;
-  if (schedule === "daily") return plural ? "days" : "day";
-  if (schedule === "weekly") return plural ? "weeks" : "week";
-  if (schedule === "semi-monthly") return plural ? "cutoffs" : "cutoff";
-  return plural ? "months" : "month";
+  return `${scheduleIntervalDays(schedule)}-day interval${count === 1 ? "" : "s"}`;
 }
 
 function normalizePaymentSchedule(value: unknown): string {
@@ -149,10 +186,8 @@ function normalizePaymentSchedule(value: unknown): string {
 }
 
 function paymentScheduleLabel(schedule: string): string {
-  return schedule
-    .split("-")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join("-");
+  const days = scheduleIntervalDays(schedule);
+  return `${days} ${days === 1 ? "day" : "days"}`;
 }
 
 function formatPeso(amount: number): string {
@@ -162,17 +197,28 @@ function formatPeso(amount: number): string {
   })}`;
 }
 
+function paymentTimeMs(payment: any): number {
+  const raw = payment?.createdAt ?? payment?.date;
+  if (typeof raw?.toMillis === "function") return raw.toMillis();
+  if (typeof raw?.seconds === "number") return raw.seconds * 1000;
+  if (raw instanceof Date) return raw.getTime();
+  const parsed = raw ? new Date(raw).getTime() : 0;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 // Matches ampmTrack/ampmPill below: track is 68 tall with 3px padding on
 // each side, so each half (and the pill sliding between them) is 31 tall.
 const AMPM_PILL_HEIGHT = 31;
 
 export default function Financials() {
   const insets = useSafeAreaInsets();
+  const screenHeight = Dimensions.get("screen").height;
 
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<StatusFilter>("All");
+  const [searchQuery, setSearchQuery] = useState("");
   const [rows, setRows] = useState<TenantRow[]>([]);
   const [selectedTenant, setSelectedTenant] = useState<TenantRow | null>(null);
   const [paymentModal, setPaymentModal] = useState(false);
@@ -183,24 +229,54 @@ export default function Financials() {
   const [profilePayments, setProfilePayments] = useState<any[]>([]);
   const [processing, setProcessing] = useState(false);
   const [cashReceived, setCashReceived] = useState("");
+  const [paymentQuantity, setPaymentQuantity] = useState("0");
+  const paymentKeyboardVisibleRef = useRef(false);
+  const paymentModalScrollRef = useRef<ScrollView>(null);
+  const [paymentKeyboardHeight, setPaymentKeyboardHeight] = useState(0);
   const [receiptPreviewModal, setReceiptPreviewModal] = useState(false);
   const [onlineConfirmModal, setOnlineConfirmModal] = useState(false);
   const [selectedOnlinePayment, setSelectedOnlinePayment] = useState<any>(null);
+  const [legacyPaymentIntentId, setLegacyPaymentIntentId] = useState("");
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
 
   const [reminderHour, setReminderHour] = useState(DEFAULT_REMINDER_HOUR);
-  const [reminderMinute, setReminderMinute] = useState(DEFAULT_REMINDER_MINUTE);
+  const [reminderMinute, setReminderMinute] = useState<0 | 30>(DEFAULT_REMINDER_MINUTE);
   const [showReminderModal, setShowReminderModal] = useState(false);
 
   const handleCashReceivedChange = (value: string) => {
     setCashReceived(value.replace(/\D/g, "").slice(0, 6));
   };
+  const handlePaymentQuantityChange = (value: string) => {
+    setPaymentQuantity(value.replace(/\D/g, "").slice(0, 3));
+  };
+  const revealPaymentFields = () => {
+    // Wait until Android finishes resizing the modal for the keyboard, then
+    // scroll the form instead of moving/recentering the whole modal.
+    setTimeout(() => paymentModalScrollRef.current?.scrollToEnd({ animated: true }), 250);
+  };
   const [savingReminder, setSavingReminder] = useState(false);
+
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener("keyboardDidShow", (event) => {
+      paymentKeyboardVisibleRef.current = true;
+      setPaymentKeyboardHeight(event.endCoordinates.height);
+      setTimeout(() => paymentModalScrollRef.current?.scrollToEnd({ animated: true }), 50);
+    });
+    const hideSubscription = Keyboard.addListener("keyboardDidHide", () => {
+      paymentKeyboardVisibleRef.current = false;
+      setPaymentKeyboardHeight(0);
+    });
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
   // Draft values edited inside the modal -- only committed to
   // reminderHour/reminderMinute (and Firestore) on Save, so Cancel discards
   // any in-progress stepper taps.
   const [draftHour12, setDraftHour12] = useState(2);
-  const [draftMinute, setDraftMinute] = useState(30);
+  const [draftMinute, setDraftMinute] = useState<0 | 30>(30);
   const [draftIsPM, setDraftIsPM] = useState(true);
   // Drives the sliding AM/PM pill -- 0 = AM, 1 = PM.
   const ampmSlideAnim = useRef(new Animated.Value(1)).current;
@@ -217,6 +293,7 @@ export default function Financials() {
   const homeRef = useRef<View>(null);
   const helpRef = useRef<View>(null);
   const summaryRef = useRef<View>(null);
+  const searchRef = useRef<View>(null);
   const filterRef = useRef<View>(null);
   const reminderTimeRef = useRef<View>(null);
   const listRef = useRef<View>(null);
@@ -306,6 +383,7 @@ export default function Financials() {
   }
 
   async function saveReminderTime() {
+    if (!(await requireOnlineAction("Saving the reminder schedule"))) return;
     const hour24 = draftIsPM
       ? (draftHour12 % 12) + 12
       : draftHour12 % 12;
@@ -380,9 +458,6 @@ export default function Financials() {
     const stallMap = stallMapRef.current;
     const today = new Date();
 
-    const year = today.getFullYear();
-    const month = today.getMonth();
-
     const tenantList: TenantRow[] = userDocs.map((d) => {
       const u = d.data();
       const stall = stallMap.get(u.stallId);
@@ -392,22 +467,23 @@ export default function Financials() {
       const schedule = normalizePaymentSchedule(u.paymentSchedule);
       const dailyRate = u.price ?? 0;
 
-      const paidThisMonth = tenantPayments.reduce((sum, p) => {
-        if (p.status !== "approved") return sum;
-        const pd = p.date?.toDate?.();
-        if (!pd || pd.getFullYear() !== year || pd.getMonth() !== month) return sum;
-        return sum + Number(p.amount ?? p.paymentAmount ?? 0);
-      }, 0);
+      const latestApprovedPayment = tenantPayments
+        .filter((p) => p.status === "approved")
+        .sort((a, b) => Number(b.date?.seconds ?? 0) - Number(a.date?.seconds ?? 0))[0];
 
-      const chargedToDate = chargedSinceMonthStart(dailyRate, schedule, today);
-      const paymentDue = chargedToDate - paidThisMonth;
+      const storedNextDue = u.nextDueAt ?? u.billingStartedAt ?? u.createdAt;
+      const nextDueAt = storedNextDue?.toDate ? storedNextDue.toDate() : null;
+      const paymentDue = rollingAmountDue(dailyRate, schedule, nextDueAt, today);
+      const billingDaysDue = scheduleIntervalDays(schedule) * rollingPeriodsDue(schedule, nextDueAt, today);
 
       let tenantStatus: "paid" | "unpaid" | "online" = "unpaid";
       let paymentId: null | string = null;
 
       // A pending online payment always needs admin action (confirm it),
       // regardless of whether the tenant is otherwise caught up.
-      const pendingPayment = tenantPayments.find((p) => p.status === "pending");
+      const pendingPayment = tenantPayments
+        .filter((p) => p.status === "pending")
+        .sort((a, b) => paymentTimeMs(b) - paymentTimeMs(a))[0];
       if (pendingPayment) {
         tenantStatus = "online";
         paymentId = pendingPayment.id;
@@ -431,7 +507,15 @@ export default function Financials() {
         paymentSchedule: schedule,
         status: tenantStatus,
         paymentId,
+        pendingAtMs: pendingPayment ? paymentTimeMs(pendingPayment) : 0,
+        pendingAmount: pendingPayment
+          ? Number(pendingPayment.amount ?? pendingPayment.paymentAmount ?? 0)
+          : 0,
         paymentDue,
+        billingDaysDue,
+        category: String(u.marketCategory ?? u.businessType ?? u.category ?? "Market Tenant"),
+        latestReceiptNo: String(latestApprovedPayment?.receiptNo ?? ""),
+        latestPaidAmount: Number(latestApprovedPayment?.amount ?? latestApprovedPayment?.paymentAmount ?? 0),
       };
     });
 
@@ -491,6 +575,7 @@ export default function Financials() {
     useCallback(() => {
       setLoading(true);
       let unsubPayments: (() => void) | undefined;
+      let unsubPendingPayments: (() => void) | undefined;
       let unsubUsers: (() => void) | undefined;
       let unsubStalls: (() => void) | undefined;
 
@@ -526,21 +611,36 @@ export default function Financials() {
           });
 
           // Real-time payments listener — fires immediately then on every change
+          let approvedPayments: any[] = [];
+          let pendingPayments: any[] = [];
+          const publishPayments = () => {
+            const allPayments = [...approvedPayments, ...pendingPayments];
+            paymentsRef.current = allPayments;
+            computeRows(allPayments);
+            setLoading(false);
+          };
+          const paymentWindowStart = Timestamp.fromDate(new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1));
           unsubPayments = onSnapshot(
-            collection(db, "payments"),
+            query(collection(db, "payments"), where("status", "==", "approved"), where("date", ">=", paymentWindowStart)),
             (paymentsSnap) => {
-              const allPayments: any[] = paymentsSnap.docs.map((d) => ({
+              approvedPayments = paymentsSnap.docs.map((d) => ({
                 id: d.id,
                 ...d.data(),
               }));
-              paymentsRef.current = allPayments;
-              computeRows(allPayments);
-              setLoading(false);
+              publishPayments();
             },
             (err) => {
               console.log("FINANCIALS PAYMENTS LISTENER ERROR:", err);
               setLoading(false);
             },
+          );
+          unsubPendingPayments = onSnapshot(
+            query(collection(db, "payments"), where("status", "==", "pending")),
+            (paymentsSnap) => {
+              pendingPayments = paymentsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+              publishPayments();
+            },
+            (err) => console.log("FINANCIALS PENDING PAYMENTS LISTENER ERROR:", err),
           );
         } catch (e) {
           console.log("FINANCIALS FETCH ERROR:", e);
@@ -556,6 +656,7 @@ export default function Financials() {
         if (unsubUsers) unsubUsers();
         if (unsubStalls) unsubStalls();
         if (unsubPayments) unsubPayments();
+        if (unsubPendingPayments) unsubPendingPayments();
       };
     }, []),
   );
@@ -564,6 +665,8 @@ export default function Financials() {
     if (!receiptData) return;
 
     try {
+      if (!(await confirmReceiptFolderAccess())) return;
+
       const receiptNo =
         receiptData.receiptNo ?? "RW-" + Date.now().toString().slice(-8);
 
@@ -573,15 +676,15 @@ export default function Financials() {
         <h1 style="text-align:center;">RentWise</h1>
         <h2 style="text-align:center;">Tenant's Digital Receipt</h2>
         <hr/>
-        <p><b>Receipt No:</b> ${receiptNo}</p>
-        <p><b>Tenant Name:</b> ${receiptData.tenantName}</p>
-        <p><b>Building Number:</b> ${receiptData.buildingNumber}</p>
-        <p><b>Space ID:</b> ${receiptData.spaceId}</p>
+        <p><b>Receipt No:</b> ${receiptNo || "N/A"}</p>
+        <p><b>Tenant Name:</b> ${receiptData.tenantName || "N/A"}</p>
+        <p><b>Building Number:</b> ${receiptData.buildingNumber || "N/A"}</p>
+        <p><b>Space ID:</b> ${receiptData.spaceId || "N/A"}</p>
         <p><b>Date:</b> ${receiptData.date instanceof Date ? receiptData.date.toDateString() : new Date(receiptData.date).toDateString()}</p>
         <p><b>Rent Amount:</b> ₱${receiptData.rentAmount}</p>
         <p><b>Payment:</b> ₱${receiptData.payment}</p>
         <p><b>Change:</b> ₱${receiptData.change}</p>
-        <p><b>Approval Status:</b> ${receiptData.status}</p>
+        <p><b>Approval Status:</b> ${receiptData.status || "N/A"}</p>
         <hr/>
         <h3 style="text-align:center;">Thank you for your payment</h3>
       </body>
@@ -591,6 +694,16 @@ export default function Financials() {
       const { base64 } = await Print.printToFileAsync({ html, base64: true });
 
       const fileName = `receipt-${receiptNo}.pdf`;
+      if (Platform.OS === "android") {
+        const saved = await saveBase64PdfToReceiptDirectory(base64!, fileName);
+        if (!saved) {
+          Alert.alert("Folder needed", "Choose a folder to save your receipt.");
+          return;
+        }
+        Alert.alert("Downloaded", "Receipt saved to your chosen folder.");
+        return;
+      }
+
       const cachePath = `${RNBlobUtil.fs.dirs.CacheDir}/${fileName}`;
       await RNBlobUtil.fs.writeFile(cachePath, base64!, "base64");
       await RNBlobUtil.MediaCollection.copyToMediaStore(
@@ -607,75 +720,9 @@ export default function Financials() {
     }
   };
 
-  const confirmCashPayment = async () => {
-    if (!selectedTenant) return;
-
-    const received = Number(cashReceived);
-    const rentDue = computePeriodCharge(
-      selectedTenant.rent,
-      selectedTenant.paymentSchedule,
-      new Date(),
-    );
-
-    if (received < rentDue) {
-      alert("Insufficient payment");
-
-      return;
-    }
-
-    setProcessing(true);
-
-    try {
-      const receiptNo = "RW-" + Date.now().toString().slice(-8);
-
-      await addDoc(collection(db, "payments"), {
-        userId: selectedTenant.id,
-
-        amount: rentDue,
-
-        rentAmount: rentDue,
-
-        cashReceived: received,
-
-        change: received - rentDue,
-
-        method: "cash",
-
-        status: "approved",
-
-        stallId: selectedTenant.stallId,
-
-        buildingNumber: selectedTenant.buildingNumber,
-
-        spaceId: selectedTenant.spaceId,
-
-        tenantName: selectedTenant.name,
-
-        receiptNo,
-
-        date: serverTimestamp(),
-
-        createdAt: serverTimestamp(),
-
-        receiptGenerated: true,
-
-        receipt: null,
-      });
-
-      setReceiptPreviewModal(false);
-
-      setCashReceived("");
-
-      setReceiptModal(true);
-    } catch (error) {
-      console.log("PAYMENT ERROR", error);
-    } finally {
-      setProcessing(false);
-    }
-  };
-
   const confirmOnlinePayment = async (row: TenantRow) => {
     if (!row.paymentId) return;
+    if (!(await requireOnlineAction("Acknowledging an online payment"))) return;
 
     try {
       const paymentRef = doc(db, "payments", row.paymentId);
@@ -686,7 +733,33 @@ export default function Financials() {
 
       const payment = paymentSnap.data();
 
+      let coveredStalls = Array.isArray(payment.stalls) && payment.stalls.length > 0
+        ? payment.stalls
+        : Array.isArray(payment.receiptData?.stalls) ? payment.receiptData.stalls : [];
+      // Legacy pending payments predate the immutable receipt stall snapshot.
+      // Read the tenant's current assignments only as a display fallback; no
+      // payment or tenant document is modified here.
+      if (coveredStalls.length === 0) {
+        const tenantSnap = await getDoc(doc(db, "users", row.id));
+        if (tenantSnap.exists()) {
+          const tenantData = tenantSnap.data();
+          const ids = [...new Set([
+            ...(Array.isArray(tenantData.stallIds) ? tenantData.stallIds.map(String) : []),
+            String(tenantData.primaryStallId ?? tenantData.stallId ?? ""),
+          ].filter(Boolean))].slice(0, 3);
+          const stallSnaps = await Promise.all(ids.map((id) => getDoc(doc(db, "stalls", id))));
+          coveredStalls = stallSnaps.filter((snap) => snap.exists()).map((snap) => ({
+            stallId: snap.id,
+            buildingNumber: String(snap.data()?.buildingNumber ?? ""),
+            spaceId: String(snap.data()?.spaceId ?? snap.id),
+            dailyRate: Number(snap.data()?.price ?? 0),
+          }));
+        }
+      }
+
       setSelectedTenant(row);
+      setSelectedOnlinePayment(payment);
+      setLegacyPaymentIntentId("");
 
       // `date` can come back as a Firestore Timestamp, a plain Date, an ISO
       // string, or (briefly, if read right after a serverTimestamp() write
@@ -720,6 +793,7 @@ export default function Financials() {
         status: payment.status,
         periodsCovered: payment.periodsCovered ?? 1,
         periodsAdvance: payment.periodsAdvance ?? 0,
+        stalls: coveredStalls,
         // Same itemized, date-labeled lines the tenant saw when they paid --
         // stored on the payment doc at creation, so this reads the real
         // breakdown instead of re-deriving an approximation of it.
@@ -736,7 +810,6 @@ export default function Financials() {
   // sees as "Payment" on their own dashboard — not just a flat per-period
   // rate, so a tenant who's already partly paid this month isn't overcharged.
   const computedRent = selectedTenant ? Math.max(0, selectedTenant.paymentDue) : 0;
-  const change = Number(cashReceived || 0) - computedRent;
 
   // How many billing periods the Rent Amount actually covers — lets the modal explain
   // *why* the total is what it is (e.g. "5 days x P120") instead of just showing a
@@ -745,15 +818,37 @@ export default function Financials() {
     ? computePeriodCharge(selectedTenant.rent, selectedTenant.paymentSchedule, new Date())
     : 0;
   const periodsOwed = periodCharge > 0 ? Math.max(1, Math.round(computedRent / periodCharge)) : 1;
+  const advanceQuantity = Math.max(0, Number(paymentQuantity) || 0);
+  const quantity = periodsOwed + advanceQuantity;
+  const quantityLimit = scheduleAdvanceLimit(selectedTenant?.paymentSchedule ?? "monthly");
+  const paymentTotal = periodCharge * quantity;
+  const change = Number(cashReceived || 0) - paymentTotal;
+  const dueDays = periodsOwed * scheduleIntervalDays(selectedTenant?.paymentSchedule ?? "monthly");
+  const scheduleQuantityLabel = selectedTenant?.paymentSchedule === "daily" ? "Days"
+    : selectedTenant?.paymentSchedule === "weekly" ? "Weeks"
+      : selectedTenant?.paymentSchedule === "semi-monthly" ? "15-day intervals" : "Months";
+  const additionalQuantityLabel = selectedTenant?.paymentSchedule === "daily" ? "Additional days"
+    : selectedTenant?.paymentSchedule === "weekly" ? "Additional weeks"
+      : selectedTenant?.paymentSchedule === "semi-monthly" ? "Additional 15-day intervals" : "Additional months";
 
-  const filteredRows =
-    filter === "All"
-      ? rows
-      : rows.filter((r) => {
-          if (filter === "Paid") return r.status === "paid";
-
-          return r.status === "unpaid" || r.status === "online";
-        });
+  const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
+  const filteredRows = rows
+    .filter((r) => {
+      if (normalizedSearch && !r.name.toLocaleLowerCase().includes(normalizedSearch)) return false;
+      if (filter === "Paid") return r.status === "paid";
+      if (filter === "Unpaid") return r.status === "unpaid";
+      if (filter === "Pending") return r.status === "online";
+      return true;
+    })
+    .sort((a, b) => {
+      // New online transactions stay at the top until confirmed. Once the
+      // live payment status changes, this condition no longer applies and
+      // the tenant returns to the normal building/space order from rows.
+      if (a.status === "online" && b.status !== "online") return -1;
+      if (a.status !== "online" && b.status === "online") return 1;
+      if (a.status === "online" && b.status === "online") return b.pendingAtMs - a.pendingAtMs;
+      return 0;
+    });
 
   const spacesCount = rows.length;
   const paidCount = rows.filter((r) => r.status === "paid").length;
@@ -768,6 +863,7 @@ export default function Financials() {
     // reordering sidesteps entirely, since nothing transitions INTO fab
     // from a scrolled list row anymore.
     { key: "summary", ref: summaryRef, title: "Payment summary", description: "Tracks all active spaces and separates paid, unpaid, and pending online payments waiting for confirmation.", edgeInset: "top" },
+    { key: "search", ref: searchRef, title: "Search", description: "Find a tenant quickly by typing their name.", edgeInset: "top" },
     { key: "filter", ref: filterRef, title: "Status filter", description: "Narrow the list to only paid or only unpaid tenants.", edgeInset: "top" },
     { key: "reminderTime", ref: reminderTimeRef, title: "Reminder time", description: "Set what time tenants get their daily payment reminder.", edgeInset: "top" },
     { key: "list", ref: listRef, title: "Tenant list", description: "Shows each tenant's payment schedule, current due amount, and payment status. Unpaid tenants show Set Paid, while pending online payments show Confirm.", edgeInset: "top" },
@@ -807,7 +903,7 @@ export default function Financials() {
           </View>
           <Text style={styles.headerTitle}>RentWise</Text>
           <View ref={helpRef} collapsable={false}>
-            <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.iconBtn}>
+            <TouchableOpacity onPress={() => setHelpSupportVisible(true)} activeOpacity={0.7} style={styles.iconBtn}>
               <HelpCircle size={22} color={colors.emeraldSoft} />
             </TouchableOpacity>
           </View>
@@ -816,9 +912,6 @@ export default function Financials() {
         {/* Sub-header */}
         <View style={styles.subHeader}>
           <Text style={styles.pageTitle}>Financials</Text>
-          <View style={styles.countPill}>
-            <Text style={styles.countPillText}>{spacesCount} Spaces</Text>
-          </View>
         </View>
       </LinearGradient>
 
@@ -826,42 +919,64 @@ export default function Financials() {
       <View style={styles.body}>
         {/* SUMMARY STATS */}
         <View style={styles.summaryRow} ref={summaryRef} collapsable={false}>
-          <View style={[styles.summaryCard, styles.summaryCardSpaces]}>
-            <View style={styles.summaryCardHeader}>
-              <Text style={styles.summaryLabelSpaces} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Spaces</Text>
-              <Building2 size={12} color={colors.emeraldSoft} />
+          <View style={styles.summaryOverviewCard}>
+            <View style={styles.summarySpacesBlock}>
+              <Text style={styles.summaryTotalValue}>{spacesCount}</Text>
+              <Text style={styles.summaryTotalLabel}>Total Spaces</Text>
+              <Text style={styles.summaryTotalHint}>Active Lease Units</Text>
             </View>
-            <Text style={styles.summaryValueSpaces}>{spacesCount}</Text>
-          </View>
-          <View style={[styles.summaryCard, styles.summaryCardPaid]}>
-            <View style={styles.summaryCardHeader}>
-              <Text style={styles.summaryLabelPaid} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Paid</Text>
-              <CheckCircle2 size={12} color={colors.emerald} />
+            <View style={styles.summaryStatusList}>
+              <View style={styles.summaryStatusRow}>
+                <View style={styles.summaryStatusLabelWrap}>
+                  <View style={[styles.summaryDot, styles.summaryDotPaid]} />
+                  <Text style={styles.summaryStatusLabel}>Paid</Text>
+                </View>
+                <Text style={[styles.summaryStatusValue, styles.summaryPaidValue]}>{paidCount}</Text>
+              </View>
+              <View style={styles.summaryStatusRow}>
+                <View style={styles.summaryStatusLabelWrap}>
+                  <View style={[styles.summaryDot, styles.summaryDotUnpaid]} />
+                  <Text style={styles.summaryStatusLabel}>Unpaid</Text>
+                </View>
+                <Text style={[styles.summaryStatusValue, styles.summaryUnpaidValue]}>{unpaidCount}</Text>
+              </View>
+              <View style={styles.summaryStatusRow}>
+                <View style={styles.summaryStatusLabelWrap}>
+                  <View style={[styles.summaryDot, styles.summaryDotPending]} />
+                  <Text style={styles.summaryStatusLabel}>Pending</Text>
+                </View>
+                <Text style={styles.summaryStatusValue}>{pendingCount}</Text>
+              </View>
             </View>
-            <Text style={styles.summaryValuePaid}>{paidCount}</Text>
           </View>
-          <View style={[styles.summaryCard, styles.summaryCardUnpaid]}>
-            <View style={styles.summaryCardHeader}>
-              <Text style={styles.summaryLabelUnpaid} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Unpaid</Text>
-              <AlertCircle size={12} color={colors.error} />
-            </View>
-            <Text style={styles.summaryValueUnpaid}>{unpaidCount}</Text>
-          </View>
-          <View style={[styles.summaryCard, styles.summaryCardPending]}>
-            <View style={styles.summaryCardHeader}>
-              <Text style={styles.summaryLabelPending} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>Pending</Text>
-              <Clock size={12} color={colors.warning} />
-            </View>
-            <Text style={styles.summaryValuePending}>{pendingCount}</Text>
-          </View>
+        </View>
+
+        {/* TENANT SEARCH */}
+        <View style={styles.searchWrap} ref={searchRef} collapsable={false}>
+          <Search size={19} color={colors.textSecondary} />
+          <TextInput
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="Search tenant name"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="words"
+            autoCorrect={false}
+            returnKeyType="search"
+            style={styles.searchInput}
+            accessibilityLabel="Search tenants by name"
+          />
+          {searchQuery.length > 0 ? (
+            <TouchableOpacity onPress={() => setSearchQuery("")} style={styles.searchClearBtn} accessibilityLabel="Clear tenant search">
+              <X size={17} color={colors.textSecondary} />
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         {/* STATUS FILTER */}
         <View style={styles.filterRow}>
           <View style={styles.filterStatusGroup} ref={filterRef} collapsable={false}>
-          <Text style={styles.filterLabel}>Status</Text>
           <View style={styles.segmentTrack}>
-            {(["All", "Paid", "Unpaid"] as StatusFilter[]).map((opt) => (
+            {(["All", "Paid", "Unpaid", "Pending"] as StatusFilter[]).map((opt) => (
               <TouchableOpacity
                 key={opt}
                 style={[styles.segmentItem, filter === opt && styles.segmentItemActive]}
@@ -875,16 +990,17 @@ export default function Financials() {
             ))}
           </View>
           </View>
-          <View ref={reminderTimeRef} collapsable={false} style={{ transform: [{ translateX: 8 }] }}>
+          <View ref={reminderTimeRef} collapsable={false} style={styles.reminderTimeWrap}>
             <TouchableOpacity
               style={styles.reminderTimeBtn}
               onPress={openReminderModal}
               activeOpacity={0.7}
             >
-              <Clock size={13} color={colors.emerald} style={{ marginRight: 5 }} />
+              <Clock size={13} color={colors.ink} />
               <Text style={styles.reminderTimeBtnText}>
                 {formatReminderTime(reminderHour, reminderMinute)}
               </Text>
+              <ChevronDown size={13} color={colors.ink} />
             </TouchableOpacity>
           </View>
         </View>
@@ -896,15 +1012,10 @@ export default function Financials() {
           </View>
         ) : (
           <View style={styles.card} ref={listRef} collapsable={false}>
-            <View style={styles.cardHeader}>
-              <Wallet size={16} color={colors.emerald} style={{ marginRight: spacing.sm }} />
-              <Text style={styles.cardHeaderText}>Tenant info</Text>
-            </View>
-
             {filteredRows.length === 0 ? (
               <View style={styles.emptyBox}>
                 <Users size={40} color={colors.borderStrong} style={styles.emptyIcon} />
-                <Text style={styles.emptyText}>No tenants found.</Text>
+                <Text style={styles.emptyText}>{normalizedSearch ? `No tenants match “${searchQuery.trim()}”.` : "No tenants found."}</Text>
               </View>
             ) : (
               <ScrollView
@@ -915,33 +1026,53 @@ export default function Financials() {
                   <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.emerald} />
                 }
               >
-                {filteredRows.map((item, idx) => (
+                {filteredRows.map((item, idx) => item.status === "paid" ? (
+                  <View key={item.id} style={[styles.tenantCard, styles.tenantCardPaid]}>
+                    <View style={styles.tenantHeaderRow}>
+                      <View style={styles.paidTenantCopy}>
+                        <Text style={[styles.rowName, styles.rowNamePaid]} numberOfLines={1}>{item.name}</Text>
+                        <Text style={styles.paidTenantMeta} numberOfLines={1}>B{item.buildingNumber} · {item.spaceId}  {item.category || "Market Tenant"} · {paymentScheduleLabel(item.paymentSchedule)}</Text>
+                      </View>
+                      <View style={[styles.statusTag, styles.statusTagPaid]}><Text style={[styles.statusTagText, styles.statusTagTextPaid]}>Paid</Text></View>
+                    </View>
+                    <View style={styles.paidReceiptRow}>
+                      <Text style={styles.receiptSummary} numberOfLines={1}>▤ Receipt {item.latestReceiptNo ? `#${item.latestReceiptNo}` : "record"}{item.latestPaidAmount > 0 ? ` · ${formatPeso(item.latestPaidAmount)}` : ""}</Text>
+                      <View ref={idx === 0 ? viewBtnRef : undefined} collapsable={false} style={styles.compactViewWrap}>
+                        <Pressable style={({ pressed }) => [styles.compactViewBtn, pressed && styles.viewInfoBtnPressed]} onPress={() => router.push({ pathname: "/tenant-preview", params: { tenantId: item.id } })}>
+                          {({ pressed }) => <><Eye size={14} color={pressed ? colors.white : colors.ink} /><Text style={[styles.compactViewText, pressed && styles.viewInfoBtnTextPressed]}>View</Text></>}
+                        </Pressable>
+                      </View>
+                    </View>
+                  </View>
+                ) : (
                   <View key={item.id} style={styles.tenantCard}>
                     {/* TENANT INFO */}
                     <View style={styles.rowLeft}>
+                      <Text style={styles.rowName}>{item.name}</Text>
                       <View style={styles.rowMetaWrap}>
                         <Text style={styles.rowMeta}>
                           B{item.buildingNumber} · {item.spaceId}
                         </Text>
-                        <Badge
-                          label={item.status === "paid" ? "Paid" : item.status === "online" ? "Pending" : "Unpaid"}
-                          tone={item.status === "paid" ? "success" : item.status === "online" ? "warning" : "error"}
-                        />
+                        <Text style={styles.categoryText} numberOfLines={1}>{item.category || "Market Tenant"}</Text>
+                        <View style={[styles.statusTag, styles.nonPaidStatusTag, item.status === "online" ? styles.statusTagPending : styles.statusTagUnpaid]}>
+                          <Text style={[styles.statusTagText, item.status === "online" ? styles.statusTagTextPending : styles.statusTagTextUnpaid]}>{item.status === "online" ? "Pending" : "Unpaid"}</Text>
+                        </View>
                       </View>
-
-                      <Text style={styles.rowName}>{item.name}</Text>
+                      <View style={styles.cardDivider} />
+                      <Text style={styles.billingLabel}>Billing Cadence</Text>
                       <Text
                         style={styles.rowSchedule}
                         numberOfLines={1}
                         adjustsFontSizeToFit
                         minimumFontScale={0.8}
                       >
-                        Payment schedule: {paymentScheduleLabel(item.paymentSchedule)}
+                        {item.billingDaysDue > 0
+                          ? `${item.billingDaysDue} ${item.billingDaysDue === 1 ? "day" : "days"}`
+                          : paymentScheduleLabel(item.paymentSchedule)}
                       </Text>
                       <View style={styles.rowDueWrap}>
-                        <Text style={styles.rowDueLabel}>Due amount</Text>
                         <Text style={[styles.rowDueValue, item.paymentDue <= 0 && styles.rowDueValuePaid]}>
-                          {formatPeso(item.paymentDue)}
+                          {formatPeso(item.status === "online" ? (item.pendingAmount ?? 0) : item.paymentDue)}
                         </Text>
                       </View>
                     </View>
@@ -949,7 +1080,6 @@ export default function Financials() {
                     {/* ACTION BUTTONS — Set Paid on top, View below */}
                     <View style={styles.actionBtns}>
                       {/* PAYMENT BUTTON — hidden once already paid, nothing to action */}
-                      {item.status !== "paid" && (
                         <Pressable
                           style={({ pressed }) => [
                             styles.setPaidBtn,
@@ -962,6 +1092,7 @@ export default function Financials() {
                             } else {
                               setSelectedTenant(item);
                               setCashReceived("");
+                              setPaymentQuantity("0");
                               setPaymentModal(true);
                             }
                           }}
@@ -985,10 +1116,9 @@ export default function Financials() {
                             </>
                           )}
                         </Pressable>
-                      )}
 
                       {/* VIEW INFO BUTTON */}
-                      <View ref={idx === 0 ? viewBtnRef : undefined} collapsable={false}>
+                      <View ref={idx === 0 ? viewBtnRef : undefined} collapsable={false} style={styles.viewBtnWrap}>
                       <Pressable
                         style={({ pressed }) => [
                           styles.viewInfoBtn,
@@ -1019,9 +1149,38 @@ export default function Financials() {
       </View>
 
       {/* CASH PAYMENT MODAL */}
-      <Modal visible={paymentModal} transparent animationType="fade">
-        <View style={styles.modalBg}>
-          <View style={styles.payModalBox}>
+      <Modal
+        visible={paymentModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (paymentKeyboardVisibleRef.current) {
+            Keyboard.dismiss();
+            return;
+          }
+          if (!processing) setPaymentModal(false);
+        }}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalBg}
+          // Android already resizes the visible window for the keyboard.
+          // Applying KAV padding there as well makes this centered modal
+          // alternate between two layouts while a controlled input updates.
+          // Let Android perform the single native movement; iOS still needs
+          // the explicit padding adjustment.
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={Platform.OS === "ios" ? 12 : 0}
+        >
+          <View
+            style={[
+              styles.payModalBox,
+              {
+                maxHeight: paymentKeyboardHeight > 0
+                  ? Math.max(300, screenHeight - paymentKeyboardHeight - insets.top - 20)
+                  : screenHeight * 0.9,
+              },
+            ]}
+          >
             <LinearGradient
               colors={[colors.emerald, colors.ink]}
               start={{ x: 0, y: 0 }}
@@ -1033,7 +1192,13 @@ export default function Financials() {
               </View>
               <Text style={styles.payModalTitle}>Payment Confirmation</Text>
             </LinearGradient>
-            <View style={styles.payModalBody}>
+            <ScrollView
+              ref={paymentModalScrollRef}
+              style={styles.payModalScroll}
+              contentContainerStyle={styles.payModalBody}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
             <View style={styles.payModalRow}>
               <Text style={styles.payModalLabel}>Tenant Name</Text>
               <Text style={styles.modalValue}>{selectedTenant?.name}</Text>
@@ -1053,15 +1218,23 @@ export default function Financials() {
               <Text style={styles.modalValue}>{new Date().toDateString()}</Text>
             </View>
             <View style={styles.payModalRow}>
-              <Text style={styles.payModalLabel}>Rent Amount</Text>
-              <View style={styles.rentAmountBox}>
-                <Text style={styles.payModalAmount}>₱{computedRent}</Text>
-                {periodsOwed > 1 && (
-                  <Text style={styles.dueBreakdownText}>
-                    {periodsOwed} {periodUnitLabel(selectedTenant?.paymentSchedule ?? "monthly", periodsOwed)} × ₱{periodCharge}
-                  </Text>
-                )}
+              <Text style={styles.payModalLabel}>Days</Text>
+              <Text style={styles.modalValue}>{dueDays}</Text>
+            </View>
+            <View style={styles.payModalRow}>
+              <View>
+                <Text style={styles.payModalLabel}>Advance Payment</Text>
+                <Text style={styles.payModalSubLabel}>{additionalQuantityLabel}</Text>
               </View>
+              <TextInput value={paymentQuantity} onChangeText={handlePaymentQuantityChange}
+                keyboardType="numeric" inputMode="numeric" maxLength={3} style={styles.cashInput}
+                placeholder="0" placeholderTextColor={colors.textMuted}
+                onFocus={revealPaymentFields} />
+            </View>
+            <View style={styles.payModalDivider} />
+            <View style={styles.payModalRow}>
+              <Text style={styles.payModalLabel}>Total Amount</Text>
+              <Text style={styles.payModalAmount}>{formatPeso(paymentTotal)}</Text>
             </View>
             <View style={styles.payModalRow}>
               <Text style={styles.payModalLabel}>Cash Received</Text>
@@ -1075,6 +1248,7 @@ export default function Financials() {
                 placeholder="Enter amount"
                 placeholderTextColor={colors.textMuted}
                 style={styles.cashInput}
+                onFocus={revealPaymentFields}
               />
             </View>
             <View style={[styles.payModalRow, styles.payModalRowLast]}>
@@ -1084,7 +1258,10 @@ export default function Financials() {
             <View style={styles.payModalButtons}>
               <Pressable
                 style={({ pressed }) => [styles.payModalBtnSecondary, pressed && !processing && styles.payModalBtnSecondaryPressed]}
-                onPress={() => setPaymentModal(false)}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setPaymentModal(false);
+                }}
                 disabled={processing}
               >
                 {({ pressed }) => (
@@ -1101,55 +1278,27 @@ export default function Financials() {
                     Alert.alert("Please enter payment amount");
                     return;
                   }
-                  if (payment < computedRent) {
+                  if (quantity > quantityLimit) {
+                    const remainingAdvance = Math.max(0, quantityLimit - periodsOwed);
+                    Alert.alert("Advance limit exceeded", `Maximum additional payment is ${remainingAdvance} ${scheduleQuantityLabel.toLowerCase()}.`);
+                    return;
+                  }
+                  if (payment < paymentTotal) {
                     Alert.alert("Insufficient payment");
                     return;
                   }
                   setProcessing(true);
                   try {
-                    const receiptNo = "RW-" + Date.now().toString().slice(-8);
-                    await addDoc(collection(db, "payments"), {
-                      userId: selectedTenant.id,
-                      tenantName: selectedTenant.name,
-                      stallId: selectedTenant.stallId,
-                      buildingNumber: selectedTenant.buildingNumber,
-                      spaceId: selectedTenant.spaceId,
-                      // Only the actual rent due counts toward what the tenant
-                      // has paid — any excess cash tendered is handed back as
-                      // change (see `change` below), not credited as an
-                      // advance payment toward future periods.
-                      amount: computedRent,
-                      rentAmount: computedRent,
-                      cashReceived: payment,
-                      change: Math.max(0, payment - computedRent),
-                      method: "cash",
-                      status: "approved",
-                      receiptGenerated: true,
-                      receiptNo,
-                      date: serverTimestamp(),
-                      approvedAt: serverTimestamp(),
-                      paidAt: serverTimestamp(),
-                      createdAt: serverTimestamp(),
-                      receiptData: {
-                        receiptNo,
-                        date: new Date().toISOString(),
-                        tenantName: selectedTenant.name,
-                        buildingNumber: selectedTenant.buildingNumber,
-                        spaceId: selectedTenant.spaceId,
-                        paymentMethod: "Cash",
-                        rentAmount: computedRent,
-                        payment,
-                        change: Math.max(0, payment - computedRent),
-                        status: "Approved",
-                      },
-                    });
+                    const recordPayment = httpsCallable(getFunctions(firebaseApp), "adminRecordCashPayment");
+                    const response = await recordPayment({tenantId: selectedTenant.id, quantity, cashReceived: payment});
+                    const saved = response.data as {receiptNo: string; amount: number; change: number; nextDueAt: string};
                     void logDetailedUpdate({
                       module: "Financials",
                       type: "Cash Payment Confirmation",
                       tenantId: selectedTenant.id,
                       tenantName: selectedTenant.name,
                       spaceNo: selectedTenant.spaceId,
-                      paymentAmount: computedRent,
+                      paymentAmount: saved.amount,
                       paymentMethod: "cash",
                       oldValue: "Unpaid",
                       newValue: "Paid",
@@ -1161,11 +1310,13 @@ export default function Financials() {
                       buildingNumber: selectedTenant.buildingNumber,
                       spaceId: selectedTenant.spaceId,
                       date: new Date(),
-                      rentAmount: computedRent,
+                      rentAmount: saved.amount,
                       payment,
-                      change: Math.max(0, payment - computedRent),
+                      change: saved.change,
                       status: "Approved",
-                      receiptNo,
+                      receiptNo: saved.receiptNo,
+                      periodsCovered: quantity,
+                      paidThroughAt: saved.nextDueAt,
                     });
                     setCashReceived("");
                     setPaymentModal(false);
@@ -1185,9 +1336,9 @@ export default function Financials() {
                 )}
               </Pressable>
             </View>
-            </View>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal visible={receiptPreviewModal} transparent animationType="fade">
@@ -1329,10 +1480,17 @@ export default function Financials() {
                   <Text style={styles.confirmDetailValue}>{receiptData?.tenantName}</Text>
                 </View>
                 <View style={styles.confirmDetailRow}>
-                  <Text style={styles.confirmDetailLabel}>Space</Text>
-                  <Text style={styles.confirmDetailValue}>
-                    B{receiptData?.buildingNumber} · {receiptData?.spaceId}
-                  </Text>
+                  <Text style={styles.confirmDetailLabel}>Stalls Covered</Text>
+                  <View style={{ alignItems: "flex-end", flex: 1 }}>
+                    {(receiptData?.stalls?.length
+                      ? receiptData.stalls
+                      : [{buildingNumber: receiptData?.buildingNumber, spaceId: receiptData?.spaceId}]
+                    ).map((stall: any, index: number) => (
+                      <Text key={`${stall.buildingNumber}-${stall.spaceId}-${index}`} style={styles.confirmDetailValue}>
+                        B{stall.buildingNumber} · {stall.spaceId}
+                      </Text>
+                    ))}
+                  </View>
                 </View>
                 <View style={styles.confirmDetailRow}>
                   <Text style={styles.confirmDetailLabel}>Payment Date</Text>
@@ -1349,7 +1507,11 @@ export default function Financials() {
                   <Text style={styles.confirmDetailValue}>{receiptData?.paymentMethod || "—"}</Text>
                 </View>
                 <View style={styles.confirmDetailRow}>
-                  <Text style={styles.confirmDetailLabel}>Rent Amount</Text>
+                  <Text style={styles.confirmDetailLabel}>
+                    {String(selectedOnlinePayment?.paymentSchedule ?? "").toLowerCase() === "daily"
+                      ? "Combined Daily Rent"
+                      : "Billing Interval Charge"}
+                  </Text>
                   <Text style={styles.confirmDetailValue}>₱{receiptData?.rentAmount}</Text>
                 </View>
                 {receiptData?.change > 0 && (
@@ -1362,6 +1524,21 @@ export default function Financials() {
                   <Text style={styles.confirmDetailLabel}>Status</Text>
                   <Text style={[styles.confirmDetailValue, { color: colors.warning }]}>PENDING</Text>
                 </View>
+                {!selectedOnlinePayment?.checkoutSessionId && (
+                  <View style={{ marginTop: spacing.md }}>
+                    <Text style={styles.confirmDetailLabel}>PayMongo Payment Intent ID</Text>
+                    <TextInput
+                      value={legacyPaymentIntentId}
+                      onChangeText={setLegacyPaymentIntentId}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      placeholder="pi_..."
+                      placeholderTextColor={colors.textMuted}
+                      style={styles.cashInput}
+                    />
+                    <Text style={[styles.confirmDetailLabel, { marginTop: spacing.xs }]}>Required only for historical payments without a provider reference.</Text>
+                  </View>
+                )}
               </View>
 
               {receiptData?.breakdown?.length > 0 && (
@@ -1391,6 +1568,8 @@ export default function Financials() {
                 style={({ pressed }) => [styles.confirmCloseBtn, pressed && styles.confirmCloseBtnPressed]}
                 onPress={() => {
                   setOnlineConfirmModal(false);
+                  setSelectedOnlinePayment(null);
+                  setLegacyPaymentIntentId("");
                 }}
               >
                 {({ pressed }) => (
@@ -1403,24 +1582,25 @@ export default function Financials() {
                 onPress={async () => {
                   if (!selectedTenant?.paymentId) return;
 
-                  await updateDoc(
-                    doc(db, "payments", selectedTenant.paymentId),
-                    {
-                      status: "approved",
-                      // Do NOT overwrite `date` here — it must stay the
-                      // moment the tenant actually paid (set when the
-                      // payment doc was first created), not when admin
-                      // got around to approving it. Overwriting it shifted
-                      // which day/period the payment counted toward,
-                      // letting a late approval wrongly cover today's
-                      // charge while leaving the day it was paid for
-                      // unpaid.
-                      approvedAt: serverTimestamp(),
-                      verifiedBy: "admin",
-                      paidAt: serverTimestamp(),
-                      "receiptData.status": "Approved",
-                    },
-                  );
+                  try {
+                    if (!selectedOnlinePayment?.checkoutSessionId && !/^pi_[A-Za-z0-9_-]+$/.test(legacyPaymentIntentId.trim())) {
+                      Alert.alert("Provider reference required", "Enter the successful PayMongo Payment Intent ID from the Dashboard.");
+                      return;
+                    }
+                    const approvePayment = httpsCallable(
+                      getFunctions(firebaseApp),
+                      "adminApproveOnlinePayment",
+                    );
+                    await approvePayment({
+                      paymentId: selectedTenant.paymentId,
+                      ...(!selectedOnlinePayment?.checkoutSessionId
+                        ? {legacyPaymentIntentId: legacyPaymentIntentId.trim()}
+                        : {}),
+                    });
+                  } catch (error: any) {
+                    Alert.alert("Approval failed", error?.message || "Unable to approve this payment.");
+                    return;
+                  }
 
                   void logDetailedUpdate({
                     module: "Financials",
@@ -1437,10 +1617,14 @@ export default function Financials() {
                   });
 
                   setOnlineConfirmModal(false);
+                  setSelectedOnlinePayment(null);
+                  setLegacyPaymentIntentId("");
                 }}
               >
                 {({ pressed }) => (
-                  <Text style={[styles.confirmPrimaryBtnText, pressed && styles.confirmPrimaryBtnTextPressed]}>Confirm Payment</Text>
+                  <Text style={[styles.confirmPrimaryBtnText, pressed && styles.confirmPrimaryBtnTextPressed]}>
+                    Confirm Payment
+                  </Text>
                 )}
               </Pressable>
             </View>
@@ -1534,6 +1718,7 @@ export default function Financials() {
       </Modal>
 
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
 
       {/* REMINDER TIME MODAL */}
       <Modal
@@ -1581,7 +1766,7 @@ export default function Financials() {
                 <View style={styles.stepperColumn}>
                   <Pressable
                     style={({ pressed }) => [styles.stepperBtn, pressed && styles.stepperBtnPressed]}
-                    onPress={() => setDraftMinute((m) => (m + 5) % 60)}
+                    onPress={() => setDraftMinute((m) => m === 0 ? 30 : 0)}
                   >
                     {({ pressed }) => (
                       <Text style={[styles.stepperBtnText, pressed && styles.stepperBtnTextPressed]}>+</Text>
@@ -1590,7 +1775,7 @@ export default function Financials() {
                   <Text style={styles.stepperValue}>{draftMinute.toString().padStart(2, "0")}</Text>
                   <Pressable
                     style={({ pressed }) => [styles.stepperBtn, pressed && styles.stepperBtnPressed]}
-                    onPress={() => setDraftMinute((m) => (m - 5 + 60) % 60)}
+                    onPress={() => setDraftMinute((m) => m === 0 ? 30 : 0)}
                   >
                     {({ pressed }) => (
                       <Text style={[styles.stepperBtnText, pressed && styles.stepperBtnTextPressed]}>−</Text>
@@ -1691,26 +1876,25 @@ const styles = StyleSheet.create({
     backgroundColor: colors.parchment,
   },
   actionBtns: {
-    flexDirection: "column",
-    alignItems: "stretch",
-    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
     gap: spacing.sm,
-    marginLeft: spacing.md,
-    width: 128,
-    flexShrink: 0,
+    width: "100%",
+    marginTop: spacing.md,
   },
+  viewBtnWrap: { flex: 1 },
+  compactViewWrap: { flexShrink: 0 },
   viewInfoBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    alignSelf: "center",
-    width: 92,
-    borderRadius: radius.pill,
-    borderWidth: 1.5,
-    borderColor: colors.border,
-    backgroundColor: colors.white,
+    width: "100%",
+    minHeight: 38,
+    borderRadius: 8,
+    borderWidth: 0,
+    backgroundColor: colors.mist,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    paddingVertical: 6,
   },
   viewInfoBtnPressed: {
     backgroundColor: colors.emerald,
@@ -1719,7 +1903,7 @@ const styles = StyleSheet.create({
   viewInfoBtnText: {
     fontSize: fontSize.sm,
     fontFamily: fontFamily.semibold,
-    color: colors.emerald,
+    color: colors.ink,
     textAlign: "center",
   },
   viewInfoBtnTextPressed: {
@@ -1762,13 +1946,6 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   pageTitle: { fontSize: fontSize.md, fontFamily: fontFamily.semibold, color: colors.white },
-  countPill: {
-    backgroundColor: "rgba(255,255,255,0.16)",
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 4,
-  },
-  countPillText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.emeraldSoft },
 
   body: {
     flex: 1,
@@ -1778,22 +1955,93 @@ const styles = StyleSheet.create({
   },
 
   summaryRow: {
-    flexDirection: "row",
     width: "100%",
-    gap: 5,
-    marginBottom: spacing.sm,
-    overflow: "hidden",
+    marginBottom: spacing.lg,
   },
-  summaryCard: {
-    width: 0,
-    flexGrow: 1,
-    flexShrink: 1,
-    flexBasis: 0,
-    minWidth: 0,
-    minHeight: 58,
+  summaryOverviewCard: {
+    minHeight: 104,
+    flexDirection: "row",
+    alignItems: "stretch",
+    backgroundColor: colors.ink,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    ...shadow.card,
+  },
+  summarySpacesBlock: {
+    flex: 1,
+    justifyContent: "center",
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: "rgba(255,255,255,0.24)",
+    paddingRight: spacing.lg,
+  },
+  summaryTotalValue: {
+    fontSize: 42,
+    lineHeight: 44,
+    fontFamily: fontFamily.extrabold,
+    color: colors.white,
+  },
+  summaryTotalLabel: {
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.medium,
+    color: "#6DE8BE",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+    marginTop: 4,
+  },
+  summaryTotalHint: {
+    fontSize: 9,
+    fontFamily: fontFamily.regular,
+    color: "rgba(255,255,255,0.65)",
+    marginTop: 2,
+  },
+  summaryStatusList: {
+    flex: 1,
+    justifyContent: "space-between",
+    paddingLeft: spacing.lg,
+    paddingVertical: 1,
+  },
+  summaryStatusRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  summaryStatusLabelWrap: { flexDirection: "row", alignItems: "center", gap: 7 },
+  summaryDot: { width: 9, height: 9, borderRadius: 5, borderWidth: 1.5, borderColor: "rgba(255,255,255,0.35)" },
+  summaryDotPaid: { backgroundColor: "#64E7B8" },
+  summaryDotUnpaid: { backgroundColor: "#F6B8B8" },
+  summaryDotPending: { backgroundColor: "#F5C842" },
+  summaryStatusLabel: { fontSize: fontSize.xs, fontFamily: fontFamily.medium, color: "rgba(255,255,255,0.78)", textTransform: "uppercase" },
+  summaryStatusValue: { minWidth: 22, textAlign: "right", fontSize: fontSize.md, fontFamily: fontFamily.bold, color: "#F5C842", fontVariant: ["tabular-nums"] },
+  summaryPaidValue: { color: "#64E7B8" },
+  summaryUnpaidValue: { color: "#F6B8B8" },
+  searchWrap: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
     borderRadius: radius.md,
-    paddingVertical: 6,
-    paddingHorizontal: 7,
+    backgroundColor: colors.white,
+    ...shadow.subtle,
+  },
+  searchInput: {
+    flex: 1,
+    paddingVertical: 10,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.regular,
+    color: colors.ink,
+  },
+  searchClearBtn: { width: 30, height: 30, alignItems: "center", justifyContent: "center", borderRadius: 15 },
+  summaryCard: {
+    width: "23%",
+    flexGrow: 0,
+    flexShrink: 0,
+    flexBasis: "23%",
+    minWidth: 0,
+    minHeight: 68,
+    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
     borderWidth: 1,
     borderColor: "transparent",
     overflow: "hidden",
@@ -1804,7 +2052,7 @@ const styles = StyleSheet.create({
   summaryCardPending: {
     backgroundColor: colors.warningSoft,
     borderColor: colors.warning,
-    borderRadius: radius.md,
+    borderRadius: 14,
     overflow: "hidden",
   },
   summaryCardHeader: {
@@ -1816,7 +2064,7 @@ const styles = StyleSheet.create({
   },
   summaryLabelSpaces: {
     flexShrink: 1,
-    fontSize: fontSize.xs - 1,
+    fontSize: fontSize.xs,
     fontFamily: fontFamily.semibold,
     color: colors.emeraldSoft,
     textTransform: "uppercase",
@@ -1824,7 +2072,7 @@ const styles = StyleSheet.create({
   },
   summaryLabelPaid: {
     flexShrink: 1,
-    fontSize: fontSize.xs - 1,
+    fontSize: fontSize.xs,
     fontFamily: fontFamily.semibold,
     color: colors.emerald,
     textTransform: "uppercase",
@@ -1832,7 +2080,7 @@ const styles = StyleSheet.create({
   },
   summaryLabelUnpaid: {
     flexShrink: 1,
-    fontSize: fontSize.xs - 1,
+    fontSize: fontSize.xs,
     fontFamily: fontFamily.semibold,
     color: colors.error,
     textTransform: "uppercase",
@@ -1840,32 +2088,32 @@ const styles = StyleSheet.create({
   },
   summaryLabelPending: {
     flexShrink: 1,
-    fontSize: fontSize.xs - 1,
+    fontSize: fontSize.xs,
     fontFamily: fontFamily.semibold,
     color: colors.warning,
     textTransform: "uppercase",
     letterSpacing: 0.4,
   },
   summaryValueSpaces: {
-    fontSize: fontSize.md,
+    fontSize: fontSize.xl,
     fontFamily: fontFamily.extrabold,
     color: colors.white,
     marginTop: 2,
   },
   summaryValuePaid: {
-    fontSize: fontSize.md,
+    fontSize: fontSize.xl,
     fontFamily: fontFamily.extrabold,
     color: colors.emerald,
     marginTop: 2,
   },
   summaryValueUnpaid: {
-    fontSize: fontSize.md,
+    fontSize: fontSize.xl,
     fontFamily: fontFamily.extrabold,
     color: colors.error,
     marginTop: 2,
   },
   summaryValuePending: {
-    fontSize: fontSize.md,
+    fontSize: fontSize.xl,
     fontFamily: fontFamily.extrabold,
     color: colors.warning,
     marginTop: 2,
@@ -1874,33 +2122,35 @@ const styles = StyleSheet.create({
   filterRow: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     marginBottom: spacing.lg,
   },
 
   filterStatusGroup: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm + 2,
   },
-  filterLabel: { fontSize: fontSize.base, fontFamily: fontFamily.semibold, color: colors.ink },
   segmentTrack: {
     flexDirection: "row",
     backgroundColor: colors.mist,
-    borderRadius: radius.pill,
+    borderRadius: 8,
     padding: 3,
+    ...shadow.subtle,
   },
   segmentItem: {
-    paddingHorizontal: spacing.md + 2,
-    paddingVertical: spacing.xs + 2,
-    borderRadius: radius.pill,
+    minWidth: 55,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 7,
+    borderRadius: 7,
+    alignItems: "center",
   },
   segmentItemActive: {
-    backgroundColor: colors.emerald,
+    backgroundColor: colors.ink,
   },
   segmentText: {
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.semibold,
-    color: colors.textSecondary,
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.medium,
+    color: colors.ink,
   },
   segmentTextActive: {
     color: colors.white,
@@ -1910,49 +2160,55 @@ const styles = StyleSheet.create({
   card: {
     flex: 1,
   },
-  cardHeader: {
-    backgroundColor: colors.emeraldSoft,
-    borderRadius: radius.lg,
-    paddingHorizontal: spacing.xl - 2,
-    paddingVertical: spacing.md + 2,
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: spacing.md,
-  },
-  cardHeaderText: { fontSize: fontSize.base, fontFamily: fontFamily.semibold, color: colors.emerald },
-
   tenantCard: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
     backgroundColor: colors.white,
     borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: spacing.xl - 2,
-    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.md + 2,
+    paddingVertical: spacing.md,
     marginBottom: spacing.sm + 2,
+    ...shadow.card,
   },
-  rowLeft: { flex: 1, flexShrink: 1 },
-  rowMetaWrap: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  rowMeta: { fontSize: fontSize.xs, fontFamily: fontFamily.medium, color: colors.textMuted },
-  rowName: { fontSize: fontSize.base, fontFamily: fontFamily.bold, color: colors.textPrimary, marginTop: spacing.xs + 2 },
-  rowSchedule: { fontSize: fontSize.xs, fontFamily: fontFamily.medium, color: colors.textSecondary, marginTop: 3 },
-  rowDueWrap: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.xs },
-  rowDueLabel: { fontSize: fontSize.xs, fontFamily: fontFamily.medium, color: colors.textMuted },
-  rowDueValue: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.error },
+  tenantCardPaid: { paddingVertical: spacing.md },
+  rowLeft: { width: "100%", position: "relative" },
+  rowMetaWrap: { flexDirection: "row", alignItems: "center", gap: 7, marginTop: 3 },
+  rowMeta: { fontSize: fontSize.xs, fontFamily: fontFamily.medium, color: colors.ink, backgroundColor: colors.mist, borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
+  rowName: { fontSize: fontSize.base, fontFamily: fontFamily.bold, color: colors.textPrimary },
+  rowSchedule: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.regular, color: colors.ink, marginTop: 2 },
+  categoryText: { flex: 1, fontSize: fontSize.xs, fontFamily: fontFamily.regular, color: colors.textSecondary },
+  cardDivider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginVertical: spacing.sm },
+  billingLabel: { fontSize: 9, fontFamily: fontFamily.medium, color: colors.textSecondary, textTransform: "uppercase", letterSpacing: 0.35 },
+  rowDueWrap: { position: "absolute", right: 0, bottom: 0, alignItems: "flex-end" },
+  rowDueValue: { fontSize: 21, fontFamily: fontFamily.extrabold, color: colors.error },
   rowDueValuePaid: { color: colors.emerald },
+
+  tenantHeaderRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  paidTenantCopy: { flex: 1 },
+  rowNamePaid: { fontSize: fontSize.sm },
+  paidTenantMeta: { fontSize: 10, color: colors.textSecondary, fontFamily: fontFamily.regular, marginTop: 2 },
+  statusTag: { borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3 },
+  nonPaidStatusTag: { position: "absolute", right: 0, bottom: 22 },
+  statusTagPaid: { backgroundColor: "#89F0CC" },
+  statusTagUnpaid: { backgroundColor: "#FFDCDC" },
+  statusTagPending: { backgroundColor: colors.warningSoft },
+  statusTagText: { fontSize: 9, fontFamily: fontFamily.bold, textTransform: "uppercase" },
+  statusTagTextPaid: { color: colors.emerald },
+  statusTagTextUnpaid: { color: "#BE262D" },
+  statusTagTextPending: { color: colors.warning },
+  paidReceiptRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm, marginTop: spacing.md },
+  receiptSummary: { flex: 1, fontSize: fontSize.xs, fontFamily: fontFamily.semibold, color: colors.emerald },
+  compactViewBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, width: 74, minHeight: 36, borderRadius: 8, backgroundColor: colors.mist, paddingHorizontal: spacing.sm },
+  compactViewText: { fontSize: fontSize.xs, color: colors.ink, fontFamily: fontFamily.semibold },
 
   setPaidBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    alignSelf: "center",
-    width: 92,
-    borderRadius: radius.pill,
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 8,
     backgroundColor: colors.emerald,
     paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
+    paddingVertical: 6,
     ...shadow.card,
   },
   setPaidBtnIcon: { marginRight: 6 },
@@ -2320,10 +2576,14 @@ const styles = StyleSheet.create({
 
   payModalBox: {
     width: "85%",
+    maxHeight: "90%",
     backgroundColor: colors.white,
     borderRadius: radius.xl + 4,
     overflow: "hidden",
     ...shadow.raised,
+  },
+  payModalScroll: {
+    flexShrink: 1,
   },
   payModalBody: {
     padding: spacing.xl,
@@ -2370,6 +2630,17 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     fontFamily: fontFamily.medium,
     color: colors.textSecondary,
+  },
+  payModalSubLabel: {
+    marginTop: 2,
+    fontSize: fontSize.xs,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+  },
+  payModalDivider: {
+    height: 1,
+    marginVertical: spacing.sm,
+    backgroundColor: colors.border,
   },
   payModalAmount: {
     fontSize: fontSize.md,
@@ -2423,16 +2694,19 @@ const styles = StyleSheet.create({
   reminderTimeBtn: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.emeraldSoft,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 6,
-    marginLeft: "auto",
+    justifyContent: "center",
+    gap: 5,
+    backgroundColor: "#DDF4EA",
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
   },
 
+  reminderTimeWrap: { marginLeft: spacing.sm },
+
   reminderTimeBtnText: {
-    color: colors.emerald,
-    fontSize: fontSize.xs + 1,
+    color: colors.ink,
+    fontSize: fontSize.xs,
     fontFamily: fontFamily.semibold,
   },
 

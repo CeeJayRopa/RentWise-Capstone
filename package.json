@@ -8,5 +8,11 @@
     "rentwise-guest",
     "rentwise-owner",
     "rentwise-tenant"
-  ]
+  ],
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0"
+  },
+  "scripts": {
+    "test:firestore-rules": "firebase emulators:exec --only firestore --project rentwise-payment-rules-test \"node --test functions/test/firestoreRules.test.js\""
+  }
 }

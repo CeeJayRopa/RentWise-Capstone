@@ -26,7 +26,6 @@ import {
   doc,
   onSnapshot,
   query,
-  updateDoc,
   where,
 } from "firebase/firestore";
 import { updatePassword } from "firebase/auth";
@@ -37,8 +36,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { auth } from "../../shared/firebaseConfig";
-import { getTenantData } from "../../services/tenantService";
-import { MONTHS, chargedSinceMonthStart, computePeriodCharge, nextPeriodStart } from "../../services/billingSchedule";
+import { finalizeTenantPasswordChange, getTenantData } from "../../services/tenantService";
+import { computePeriodCharge, nextPeriodStart, rollingAmountDue, scheduleDayLabel, schedulePeriodSummary } from "../../services/billingSchedule";
 
 import { setRememberMe } from "../../shared/services/rememberMe";
 import { hasSeenTenantDashboardTour, markTenantDashboardTourSeen } from "../../shared/services/onboardingTour";
@@ -58,6 +57,7 @@ import {
 } from "lucide-react-native";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import HelpTour, { HelpStep } from "../components/HelpTour";
+import HelpSupportModal from "../components/HelpSupportModal";
 import { bottomNavRefs } from "../components/bottomNavRefs";
 
 // The Schedule card's "₱X / unit" subtitle should reflect whatever the
@@ -70,6 +70,16 @@ const SCHEDULE_UNIT_LABEL: Record<string, string> = {
   "semi-monthly": "cut-off",
   monthly: "month",
 };
+
+function scheduleName(schedule: string): string {
+  const normalized = schedule.trim().toLowerCase();
+  if (normalized === "semi-monthly") return "Semi-Monthly";
+  return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : "—";
+}
+
+function scheduleIntervalLabel(schedule: string): string {
+  return schedule.trim().toLowerCase() === "daily" ? "day" : scheduleDayLabel(schedule);
+}
 
 export default function Dashboard() {
   const insets = useSafeAreaInsets();
@@ -86,6 +96,7 @@ export default function Dashboard() {
   const toastOpacity = useRef(new Animated.Value(0)).current;
 
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
   const bellRef = useRef<View>(null);
   const arShortcutRef = useRef<View>(null);
   const helpRef = useRef<View>(null);
@@ -116,7 +127,7 @@ export default function Dashboard() {
   const tourSteps: HelpStep[] = [
     { key: "bell", ref: bellRef, title: "Notifications", description: "Updates from the admin, like payment confirmations and account changes.", edgeInset: "top", round: true },
     { key: "ar", ref: arShortcutRef, title: "AR Stall Designer", description: "Preview and arrange market fixtures in your space using your phone's camera.", edgeInset: "top", round: true },
-    { key: "payment", ref: paymentCardRef, title: "Rental payment", description: "Your remaining bill this month, how much you've paid, and what's currently due.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(paymentCardRef) },
+    { key: "payment", ref: paymentCardRef, title: "Rental payment", description: "Your current schedule, next payment date, settled amount, and amount due.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(paymentCardRef) },
     { key: "schedule", ref: scheduleRef, title: "Upcoming schedule", description: "Your next rent installments and when they're due.", edgeInset: "top", onBeforeMeasure: () => scrollSectionIntoView(scheduleRef) },
     { key: "navhome", ref: bottomNavRefs.home, title: "Home", description: "Your dashboard — rental payment status and upcoming schedule.", edgeInset: "bottom" },
     { key: "navpayments", ref: bottomNavRefs.payments, title: "Payments", description: "Pay your rent online, and view your payment and receipt history.", edgeInset: "bottom" },
@@ -207,6 +218,8 @@ export default function Dashboard() {
     if (!uid) return;
     const unsubscribe = onSnapshot(doc(db, "users", uid), (snap) => {
       if (snap.exists()) setTenant((prev: any) => ({ ...prev, ...snap.data(), id: snap.id }));
+    }, (error) => {
+      if (auth.currentUser) console.error("TENANT DASHBOARD PROFILE LISTENER ERROR:", error);
     });
     return unsubscribe;
   }, []);
@@ -254,9 +267,9 @@ export default function Dashboard() {
 
   async function handleForcedPasswordChange() {
     if (!(await requireOnlineAction("Changing your password"))) return;
-    const pwRegex = /^(?=.*[a-zA-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
+    const pwRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]).{8,12}$/;
     if (!pwRegex.test(newPassword)) {
-      setChangePwError("8–12 characters with letters, numbers, and special characters.");
+      setChangePwError("8–12 characters with an uppercase letter, number, and special character.");
       return;
     }
     if (newPassword !== confirmNewPassword) {
@@ -269,7 +282,7 @@ export default function Dashboard() {
     setChangePwError("");
     try {
       await updatePassword(user, newPassword);
-      await updateDoc(doc(db, "users", user.uid), { mustChangePassword: false });
+      await finalizeTenantPasswordChange();
       setMustChangePassword(false);
       setNewPassword("");
       setConfirmNewPassword("");
@@ -285,28 +298,34 @@ export default function Dashboard() {
     }
   }
 
-  const successfulPayments = payments.filter((p) => p.status === "approved");
-
   const paymentSchedule = tenant?.paymentSchedule ?? "monthly";
   const today = new Date();
+  const rawBillingStart = tenant?.billingStartedAt ?? tenant?.createdAt;
+  const billingStartedAt = rawBillingStart?.toDate?.()
+    ?? (rawBillingStart ? new Date(rawBillingStart) : null);
+  const storedNextDueAt = tenant?.nextDueAt?.toDate?.()
+    ?? (tenant?.nextDueAt ? new Date(tenant.nextDueAt) : billingStartedAt);
 
-  // "Remaining Bill": the whole calendar month's total rent (daily rate ×
-  // days in month, the same "₱167 × 31 = ₱5,177" total regardless of
-  // schedule) minus everything actually paid (approved only) so far *this
-  // month*. Resets to a fresh balance every new month.
-  const year = today.getFullYear();
-  const month = today.getMonth();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const monthTotalCharge = periodRate * daysInMonth;
-
-  const paidThisMonth = successfulPayments.reduce((sum, p) => {
-    const d = p.date?.toDate ? p.date.toDate() : p.date ? new Date(p.date) : null;
-    if (!d || d.getFullYear() !== year || d.getMonth() !== month) return sum;
-    return sum + Number(p.amount || 0);
-  }, 0);
-
-  const remainingBill = monthTotalCharge - paidThisMonth;
-  const paidPercent = Math.max(0, Math.min(100, (paidThisMonth / Math.max(monthTotalCharge, 1)) * 100));
+  // Schedule-aware, read-only projection. nextDueAt remains the authoritative
+  // coverage boundary shared with payment processing and reminders.
+  const periodSummary = schedulePeriodSummary(
+    periodRate,
+    paymentSchedule,
+    storedNextDueAt,
+    billingStartedAt,
+    today,
+  );
+  const remainingBill = periodSummary.amountDue;
+  const paidThisCycle = periodSummary.settled;
+  const cycleTotalCharge = Math.max(periodSummary.periodCharge, periodSummary.amountDue);
+  const paidPercent = periodSummary.percent;
+  const dueDateText = periodSummary.dueDate.toLocaleDateString("en-PH", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).toUpperCase();
+  const dueDateLabel = `${periodSummary.isOverdue ? "OVERDUE SINCE" : "NEXT PAYMENT"} ${dueDateText}`;
+  const billCardLabel = `${scheduleName(paymentSchedule)} Rent Due`;
   const [remainingBillWhole, remainingBillCents] = Math.max(0, remainingBill)
     .toLocaleString("en-PH", {
       minimumFractionDigits: 2,
@@ -333,8 +352,7 @@ export default function Dashboard() {
   // "Remaining Bill" (the month-total left): paying today immediately shows
   // a same-day credit here, which the month-total figure can't show since
   // it's always measured against the full month.
-  const chargedToDate = chargedSinceMonthStart(periodRate, paymentSchedule, today);
-  const paymentDue = chargedToDate - paidThisMonth;
+  const paymentDue = rollingAmountDue(periodRate, paymentSchedule, storedNextDueAt, today);
 
   // How many whole billing periods the "Payment" figure above actually
   // represents — e.g. missing 2 straight daily dues and paying nothing in
@@ -344,7 +362,7 @@ export default function Dashboard() {
     paymentDue > 0 && onePeriodCharge > 0 ? Math.max(1, Math.round(paymentDue / onePeriodCharge)) : 0;
   const missedDuesText =
     periodsOwed > 0
-      ? `Missed ${periodsOwed} ${paymentSchedule} due${periodsOwed !== 1 ? "s" : ""}`
+      ? `Missed ${periodsOwed} × ${scheduleDayLabel(paymentSchedule)} due${periodsOwed !== 1 ? "s" : ""}`
       : "You're all caught up";
 
   // "Upcoming Schedule" — the next few billing periods after whatever's
@@ -367,19 +385,20 @@ export default function Dashboard() {
   // produced a huge phantom surplus that skipped dozens of real upcoming
   // periods (e.g. showing Aug 25 as "next due" on Aug 1 for a daily payer
   // who hadn't paid anything yet this month).
-  const totalPaidForCoverage = payments
-    .filter((p) => {
-      if (p.status !== "approved" && p.status !== "pending") return false;
-      const d = p.date?.toDate ? p.date.toDate() : p.date ? new Date(p.date) : null;
-      return !!d && d.getFullYear() === year && d.getMonth() === month;
-    })
-    .reduce((sum, p) => sum + Number(p.amount || 0), 0);
-  let coverageSurplus = totalPaidForCoverage - chargedToDate;
+  // nextDueAt already includes the latest approved coverage. Pending money
+  // does not move the schedule until an admin approves it.
+  let coverageSurplus = 0;
 
   const UPCOMING_COUNT = 4;
   const upcomingSchedule: { date: Date; amount: number }[] = [];
   {
-    let cursor = nextPeriodStart(paymentSchedule, today);
+    // Start from the tenant's actual first uncovered date. If they are
+    // overdue, walk past the periods already included in Payment Due; if
+    // they are paid ahead, keep the future nextDueAt unchanged.
+    let cursor = storedNextDueAt && !Number.isNaN(storedNextDueAt.getTime())
+      ? new Date(storedNextDueAt)
+      : nextPeriodStart(paymentSchedule, today);
+    while (cursor <= today) cursor = nextPeriodStart(paymentSchedule, cursor);
     let guard = 0;
     while (upcomingSchedule.length < UPCOMING_COUNT && guard < 200) {
       guard++;
@@ -428,7 +447,7 @@ export default function Dashboard() {
               <BellIcon />
             </View>
             <View ref={helpRef} collapsable={false}>
-              <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} style={styles.helpBtn}>
+              <TouchableOpacity onPress={() => setHelpSupportVisible(true)} activeOpacity={0.7} style={styles.helpBtn}>
                 <HelpCircle size={24} color={colors.white} />
               </TouchableOpacity>
             </View>
@@ -476,9 +495,9 @@ export default function Dashboard() {
         <View style={styles.card} ref={paymentCardRef} collapsable={false}>
           <LinearGradient colors={["#FFFFFF", "#F8FFFC"]} style={styles.billBox}>
             <View style={styles.billLabelRow}>
-              <Text style={styles.billLabel}>Remaining Bill</Text>
+              <Text style={styles.billLabel}>{billCardLabel}</Text>
               <Text style={styles.billDate}>
-                {MONTHS[month].slice(0, 3).toUpperCase()}/{year}
+                {dueDateLabel}
               </Text>
             </View>
             <View style={styles.billAmountRow}>
@@ -510,13 +529,13 @@ export default function Dashboard() {
                 <Text style={styles.billFooterText}>Settled</Text>
                 <View style={styles.billFooterValueRow}>
                   <View style={styles.settledValueDot} />
-                  <Text style={styles.billFooterStrong}>₱{formatBillValue(paidThisMonth)}</Text>
+                  <Text style={styles.billFooterStrong}>₱{formatBillValue(paidThisCycle)}</Text>
                 </View>
               </View>
               <View style={[styles.billFooterItem, styles.totalBillItem]}>
                 <Text style={[styles.billFooterText, styles.totalBillLabel]}>Total Bill</Text>
                 <View style={styles.billFooterValueRow}>
-                  <Text style={styles.billFooterStrong}>₱{formatBillValue(monthTotalCharge)}</Text>
+                  <Text style={styles.billFooterStrong}>₱{formatBillValue(cycleTotalCharge)}</Text>
                   <View
                     style={[
                       styles.totalValueDot,
@@ -546,12 +565,10 @@ export default function Dashboard() {
                 <Text style={styles.statLabel}>Schedule</Text>
               </View>
               <Text style={styles.statValue}>
-                {tenant?.paymentSchedule
-                  ? tenant.paymentSchedule.charAt(0).toUpperCase() + tenant.paymentSchedule.slice(1)
-                  : "—"}
+                {tenant?.paymentSchedule ? scheduleName(tenant.paymentSchedule) : "—"}
               </Text>
               <Text style={styles.statSub}>
-                ₱{onePeriodCharge.toLocaleString()} / {SCHEDULE_UNIT_LABEL[paymentSchedule] ?? "day"}
+                ₱{onePeriodCharge.toLocaleString()} / {scheduleIntervalLabel(paymentSchedule)}
               </Text>
             </View>
           </View>
@@ -680,6 +697,7 @@ export default function Dashboard() {
         </Animated.View>
       )}
 
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
       <HelpTour
         visible={tourVisible}
         steps={tourSteps}

@@ -19,6 +19,7 @@ import { ArrowLeft, HelpCircle, Check } from "lucide-react-native";
 import { db } from "../shared/services/firestore";
 import { restoreTenantToNewStall } from "../shared/services/accountServices";
 import HelpTour, { HelpStep } from "./components/HelpTour";
+import HelpSupportModal from "./components/HelpSupportModal";
 import { hasSeenPageTour, markPageTourSeen } from "../shared/services/onboardingTour";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
@@ -52,6 +53,7 @@ export default function TenantRelocation() {
   const [restoring, setRestoring] = useState(false);
   const [showTransferConfirm, setShowTransferConfirm] = useState(false);
   const [tourVisible, setTourVisible] = useState(false);
+  const [helpSupportVisible, setHelpSupportVisible] = useState(false);
   const stallListRef = useRef<View>(null);
   const restoreBtnRef = useRef<View>(null);
 
@@ -129,7 +131,7 @@ export default function TenantRelocation() {
       );
     } catch (err: any) {
       const msg =
-        err?.message === "Selected stall is no longer available."
+        err?.code === "functions/already-exists" || String(err?.message ?? "").includes("no longer available")
           ? "That stall was just taken. Please choose another."
           : "Failed to restore tenant. Please try again.";
       Alert.alert("Error", msg);
@@ -159,7 +161,7 @@ export default function TenantRelocation() {
             <ArrowLeft size={22} color={colors.emeraldSoft} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Tenant Relocation</Text>
-          <TouchableOpacity onPress={() => setTourVisible(true)} activeOpacity={0.7} disabled={restoring} style={styles.headerIconBtn}>
+          <TouchableOpacity onPress={() => setHelpSupportVisible(true)} activeOpacity={0.7} disabled={restoring} style={styles.headerIconBtn}>
             <HelpCircle size={22} color={colors.emeraldSoft} />
           </TouchableOpacity>
         </View>
@@ -213,7 +215,7 @@ export default function TenantRelocation() {
                     Building {item.buildingNumber} {"·"} Space {item.spaceId}
                   </Text>
                   <Text style={styles.stallSub}>
-                    ₱{item.price.toLocaleString()} {"·"} {item.paymentSchedule}
+                    ₱{item.price.toLocaleString()} {"·"} every {item.paymentSchedule === "daily" ? 1 : item.paymentSchedule === "weekly" ? 7 : item.paymentSchedule === "semi-monthly" ? 15 : 30} days
                   </Text>
                 </View>
                 <View style={[styles.radioOuter, selected && styles.radioOuterSelected]}>
@@ -306,6 +308,7 @@ export default function TenantRelocation() {
       </Modal>
 
       <HelpTour visible={tourVisible} steps={tourSteps} onClose={() => setTourVisible(false)} />
+      <HelpSupportModal visible={helpSupportVisible} steps={tourSteps} onClose={() => setHelpSupportVisible(false)} onReplayTour={() => setTourVisible(true)} />
     </View>
   );
 }

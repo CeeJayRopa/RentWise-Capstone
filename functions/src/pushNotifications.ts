@@ -1,5 +1,5 @@
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
-import { getFirestore } from "firebase-admin/firestore";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
 
 // Triggers whenever a new document is added to the notifications collection.
 // Looks up the target user's Expo push token and sends a push notification
@@ -50,11 +50,26 @@ export const sendPushOnNotification = onDocumentCreated(
         }),
       });
 
-      const result = (await response.json()) as Record<string, unknown>;
-      console.log(
-        `[PUSH SENT] to user ${userId}:`,
-        JSON.stringify(result),
-      );
+      if (!response.ok) throw new Error(`Expo Push API returned HTTP ${response.status}.`);
+      const result = (await response.json()) as {
+        data?: {status?: string; message?: string; details?: {error?: string}};
+      };
+      const ticket = result.data;
+      if (ticket?.status !== "ok") {
+        const errorCode = ticket?.details?.error ?? "UnknownPushError";
+        console.error(`[PUSH REJECTED] for user ${userId}`, {errorCode, message: ticket?.message});
+        if (errorCode === "DeviceNotRegistered") {
+          const userRef = getFirestore().collection("users").doc(userId);
+          await getFirestore().runTransaction(async (tx) => {
+            const fresh = await tx.get(userRef);
+            if (fresh.data()?.expoPushToken === expoPushToken) {
+              tx.update(userRef, {expoPushToken: FieldValue.delete()});
+            }
+          });
+        }
+        return;
+      }
+      console.log(`[PUSH ACCEPTED] for user ${userId}`);
     } catch (err) {
       console.error(`[PUSH FAILED] for user ${userId}:`, err);
     }

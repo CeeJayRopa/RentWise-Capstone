@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { router } from "expo-router";
 import { User, Lock, Eye, EyeOff } from "lucide-react-native";
 import {
@@ -23,9 +23,8 @@ import {
 import { auth } from "../shared/firebaseConfig";
 import { getTenantData } from "../services/tenantService";
 import { setRememberMe } from "../shared/services/rememberMe";
+import { checkLockout, recordFailedAttempt, resetLockout } from "../shared/services/loginLockout";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
-
-const MAX_ATTEMPTS = 5;
 
 export default function QuickUnlock() {
   const insets = useSafeAreaInsets();
@@ -35,8 +34,6 @@ export default function QuickUnlock() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [unlocking, setUnlocking] = useState(false);
-  const attemptsRef = useRef(0);
-
   useEffect(() => {
     const user = auth.currentUser;
     // No active session (e.g. someone deep-linked here directly) — this
@@ -45,12 +42,21 @@ export default function QuickUnlock() {
       router.replace("/login");
       return;
     }
-    getTenantData(user.uid)
-      .then((data) => {
-        setTenantName(data?.firstName ? `${data.firstName} ${data.lastName ?? ""}`.trim() : "Tenant");
-      })
-      .catch(() => setTenantName("Tenant"))
-      .finally(() => setCheckingSession(false));
+    const lockoutKey = `quick-unlock:${user.uid}`;
+    checkLockout(lockoutKey).then((lockedUntil) => {
+      if (lockedUntil) {
+        forceFullLogout(
+          "Too many incorrect attempts. Please sign in again with your username and password.",
+        );
+        return;
+      }
+      getTenantData(user.uid)
+        .then((data) => {
+          setTenantName(data?.firstName ? `${data.firstName} ${data.lastName ?? ""}`.trim() : "Tenant");
+        })
+        .catch(() => setTenantName("Tenant"))
+        .finally(() => setCheckingSession(false));
+    });
   }, []);
 
   async function forceFullLogout(message: string) {
@@ -81,17 +87,22 @@ export default function QuickUnlock() {
         user,
         EmailAuthProvider.credential(user.email, password),
       );
-      attemptsRef.current = 0;
+      await resetLockout(`quick-unlock:${user.uid}`);
       router.replace("/welcome");
     } catch (err: any) {
-      attemptsRef.current += 1;
-      if (attemptsRef.current >= MAX_ATTEMPTS) {
+      if (err?.code !== "auth/wrong-password" && err?.code !== "auth/invalid-credential") {
+        setError("Quick Unlock is temporarily unavailable. Please try again.");
+        return;
+      }
+
+      const attempt = await recordFailedAttempt(`quick-unlock:${user.uid}`);
+      if (attempt.lockoutUntil) {
         await forceFullLogout(
           "Too many incorrect attempts. Please sign in again with your username and password.",
         );
         return;
       }
-      const remaining = MAX_ATTEMPTS - attemptsRef.current;
+      const remaining = attempt.remainingAttempts;
       setError(`Incorrect password. ${remaining} attempt${remaining === 1 ? "" : "s"} remaining.`);
       setPassword("");
     } finally {

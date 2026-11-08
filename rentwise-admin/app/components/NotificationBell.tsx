@@ -35,6 +35,10 @@ type BellItem =
       resolved: boolean;
       message: string;
       fromOwner?: boolean;
+      route?: string;
+      tenantId?: string;
+      paymentId?: string;
+      updateId?: string;
       createdAt?: any;
     };
 
@@ -42,6 +46,12 @@ function formatDate(date: any) {
   if (!date) return "-";
   const d = date.toDate ? date.toDate() : new Date(date);
   return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+}
+
+function formatTime(date: any) {
+  if (!date) return "";
+  const d = date.toDate ? date.toDate() : new Date(date);
+  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 }
 
 // Renders `**bold**` segments within a plain-text message (e.g. tenant name,
@@ -94,6 +104,7 @@ export default function NotificationBell({ color = colors.emeraldSoft }: { color
         setLoading(false);
       },
       (err) => {
+        if (!auth.currentUser) return;
         console.error("NotificationBell passwordResets error:", err);
         setLoading(false);
       },
@@ -115,11 +126,18 @@ export default function NotificationBell({ color = colors.emeraldSoft }: { color
               resolved: r.read === true || r.fromOwner === true,
               message: r.message,
               fromOwner: r.fromOwner === true,
+              route: r.route,
+              tenantId: r.tenantId,
+              paymentId: r.paymentId,
+              updateId: r.updateId,
               createdAt: r.createdAt,
             }));
           setMessageItems(items);
         },
-        (err) => console.error("NotificationBell messages error:", err),
+        (err) => {
+          if (!auth.currentUser) return;
+          console.error("NotificationBell messages error:", err);
+        },
       );
     }
 
@@ -147,6 +165,31 @@ export default function NotificationBell({ color = colors.emeraldSoft }: { color
     router.push({
       pathname: "/tenant-management",
       params: { tenantId: item.tenantId ?? "" },
+    } as any);
+  };
+
+  const openNotificationDestination = async (item: BellItem) => {
+    if (item.kind === "passwordReset") {
+      goToTenant(item);
+      return;
+    }
+    const allowedRoutes = new Set(["/financials", "/building", "/tenant-management", "/reports-history"]);
+    const fallbackRoute = item.fromOwner ? "/reports-history" : "/financials";
+    const destination = allowedRoutes.has(item.route ?? "") ? item.route! : fallbackRoute;
+    closeModal();
+    if (!item.resolved) {
+      updateDoc(doc(db, "notifications", item.id), {read: true}).catch((error) =>
+        console.error("mark notification read error:", error),
+      );
+    }
+    router.push({
+      pathname: destination as any,
+      params: {
+        ...(item.tenantId ? {tenantId: item.tenantId} : {}),
+        ...(item.paymentId ? {paymentId: item.paymentId} : {}),
+        ...(item.updateId ? {updateId: item.updateId} : {}),
+        source: "notification",
+      },
     } as any);
   };
 
@@ -235,7 +278,15 @@ export default function NotificationBell({ color = colors.emeraldSoft }: { color
 
           <View style={styles.card}>
             <View style={styles.titleBar}>
-              <Text style={styles.title}>Notifications</Text>
+              <View style={styles.titleRow}>
+                <Text style={styles.title}>Notifications</Text>
+                {pendingCount > 0 && (
+                  <View style={styles.titleBadge}>
+                    <Text style={styles.titleBadgeText}>{pendingCount}</Text>
+                  </View>
+                )}
+              </View>
+              <Text style={styles.subtitle}>Ka Domeng Talipapa • Admin Activity</Text>
             </View>
 
             {loading ? (
@@ -257,24 +308,41 @@ export default function NotificationBell({ color = colors.emeraldSoft }: { color
                     <View style={[styles.itemAccentBar, r.resolved && styles.itemAccentBarResolved]} />
                     <View style={[styles.itemBody, r.resolved && styles.itemResolved]}>
                       <View>
+                        <View style={styles.activityHeader}>
+                          <Text style={[styles.activityType, r.resolved && styles.activityTypeResolved]}>
+                            {r.kind === "passwordReset" ? "ACCOUNT SECURITY" : r.fromOwner ? "OWNER ACTIVITY" : "PAYMENT ACTIVITY"}
+                          </Text>
+                          <Text style={styles.activityDate}>{formatDate(r.createdAt)}</Text>
+                        </View>
                         {r.kind === "passwordReset" ? (
                           <>
-                            <Text style={styles.itemTitle}>
-                              Password reset — {r.tenantName || "Unknown tenant"}
-                            </Text>
+                            <Text style={styles.itemTitle}>Password Reset Request</Text>
+                            <Text style={styles.itemName}>{r.tenantName || "Unknown tenant"}</Text>
                             <Text style={styles.itemSub}>{r.email}</Text>
-                            <Text style={styles.itemSub}>
-                              Space: {r.spaceId || "—"}
-                            </Text>
+                            {!!r.spaceId && <Text style={styles.spaceChip}>Space {r.spaceId}</Text>}
                           </>
                         ) : (
                           <Text style={styles.itemTitle}>{renderMessage(r.message)}</Text>
                         )}
                       </View>
+                      {!r.resolved && (
+                        <View style={styles.pendingRow}>
+                          <View style={styles.pendingDot} />
+                          <Text style={styles.pendingText}>Awaiting confirmation</Text>
+                          {!!formatTime(r.createdAt) && <Text style={styles.activityTime}>{formatTime(r.createdAt)}</Text>}
+                        </View>
+                      )}
                       <View style={styles.itemFooter}>
-                        <Text style={styles.itemDate}>
-                          {formatDate(r.createdAt)}
-                        </Text>
+                        {r.kind === "message" && (
+                          <Pressable
+                            style={({ pressed }) => [styles.goToTenantBtn, pressed && styles.goToTenantBtnPressed]}
+                            onPress={() => openNotificationDestination(r)}
+                          >
+                            {({ pressed }) => (
+                              <Text style={[styles.goToTenantBtnText, pressed && styles.goToTenantBtnTextPressed]}>View</Text>
+                            )}
+                          </Pressable>
+                        )}
                         {r.kind === "message" && r.fromOwner ? null : r.resolved ? (
                           <View style={styles.resolvedTag}>
                             <Text style={styles.resolvedTagText}>Resolved</Text>
@@ -284,11 +352,11 @@ export default function NotificationBell({ color = colors.emeraldSoft }: { color
                           {r.kind === "passwordReset" && (
                             <Pressable
                               style={({ pressed }) => [styles.goToTenantBtn, pressed && styles.goToTenantBtnPressed]}
-                              onPress={() => goToTenant(r)}
+                              onPress={() => openNotificationDestination(r)}
                             >
                               {({ pressed }) => (
                                 <Text style={[styles.goToTenantBtnText, pressed && styles.goToTenantBtnTextPressed]}>
-                                  Reset
+                                  Open tenant
                                 </Text>
                               )}
                             </Pressable>
@@ -307,7 +375,7 @@ export default function NotificationBell({ color = colors.emeraldSoft }: { color
                                 <ActivityIndicator color={colors.emerald} size="small" />
                               ) : (
                                 <Text style={[styles.resolveBtnText, pressed && styles.resolveBtnTextPressed]}>
-                                  Mark resolved
+                                  ✓  Mark resolved
                                 </Text>
                               )
                             }
@@ -399,46 +467,76 @@ const styles = StyleSheet.create({
     backgroundColor: colors.overlay,
     justifyContent: "center",
     alignItems: "center",
-    padding: spacing.xl,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xl,
   },
 
   card: {
-    backgroundColor: colors.parchment,
-    borderRadius: radius.xl + 4,
-    borderWidth: 2,
-    borderColor: colors.emeraldSoft,
+    backgroundColor: colors.white,
+    borderRadius: radius.xl + 8,
+    borderWidth: 1.5,
+    borderColor: colors.ink,
     width: "100%",
-    maxHeight: "90%",
+    maxWidth: 390,
+    maxHeight: "92%",
     overflow: "hidden",
     ...shadow.raised,
   },
 
   titleBar: {
-    backgroundColor: colors.emeraldSoft,
+    backgroundColor: colors.white,
     paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.lg,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
   },
   title: {
-    fontSize: fontSize.xxl,
+    fontSize: 24,
     fontFamily: fontFamily.extrabold,
     color: colors.ink,
+  },
+  titleBadge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 5,
+    backgroundColor: colors.emerald,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  titleBadgeText: {
+    color: colors.white,
+    fontSize: 10,
+    fontFamily: fontFamily.bold,
+  },
+  subtitle: {
+    marginTop: 2,
+    fontSize: 10,
+    fontFamily: fontFamily.medium,
+    color: colors.textSecondary,
   },
 
   loadingBox: { paddingVertical: 48, alignItems: "center" },
   emptyBox: { paddingVertical: 48, alignItems: "center" },
   emptyBoxText: { fontSize: fontSize.base, fontFamily: fontFamily.regular, color: colors.textSecondary },
 
-  scrollArea: { flexGrow: 0, maxHeight: 420 },
-  scrollContent: { padding: spacing.lg, gap: spacing.md },
+  scrollArea: { flexGrow: 0, maxHeight: 500 },
+  scrollContent: { paddingHorizontal: spacing.lg, paddingVertical: spacing.xl, gap: spacing.md },
 
   item: {
     flexDirection: "row",
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     overflow: "hidden",
     ...shadow.subtle,
   },
   itemAccentBar: {
-    width: 4,
+    width: 5,
     backgroundColor: colors.emerald,
   },
   itemAccentBarResolved: {
@@ -447,20 +545,62 @@ const styles = StyleSheet.create({
   itemBody: {
     flex: 1,
     gap: spacing.sm + 2,
-    backgroundColor: colors.white,
-    padding: spacing.md + 2,
+    backgroundColor: "#EEFBF5",
+    padding: spacing.lg,
+  },
+  activityHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+  },
+  activityType: {
+    fontSize: 10,
+    fontFamily: fontFamily.bold,
+    color: colors.emerald,
+    letterSpacing: 0.25,
+  },
+  activityTypeResolved: { color: colors.textSecondary },
+  activityDate: {
+    fontSize: 10,
+    fontFamily: fontFamily.medium,
+    color: colors.textPrimary,
+  },
+  activityTime: {
+    marginLeft: "auto",
+    fontSize: 10,
+    fontFamily: fontFamily.medium,
+    color: colors.textSecondary,
+  },
+  pendingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  pendingDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "#FF9800",
+  },
+  pendingText: {
+    fontSize: 10,
+    fontFamily: fontFamily.semibold,
+    color: "#9A5200",
   },
   itemResolved: {
-    opacity: 0.6,
+    opacity: 0.72,
+    backgroundColor: colors.white,
   },
   itemFooter: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    width: "100%",
   },
   itemActions: {
     flexDirection: "row",
     gap: spacing.sm,
+    width: "100%",
   },
   resolvedTag: {
     backgroundColor: colors.mist,
@@ -480,51 +620,66 @@ const styles = StyleSheet.create({
   },
   goToTenantBtnText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.white },
   goToTenantBtnTextPressed: { color: colors.emerald },
-  itemTitle: { fontSize: fontSize.sm, fontFamily: fontFamily.regular, color: colors.ink, lineHeight: 19 },
+  itemTitle: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.ink, lineHeight: 19 },
   itemTitleBold: { fontFamily: fontFamily.bold, color: colors.ink },
+  itemName: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.ink, marginTop: 2 },
   itemSub: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.regular, color: colors.textSecondary, marginTop: 2 },
+  spaceChip: {
+    alignSelf: "flex-start",
+    marginTop: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.sm,
+    overflow: "hidden",
+    backgroundColor: colors.white,
+    fontSize: 10,
+    fontFamily: fontFamily.semibold,
+    color: colors.ink,
+  },
   itemDate: { fontSize: fontSize.xs, fontFamily: fontFamily.medium, color: colors.textMuted },
   resolveBtn: {
-    borderWidth: 1.5,
-    borderColor: colors.emerald,
-    borderRadius: radius.pill,
-    backgroundColor: colors.white,
-    paddingVertical: spacing.xs + 2,
-    paddingHorizontal: spacing.md + 2,
+    borderWidth: 0,
+    borderRadius: radius.md,
+    backgroundColor: colors.ink,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    minWidth: 150,
+    flex: 1,
+    alignItems: "center",
   },
   resolveBtnPressed: {
     backgroundColor: colors.emerald,
   },
-  resolveBtnText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.emerald },
+  resolveBtnText: { fontSize: fontSize.xs + 1, fontFamily: fontFamily.semibold, color: colors.white },
   resolveBtnTextPressed: { color: colors.white },
 
   btnRow: {
     flexDirection: "row",
     justifyContent: "center",
     gap: spacing.sm + 2,
-    padding: spacing.lg,
+    padding: spacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
   },
   btn: {
     flex: 1,
     paddingVertical: spacing.md + 2,
-    borderRadius: radius.pill,
+    borderRadius: radius.md,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 48,
+    minHeight: 46,
   },
-  btnOutline: { borderWidth: 1.5, borderColor: colors.emerald, backgroundColor: colors.white },
+  btnOutline: { borderWidth: 1.5, borderColor: colors.ink, backgroundColor: colors.white },
   btnOutlinePressed: {
     backgroundColor: colors.emerald,
     transform: [{ scale: 0.96 }],
   },
-  btnOutlineText: { fontSize: fontSize.base, fontFamily: fontFamily.semibold, color: colors.emerald },
+  btnOutlineText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.ink },
   btnOutlineTextPressed: { color: colors.white },
   btnDisabledOutline: { opacity: 0.4 },
   btnPrimary: { backgroundColor: colors.ink, ...shadow.button },
   btnPrimaryPressed: { backgroundColor: colors.white, transform: [{ scale: 0.96 }] },
-  btnPrimaryText: { fontSize: fontSize.base, fontFamily: fontFamily.bold, color: colors.white },
+  btnPrimaryText: { fontSize: fontSize.sm, fontFamily: fontFamily.bold, color: colors.white },
   btnPrimaryTextPressed: { color: colors.ink },
   btnDisabled: { opacity: 0.5 },
 });
