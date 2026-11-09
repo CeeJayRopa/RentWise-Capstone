@@ -9,6 +9,7 @@ node_modules/
 **/node_modules/
 .git/
 .eas-icon-inspect-admin/
+installable-apks/
 .env*.local
 **/.env*.local
 *-debug.log
