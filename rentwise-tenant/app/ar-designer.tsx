@@ -15,7 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react-native";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -46,7 +46,7 @@ type PlacedObject = {
   scale: AxisScale;
 };
 
-type NativeModelNode = ModelNode & { axisScale: AxisScale };
+type NativeModelNode = ModelNode & { id: string; axisScale: AxisScale };
 
 type TrackingUpdatedEvent = {
   x: number;
@@ -91,6 +91,11 @@ export default function ARDesignerScreen() {
   const [detectedPlanes, setDetectedPlanes] = useState<Array<PlaneDetectedEvent>>([]);
   const [toolMode, setToolMode] = useState<ToolMode>(null);
   const [resizeAxis, setResizeAxis] = useState<0 | 1 | 2>(0);
+  const pendingTransformUpdates = useRef<Array<{
+    id: string;
+    updater: (item: PlacedObject) => PlacedObject;
+  }>>([]);
+  const transformFlushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (Platform.OS !== "android") {
@@ -112,8 +117,14 @@ export default function ARDesignerScreen() {
       .finally(() => setCatalogLoading(false));
   }, []);
 
+  useEffect(() => () => {
+    if (transformFlushTimer.current) clearTimeout(transformFlushTimer.current);
+    pendingTransformUpdates.current = [];
+  }, []);
+
   const modelNodes = useMemo<NativeModelNode[]>(
     () => placed.map((item) => ({
+      id: item.id,
       src: item.catalog.modelUrl,
       position: item.position,
       rotation: item.rotation,
@@ -182,8 +193,29 @@ export default function ARDesignerScreen() {
     setPlaced((current) => current.map((item) => item.id === selectedId ? updater(item) : item));
   }
 
+  function queueSelectedTransform(updater: (item: PlacedObject) => PlacedObject) {
+    if (!selectedId) return;
+    pendingTransformUpdates.current.push({ id: selectedId, updater });
+    if (transformFlushTimer.current) return;
+
+    transformFlushTimer.current = setTimeout(() => {
+      transformFlushTimer.current = null;
+      const updates = pendingTransformUpdates.current;
+      pendingTransformUpdates.current = [];
+      if (updates.length === 0) return;
+
+      setPlaced((current) => current.map((item) => {
+        let next = item;
+        for (const update of updates) {
+          if (update.id === item.id) next = update.updater(next);
+        }
+        return next;
+      }));
+    }, 50);
+  }
+
   function adjustScale(axis: 0 | 1 | 2, amount: number) {
-    updateSelected((item) => {
+    queueSelectedTransform((item) => {
       const next = [...item.scale] as AxisScale;
       next[axis] = Math.max(0.2, Math.min(3, Number((next[axis] + amount).toFixed(2))));
       return { ...item, scale: next };
@@ -325,9 +357,9 @@ export default function ARDesignerScreen() {
               <View style={styles.toolPanel}>
                 <Text style={styles.toolTitle}>Rotate object</Text>
                 <View style={styles.largeStepper}>
-                  <Pressable style={styles.stepButton} onPress={() => updateSelected((item) => ({ ...item, rotation: [0, item.rotation[1] - 15, 0] }))}><RotateCw size={22} color={colors.white} style={{ transform: [{ scaleX: -1 }] }} /></Pressable>
+                  <Pressable style={styles.stepButton} onPress={() => queueSelectedTransform((item) => ({ ...item, rotation: [0, item.rotation[1] - 15, 0] }))}><RotateCw size={22} color={colors.white} style={{ transform: [{ scaleX: -1 }] }} /></Pressable>
                   <Text style={styles.largeScaleValue}>{Math.round(selected.rotation[1])}°</Text>
-                  <Pressable style={styles.stepButton} onPress={() => updateSelected((item) => ({ ...item, rotation: [0, item.rotation[1] + 15, 0] }))}><RotateCw size={22} color={colors.white} /></Pressable>
+                  <Pressable style={styles.stepButton} onPress={() => queueSelectedTransform((item) => ({ ...item, rotation: [0, item.rotation[1] + 15, 0] }))}><RotateCw size={22} color={colors.white} /></Pressable>
                 </View>
               </View>
             ) : (
