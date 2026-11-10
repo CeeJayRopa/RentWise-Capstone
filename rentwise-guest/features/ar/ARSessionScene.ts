@@ -1153,6 +1153,33 @@ export class ARSessionScene {
     this.notifyPlacedChange();
   }
 
+  applyTransformBatch(
+    rotationDeg: number,
+    axisScaleFactors: Partial<Record<ScaleAxis, number>>,
+    uniformScaleFactor = 1,
+  ) {
+    if (!this.hasMutableSelection()) return;
+    const ownsGesture = !this.transformGestureStart;
+    if (ownsGesture) this.beginTransformGesture();
+
+    try {
+      if (Number.isFinite(rotationDeg) && rotationDeg !== 0) {
+        this.rotateSelected(rotationDeg);
+      }
+      if (Number.isFinite(uniformScaleFactor) && uniformScaleFactor > 0 && uniformScaleFactor !== 1) {
+        this.scaleSelectedUniform(uniformScaleFactor);
+      }
+      (Object.keys(axisScaleFactors) as ScaleAxis[]).forEach((axis) => {
+        const factor = axisScaleFactors[axis];
+        if (typeof factor === "number" && Number.isFinite(factor) && factor > 0 && factor !== 1) {
+          this.scaleSelectedAxis(axis, factor);
+        }
+      });
+    } finally {
+      if (ownsGesture) this.endTransformGesture();
+    }
+  }
+
   rotateSelected(deltaDeg: number) {
     if (!this.hasMutableSelection() || !this.selected || !Number.isFinite(deltaDeg) || deltaDeg === 0) return;
     this.recordTransformBeforeChange();

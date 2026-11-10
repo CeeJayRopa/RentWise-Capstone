@@ -169,6 +169,7 @@ export default function ARView() {
   const scaleValuesRef = useRef<Record<ScaleAxis, number>>({ x: 100, y: 100, z: 100 });
   const pendingRotationRef = useRef(0);
   const pendingScaleRef = useRef<Record<ScaleAxis, number>>({ x: 1, y: 1, z: 1 });
+  const pendingUniformScaleRef = useRef(1);
   const transformFrameRef = useRef<number | null>(null);
   const sessionOperationRef = useRef(false);
   const armingRef = useRef(false);
@@ -182,13 +183,12 @@ export default function ARView() {
     if (!scene) return;
     const rotation = pendingRotationRef.current;
     const scale = pendingScaleRef.current;
+    const uniformScale = pendingUniformScaleRef.current;
     pendingRotationRef.current = 0;
     pendingScaleRef.current = { x: 1, y: 1, z: 1 };
+    pendingUniformScaleRef.current = 1;
     try {
-      if (rotation !== 0) scene.rotateSelected(rotation);
-      (Object.keys(scale) as ScaleAxis[]).forEach((axis) => {
-        if (scale[axis] !== 1) scene.scaleSelectedAxis(axis, scale[axis]);
-      });
+      scene.applyTransformBatch(rotation, scale, uniformScale);
     } catch (err) {
       console.error("[AR] transform control failed safely:", err);
       setError("That adjustment couldn't be applied. The AR session is still active.");
@@ -201,6 +201,24 @@ export default function ARView() {
       transformFrameRef.current = null;
       flushPendingTransforms();
     });
+  };
+
+  const queueRotation = (deltaDeg: number) => {
+    if (!Number.isFinite(deltaDeg) || deltaDeg === 0) return;
+    pendingRotationRef.current += deltaDeg;
+    scheduleTransformFlush();
+  };
+
+  const queueAxisScale = (axis: ScaleAxis, factor: number) => {
+    if (!Number.isFinite(factor) || factor <= 0 || factor === 1) return;
+    pendingScaleRef.current[axis] *= factor;
+    scheduleTransformFlush();
+  };
+
+  const queueUniformScale = (factor: number) => {
+    if (!Number.isFinite(factor) || factor <= 0 || factor === 1) return;
+    pendingUniformScaleRef.current *= factor;
+    scheduleTransformFlush();
   };
 
   const beginSliderInteraction = () => {
@@ -232,6 +250,7 @@ export default function ARView() {
     transformFrameRef.current = null;
     pendingRotationRef.current = 0;
     pendingScaleRef.current = { x: 1, y: 1, z: 1 };
+    pendingUniformScaleRef.current = 1;
   }, []);
 
   useEffect(() => {
@@ -1004,7 +1023,7 @@ export default function ARView() {
                     style={styles.controlBtn}
                     onPressIn={suppressPressIn}
                     onPressOut={suppressPressOut}
-                    onPress={() => sceneRef.current?.rotateSelected(-15)}
+                    onPress={() => queueRotation(-15)}
                   >
                     <Text style={styles.controlBtnText}>↻</Text>
                   </TouchableOpacity>
@@ -1012,7 +1031,7 @@ export default function ARView() {
                     style={styles.controlBtn}
                     onPressIn={suppressPressIn}
                     onPressOut={suppressPressOut}
-                    onPress={() => sceneRef.current?.rotateSelected(15)}
+                    onPress={() => queueRotation(15)}
                   >
                     <Text style={styles.controlBtnText}>↺</Text>
                   </TouchableOpacity>
@@ -1026,9 +1045,7 @@ export default function ARView() {
                     style={styles.controlBtn}
                     onPressIn={suppressPressIn}
                     onPressOut={suppressPressOut}
-                    onPress={() => {
-                      runSceneControl((scene) => scene.scaleSelectedUniform(0.9));
-                    }}
+                    onPress={() => queueUniformScale(0.9)}
                   >
                     <Text style={styles.controlBtnText}>▼</Text>
                   </TouchableOpacity>
@@ -1036,9 +1053,7 @@ export default function ARView() {
                     style={styles.controlBtn}
                     onPressIn={suppressPressIn}
                     onPressOut={suppressPressOut}
-                    onPress={() => {
-                      runSceneControl((scene) => scene.scaleSelectedUniform(1.1));
-                    }}
+                    onPress={() => queueUniformScale(1.1)}
                   >
                     <Text style={styles.controlBtnText}>▲</Text>
                   </TouchableOpacity>
@@ -1053,7 +1068,7 @@ export default function ARView() {
                       style={styles.controlBtn}
                       onPressIn={suppressPressIn}
                       onPressOut={suppressPressOut}
-                      onPress={() => sceneRef.current?.scaleSelectedAxis(axis, 0.9)}
+                      onPress={() => queueAxisScale(axis, 0.9)}
                     >
                       <Text style={styles.controlBtnText}>−</Text>
                     </TouchableOpacity>
@@ -1061,7 +1076,7 @@ export default function ARView() {
                       style={styles.controlBtn}
                       onPressIn={suppressPressIn}
                       onPressOut={suppressPressOut}
-                      onPress={() => sceneRef.current?.scaleSelectedAxis(axis, 1.1)}
+                      onPress={() => queueAxisScale(axis, 1.1)}
                     >
                       <Text style={styles.controlBtnText}>+</Text>
                     </TouchableOpacity>
