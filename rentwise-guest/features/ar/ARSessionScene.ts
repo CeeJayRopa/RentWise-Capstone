@@ -258,6 +258,7 @@ function cloneWithOwnMaterials(source: THREE.Object3D): THREE.Group {
 export class ARSessionScene {
   private disposed = false;
   private sessionEnding = false;
+  private sessionStarting = false;
   private renderer: THREE.WebGLRenderer | null = null;
   private camera = new THREE.PerspectiveCamera(70, 1, 0.01, 20);
   private scene = new THREE.Scene();
@@ -564,18 +565,24 @@ export class ARSessionScene {
   async startSession(overlayRoot: HTMLElement): Promise<void> {
     const nav = navigator as any;
     if (this.disposed) throw new Error("AR scene is no longer available.");
-    if (this.session || this.sessionEnding) return;
+    if (this.session || this.sessionEnding || this.sessionStarting) return;
     if (!this.renderer || !nav.xr) throw new Error("AR is not available in this browser.");
 
-    const session = await nav.xr.requestSession("immersive-ar", {
-      requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay", "light-estimation", "plane-detection", "depth-sensing", "anchors"],
-      depthSensing: {
-        usagePreference: ["cpu-optimized"],
-        dataFormatPreference: ["luminance-alpha"],
-      },
-      domOverlay: { root: overlayRoot },
-    });
+    this.sessionStarting = true;
+    let session: any;
+    try {
+      session = await nav.xr.requestSession("immersive-ar", {
+        requiredFeatures: ["hit-test"],
+        optionalFeatures: ["dom-overlay", "light-estimation", "plane-detection", "depth-sensing", "anchors"],
+        depthSensing: {
+          usagePreference: ["cpu-optimized"],
+          dataFormatPreference: ["luminance-alpha"],
+        },
+        domOverlay: { root: overlayRoot },
+      });
+    } finally {
+      this.sessionStarting = false;
+    }
 
     if (this.disposed) {
       await session.end().catch(() => {});
@@ -990,9 +997,11 @@ export class ARSessionScene {
   }
 
   async armObject(objectId: string, modelUrl: string): Promise<void> {
+    if (this.disposed || this.sessionEnding) return;
     let cached = this.modelCache.get(objectId);
     if (!cached) {
       const template = await this.loadModel(modelUrl);
+      if (this.disposed || this.sessionEnding) return;
       const box = new THREE.Box3().setFromObject(template);
       this.validateBoundingBox(box, objectId);
       // Ground offset: shifts the model up/down so its lowest point sits exactly at the
@@ -1826,6 +1835,7 @@ export class ARSessionScene {
     if (this.disposed) return;
     this.disposed = true;
     this.sessionEnding = true;
+    this.sessionStarting = false;
     window.removeEventListener("resize", this.resizeHandler);
     if (this.uiInteractionClearTimer) clearTimeout(this.uiInteractionClearTimer);
     if (this.session) {

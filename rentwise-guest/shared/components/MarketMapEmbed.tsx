@@ -18,6 +18,7 @@ import StallPopup from "./StallPopup";
 import { subscribeToStalls } from "../../services/stallService";
 import { MARKET_LAYOUT, StallHotspot } from "../constants/marketLayout";
 import { matchMapStalls } from "../constants/stallLookup";
+import { statusMeta } from "../constants/stallStatus";
 
 // Same blueprint asset/geometry as app/market-map.tsx, but sized to sit inline
 // inside a page section instead of filling the whole screen — no header/back
@@ -207,10 +208,8 @@ export default function MarketMapEmbed({
   }, []);
 
   const stallsByName = matchMapStalls(stalls, MARKET_LAYOUT);
-  // Same binary occupied/vacant split used everywhere else in this file
-  // (isVacant = status !== "occupied") -- there's no third "reserved" status
-  // in the actual stall data, so the mobile Availability card only shows
-  // these two, computed live instead of hardcoded.
+  // Summary counts stay binary for the availability card, while individual
+  // hotspots use the full shared status palette below.
   const occupiedCount = stalls.filter((s) => s.status?.toLowerCase() === "occupied").length;
   const vacantCount = stalls.length - occupiedCount;
 
@@ -235,7 +234,7 @@ export default function MarketMapEmbed({
       ) : (
         MARKET_LAYOUT.map((hotspot, index) => {
           const stall = stallsByName.get(hotspot.name);
-          const isVacant = stall ? stall.status?.toLowerCase() !== "occupied" : null;
+          const meta = statusMeta(stall?.status ?? "unknown");
 
           // Only rotated hotspots risk overlapping a neighbor — see
           // app/market-map.tsx for the fuller rationale, unchanged here.
@@ -256,13 +255,10 @@ export default function MarketMapEmbed({
                   width: `${width}%`,
                   height: `${height}%`,
                   transform: hotspot.rotationDeg ? [{ rotate: `${hotspot.rotationDeg}deg` }] : undefined,
-                  // Only 2 colors now: occupied is green, vacant/unknown
-                  // both share the neutral grey that "unknown" used to be
-                  // the only user of.
-                  backgroundColor:
-                    isVacant === false
-                      ? "rgba(76,175,80,0.3)"
-                      : "rgba(120,120,120,0.15)",
+                  // Mirror the full mobile status palette on the web map.
+                  backgroundColor: meta.color + "55",
+                  borderColor: meta.color,
+                  borderWidth: 0.8,
                 },
               ]}
               // Stalls are desktop-only interactive for now -- tablet/mobile
@@ -500,15 +496,15 @@ export default function MarketMapEmbed({
               <Text style={styles.desktopStallStatusTitle}>Stall Status</Text>
               <View style={styles.desktopStallStatusRow}>
                 <View style={styles.infoCardRowLabel}>
-                  <View style={[styles.infoDot, { backgroundColor: "#8B5E3C" }]} />
+                  <View style={[styles.infoDot, { backgroundColor: statusMeta("occupied").color }]} />
                   <Text style={styles.desktopStallStatusLabel}>Occupied</Text>
                 </View>
                 <Text style={styles.desktopStallStatusValue}>{loading ? "—" : occupiedCount}</Text>
               </View>
               <View style={[styles.desktopStallStatusRow, { marginBottom: 0 }]}>
                 <View style={styles.infoCardRowLabel}>
-                  <View style={[styles.infoDot, { backgroundColor: PRIMARY_DARK }]} />
-                  <Text style={styles.desktopStallStatusLabel}>Unoccupied</Text>
+                  <View style={[styles.infoDot, { backgroundColor: statusMeta("available").color }]} />
+                  <Text style={styles.desktopStallStatusLabel}>Available</Text>
                 </View>
                 <Text style={styles.desktopStallStatusValue}>{loading ? "—" : vacantCount}</Text>
               </View>
@@ -541,14 +537,14 @@ export default function MarketMapEmbed({
         <Text style={styles.infoCardEyebrow}>Availability</Text>
         <View style={styles.infoCardRow}>
           <View style={styles.infoCardRowLabel}>
-            <View style={[styles.infoDot, { backgroundColor: "#8B5E3C" }]} />
+            <View style={[styles.infoDot, { backgroundColor: statusMeta("occupied").color }]} />
             <Text style={styles.infoCardRowText}>Occupied</Text>
           </View>
           <Text style={styles.infoCardRowValue}>{occupiedCount}</Text>
         </View>
         <View style={[styles.infoCardRow, { marginBottom: 0 }]}>
           <View style={styles.infoCardRowLabel}>
-            <View style={[styles.infoDot, { backgroundColor: PRIMARY_DARK }]} />
+            <View style={[styles.infoDot, { backgroundColor: statusMeta("available").color }]} />
             <Text style={styles.infoCardRowText}>Vacant</Text>
           </View>
           <Text style={styles.infoCardRowValue}>{vacantCount}</Text>

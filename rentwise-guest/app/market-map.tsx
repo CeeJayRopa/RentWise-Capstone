@@ -20,6 +20,7 @@ import StallPopup from "../shared/components/StallPopup";
 import { subscribeToStalls } from "../services/stallService";
 import { MARKET_LAYOUT, StallHotspot } from "../shared/constants/marketLayout";
 import { matchMapStalls } from "../shared/constants/stallLookup";
+import { statusMeta } from "../shared/constants/stallStatus";
 
 // Matches the blueprint's real pixel size (assets/market-2Dlayout.png) so hotspot
 // percentages line up correctly regardless of screen width.
@@ -88,14 +89,6 @@ function stallDimensions(stall: Stall): string {
     return `${length} m × ${width} m`;
   }
   return "Not specified";
-}
-
-function statusMeta(status?: string) {
-  const normalized = String(status ?? "available").trim().toLowerCase();
-  if (normalized === "occupied") return {label: "Occupied", color: "#D95F61", soft: "#FBE0E1"};
-  if (normalized === "reserved" || normalized === "pending") return {label: "Reserved", color: "#D49B15", soft: "#FFF0BD"};
-  if (normalized === "unavailable" || normalized === "disabled") return {label: "Unavailable", color: "#87939A", soft: "#E8ECEE"};
-  return {label: "Available", color: "#16845F", soft: "#D9F4E9"};
 }
 
 function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: boolean}) {
@@ -212,7 +205,11 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
   return (
     <View style={mobileStyles.screen}>
       <View style={mobileStyles.header}>
-        <Pressable style={mobileStyles.headerButton} onPress={() => router.replace("/")} accessibilityLabel="Back to home">
+        <Pressable
+          style={mobileStyles.headerButton}
+          onPress={() => router.replace({pathname: "/", params: {section: "market-map"}})}
+          accessibilityLabel="Back to 2D market view"
+        >
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </Pressable>
         <Text style={mobileStyles.headerTitle}>Market Map</Text>
@@ -594,7 +591,7 @@ export default function MarketMap() {
         ) : (
           MARKET_LAYOUT.map((hotspot, index) => {
             const stall = stallsByName.get(hotspot.name);
-            const isVacant = stall ? stall.status?.toLowerCase() !== "occupied" : null;
+            const meta = statusMeta(stall?.status ?? "unknown");
 
             // Only rotated hotspots risk overlapping a neighbor (which would stack their
             // semi-transparent fills into a visible dark seam) — axis-aligned ones were
@@ -616,13 +613,10 @@ export default function MarketMap() {
                     width: `${width}%`,
                     height: `${height}%`,
                     transform: hotspot.rotationDeg ? [{ rotate: `${hotspot.rotationDeg}deg` }] : undefined,
-                    // Matches MarketMapEmbed's 2-color scheme (see that
-                    // file for why): occupied is green, vacant/unknown
-                    // both share the neutral grey.
-                    backgroundColor:
-                      isVacant === false
-                        ? "rgba(76,175,80,0.3)"
-                        : "rgba(120,120,120,0.15)",
+                    // Use the same live status palette as the mobile map.
+                    backgroundColor: meta.color + "55",
+                    borderColor: meta.color,
+                    borderWidth: 0.8,
                   },
                 ]}
                 onPress={() => {
@@ -737,7 +731,7 @@ export default function MarketMap() {
                 borderRadius: 10 * mobileScale,
               },
             ]}
-            onPress={() => router.replace("/")}
+            onPress={() => router.replace({pathname: "/", params: {section: "market-map"}})}
           >
             <Text
               style={[

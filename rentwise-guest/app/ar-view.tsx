@@ -88,7 +88,9 @@ export default function ARView() {
   const [loading, setLoading] = useState(true);
   const [armedId, setArmedId] = useState<string | null>(null);
   const [arming, setArming] = useState(false);
+  const [armingId, setArmingId] = useState<string | null>(null);
   const [sessionActive, setSessionActive] = useState(false);
+  const [sessionBusy, setSessionBusy] = useState(false);
   const [scanCardExpanded, setScanCardExpanded] = useState(true);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [toolMode, setToolMode] = useState<"rotate" | "resize" | null>(null);
@@ -168,6 +170,8 @@ export default function ARView() {
   const pendingRotationRef = useRef(0);
   const pendingScaleRef = useRef<Record<ScaleAxis, number>>({ x: 1, y: 1, z: 1 });
   const transformFrameRef = useRef<number | null>(null);
+  const sessionOperationRef = useRef(false);
+  const armingRef = useRef(false);
 
   const flushPendingTransforms = () => {
     if (transformFrameRef.current !== null) {
@@ -330,8 +334,10 @@ export default function ARView() {
 
   const startAR = async () => {
     const overlay = overlayRef.current as unknown as HTMLElement | null;
-    if (!sceneRef.current || !overlay) return;
+    if (!sceneRef.current || !overlay || sessionOperationRef.current) return;
 
+    sessionOperationRef.current = true;
+    setSessionBusy(true);
     try {
       setError(null);
       await sceneRef.current.startSession(overlay);
@@ -339,15 +345,26 @@ export default function ARView() {
       setSessionActive(true);
     } catch (e: any) {
       setError(translateSessionStartError(e));
+    } finally {
+      sessionOperationRef.current = false;
+      setSessionBusy(false);
     }
   };
 
   const endAR = async () => {
-    if (sessionActive) {
-      await sceneRef.current?.endSession();
-      setSessionActive(false);
-    } else {
-      router.back();
+    if (sessionOperationRef.current) return;
+    sessionOperationRef.current = true;
+    setSessionBusy(true);
+    try {
+      if (sessionActive) {
+        await sceneRef.current?.endSession();
+        setSessionActive(false);
+      } else {
+        router.back();
+      }
+    } finally {
+      sessionOperationRef.current = false;
+      setSessionBusy(false);
     }
   };
 
@@ -384,6 +401,24 @@ export default function ARView() {
 
     let pinching = false;
     let previousDistance = 0;
+    let pendingPinchFactor = 1;
+    let pinchFrame: number | null = null;
+    const flushPinchScale = () => {
+      if (pinchFrame !== null) {
+        cancelAnimationFrame(pinchFrame);
+        pinchFrame = null;
+      }
+      const factor = pendingPinchFactor;
+      pendingPinchFactor = 1;
+      if (factor !== 1) runSceneControl((scene) => scene.scaleSelectedUniform(factor));
+    };
+    const schedulePinchScale = () => {
+      if (pinchFrame !== null) return;
+      pinchFrame = requestAnimationFrame(() => {
+        pinchFrame = null;
+        flushPinchScale();
+      });
+    };
     const distanceBetween = (touches: TouchList) => {
       const dx = touches[0].clientX - touches[1].clientX;
       const dy = touches[0].clientY - touches[1].clientY;
@@ -404,7 +439,8 @@ export default function ARView() {
       const nextDistance = distanceBetween(event.touches);
       if (previousDistance > 0 && nextDistance > 0) {
         const incrementalFactor = Math.min(1.15, Math.max(0.85, nextDistance / previousDistance));
-        sceneRef.current?.scaleSelectedUniform(incrementalFactor);
+        pendingPinchFactor *= incrementalFactor;
+        schedulePinchScale();
         previousDistance = nextDistance;
       }
       event.preventDefault();
@@ -414,6 +450,7 @@ export default function ARView() {
       if (!pinching || event.touches.length >= 2) return;
       pinching = false;
       previousDistance = 0;
+      flushPinchScale();
       sceneRef.current?.endTransformGesture();
       sceneRef.current?.endUIInteraction();
     };
@@ -428,6 +465,9 @@ export default function ARView() {
       document.removeEventListener("touchmove", onTouchMove, true);
       document.removeEventListener("touchend", finishPinch, true);
       document.removeEventListener("touchcancel", finishPinch, true);
+      if (pinchFrame !== null) cancelAnimationFrame(pinchFrame);
+      pinchFrame = null;
+      pendingPinchFactor = 1;
       if (pinching) {
         sceneRef.current?.endTransformGesture();
         sceneRef.current?.endUIInteraction();
@@ -436,7 +476,10 @@ export default function ARView() {
   }, [sessionActive, placedState.selectedId]);
 
   const arm = async (o: ARObject) => {
+    if (armingRef.current || sessionOperationRef.current) return;
+    armingRef.current = true;
     setArming(true);
+    setArmingId(o.id);
     setError(null);
     try {
       const modelUrl = await getModelDownloadUrl(o.modelStoragePath);
@@ -452,7 +495,9 @@ export default function ARView() {
     } catch (e: any) {
       setError(`Couldn't load "${o.name}": ${e?.message ?? "unknown error"}`);
     } finally {
+      armingRef.current = false;
       setArming(false);
+      setArmingId(null);
     }
   };
 
@@ -614,7 +659,11 @@ export default function ARView() {
       <View ref={overlayRef} style={StyleSheet.absoluteFill} pointerEvents="box-none">
         {/* Header */}
         <View style={styles.header} pointerEvents="box-none">
-          <TouchableOpacity onPress={endAR} style={[styles.topAction, styles.topActionPrimary]}>
+          <TouchableOpacity
+            onPress={endAR}
+            disabled={sessionBusy}
+            style={[styles.topAction, styles.topActionPrimary, sessionBusy && styles.controlDisabled]}
+          >
             <Text style={styles.topActionPrimaryText}>{sessionActive ? "Done" : "Back"}</Text>
           </TouchableOpacity>
           <View style={styles.headerRightGroup}>
@@ -666,8 +715,14 @@ export default function ARView() {
                   Tap "Start AR", then point your camera at a flat surface. Pick items from the
                   tray below to place them you can place as many as you like together.
                 </Text>
-                <TouchableOpacity style={styles.startBtn} onPress={startAR}>
-                  <Text style={styles.startBtnText}>Start AR</Text>
+                <TouchableOpacity
+                  style={[styles.startBtn, sessionBusy && styles.controlDisabled]}
+                  onPress={startAR}
+                  disabled={sessionBusy}
+                >
+                  {sessionBusy
+                    ? <ActivityIndicator size="small" color="#fff" />
+                    : <Text style={styles.startBtnText}>Start AR</Text>}
                 </TouchableOpacity>
                 {error && <Text style={styles.errorText}>{error}</Text>}
               </>
@@ -1065,7 +1120,8 @@ export default function ARView() {
               {objects.map((o) => (
                 <TouchableOpacity
                   key={o.id}
-                  style={styles.catalogItem}
+                  style={[styles.catalogItem, (arming || sessionBusy) && styles.controlDisabled]}
+                  disabled={arming || sessionBusy}
                   onPressIn={suppressPressIn}
                   onPressOut={suppressPressOut}
                   onPress={() => arm(o)}
@@ -1074,7 +1130,7 @@ export default function ARView() {
                     {thumbnailUrls[o.id] && (
                       <Image source={{ uri: thumbnailUrls[o.id] }} style={styles.catalogThumbImage} />
                     )}
-                    {arming && armedId === o.id && (
+                    {arming && armingId === o.id && (
                       <ActivityIndicator size="small" color={PRIMARY} style={StyleSheet.absoluteFill} />
                     )}
                   </View>
@@ -1156,6 +1212,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
   },
   startBtnText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  controlDisabled: { opacity: 0.55 },
   errorText: { color: "#ff8080", fontSize: 13, textAlign: "center" },
 
   modalOverlay: {

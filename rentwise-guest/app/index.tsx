@@ -274,7 +274,7 @@ function NavLinkButton({
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function GuestLanding() {
-  const { open } = useLocalSearchParams<{ open?: string }>();
+  const { open, section } = useLocalSearchParams<{ open?: string; section?: string }>();
   const { width, height, isMobile, isTablet, isDesktop } = useBreakpoints();
   const [stallOccupancy, setStallOccupancy] = useState<{ occupied: number; total: number } | null>(null);
 
@@ -344,6 +344,8 @@ export default function GuestLanding() {
 
   const scrollRef = useRef<ScrollView>(null);
   const marketMapSectionY = useRef(0);
+  const handledSectionReturn = useRef(false);
+  const [marketMapLayoutY, setMarketMapLayoutY] = useState<number | null>(null);
   const findUsSectionY = useRef(0);
   // Driven with Animated instead of a CSS @keyframes animation -- the CSS
   // version never reliably played (kept "just popping" no matter what we
@@ -448,6 +450,17 @@ export default function GuestLanding() {
   const scrollToSection = (y: number) => {
     scrollRef.current?.scrollTo({ y: Math.max(0, y - STICKY_NAV_CLEARANCE), animated: true });
   };
+
+  React.useEffect(() => {
+    if (section !== "market-map" || marketMapLayoutY === null || handledSectionReturn.current) return;
+    handledSectionReturn.current = true;
+    // Wait one frame after layout so ScrollView has committed its final
+    // content size before applying the return destination.
+    const frame = requestAnimationFrame(() => {
+      scrollToSection(marketMapLayoutY);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [marketMapLayoutY, section]);
 
   const handleBrandPress = () => {
     scrollRef.current?.scrollTo({ y: 0, animated: true });
@@ -785,11 +798,11 @@ export default function GuestLanding() {
                 position: "relative",
                 top: isTablet ? 40 : isMobile ? 8 : -10,
               },
-              // Matches the "Market Blueprint & Stall Status" title style
-              // (MarketMapEmbed.tsx) -- italic serif in the brand green.
+              // Keep the mobile title in the same Poppins family as the rest
+              // of the landing page while retaining its brand-green emphasis.
               isMobile && {
-                fontFamily: "PlayfairDisplay_400Regular_Italic",
-                fontWeight: "400",
+                fontFamily: "Poppins_500Medium",
+                fontWeight: "500",
                 color: PRIMARY_DARK,
                 paddingVertical: 10,
                 paddingHorizontal: 14,
@@ -950,7 +963,9 @@ export default function GuestLanding() {
             },
           ]}
           onLayout={(e) => {
-            marketMapSectionY.current = e.nativeEvent.layout.y;
+            const sectionY = e.nativeEvent.layout.y;
+            marketMapSectionY.current = sectionY;
+            setMarketMapLayoutY(sectionY);
           }}
           {...({ className: "rw-reveal" } as any)}
         >
@@ -1229,8 +1244,8 @@ const styles = StyleSheet.create({
     borderRadius: 17,
   },
   navBrandText: {
-    fontFamily: "PlayfairDisplay_700Bold",
-    fontWeight: "900",
+    fontFamily: "Poppins_700Bold",
+    fontWeight: "700",
     fontSize: 20,
     color: TEXT_DARK,
     letterSpacing: -0.2,
@@ -1277,8 +1292,8 @@ const styles = StyleSheet.create({
   navBrandMobile: { flexDirection: "row", alignItems: "center", gap: 8 },
   navBrandMarkMobile: { width: 40, height: 40, borderRadius: 10 },
   navBrandTextMobile: {
-    fontFamily: "PlayfairDisplay_700Bold",
-    fontWeight: "900",
+    fontFamily: "Poppins_700Bold",
+    fontWeight: "700",
     fontSize: 16,
     color: TEXT_DARK,
     letterSpacing: -0.2,
@@ -1345,12 +1360,12 @@ const styles = StyleSheet.create({
   heroEyebrow: {
     color: TEXT_DARK,
     fontSize: 14,
-    fontFamily: "Inter_600SemiBold",
+    fontFamily: "Poppins_600SemiBold",
     fontWeight: "600",
   },
   heroHeadline: {
     color: TEXT_DARK,
-    fontFamily: "Inter_600SemiBold",
+    fontFamily: "Poppins_600SemiBold",
     fontWeight: "600",
     letterSpacing: -0.5,
   },
@@ -1429,7 +1444,7 @@ const styles = StyleSheet.create({
     marginBottom: 40,
   },
   pulseHeading: {
-    fontFamily: "PlayfairDisplay_400Regular_Italic",
+    fontFamily: "Poppins_600SemiBold",
     color: WHITE,
     marginBottom: 10,
   },
@@ -1477,7 +1492,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.35)",
   },
   pulseVendorName: {
-    fontFamily: "PlayfairDisplay_700Bold",
+    fontFamily: "Poppins_700Bold",
     color: WHITE,
     fontSize: 19,
     marginTop: 14,
@@ -1554,7 +1569,7 @@ const styles = StyleSheet.create({
     boxShadow: "0 10px 24px rgba(19,42,32,0.16)",
   } as any,
   catCardEditorialName: {
-    fontFamily: "PlayfairDisplay_400Regular_Italic",
+    fontFamily: "Poppins_600SemiBold",
     color: TEXT_DARK,
     fontSize: 20,
     marginTop: 16,
@@ -1565,7 +1580,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   catCardPlainHeading: {
-    fontFamily: "PlayfairDisplay_700Bold",
+    fontFamily: "Poppins_700Bold",
     color: PRIMARY_DARK,
     fontSize: 22,
     textShadowColor: "#000000",
@@ -1626,9 +1641,9 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   contactHeading: {
-    fontFamily: "PlayfairDisplay_400Regular_Italic",
+    fontFamily: "Poppins_600SemiBold",
     color: PRIMARY_DARK,
-    fontWeight: "400",
+    fontWeight: "600",
     letterSpacing: -0.3,
   },
   contactSubtext: {
