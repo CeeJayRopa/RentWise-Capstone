@@ -15,6 +15,7 @@ import {
   Easing,
   RefreshControl,
   Linking,
+  InteractionManager,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import * as WebBrowser from "expo-web-browser";
@@ -31,6 +32,7 @@ import {
 import { updatePassword } from "firebase/auth";
 
 import { db } from "../../shared/services/firestore";
+import { registerForPushNotificationsAsync } from "../../shared/services/pushNotifications";
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -54,6 +56,7 @@ import {
   Wallet,
   HelpCircle,
   ScanLine,
+  Store,
 } from "lucide-react-native";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import HelpTour, { HelpStep } from "../components/HelpTour";
@@ -104,6 +107,15 @@ export default function Dashboard() {
   const scheduleRef = useRef<View>(null);
   const scrollRef = useRef<ScrollView>(null);
   const progressAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (loading || !auth.currentUser) return;
+    const userId = auth.currentUser.uid;
+    const task = InteractionManager.runAfterInteractions(() => {
+      registerForPushNotificationsAsync(userId, true);
+    });
+    return () => task.cancel();
+  }, [loading]);
 
   // Scrolls a given section into view and gives the ScrollView time to
   // settle before HelpTour measures it — otherwise a section below the
@@ -354,6 +366,18 @@ export default function Dashboard() {
   // it's always measured against the full month.
   const paymentDue = rollingAmountDue(periodRate, paymentSchedule, storedNextDueAt, today);
 
+  const assignedStallIds = Array.from(new Set([
+    ...(Array.isArray(tenant?.stallIds) ? tenant.stallIds.map(String) : []),
+    String(tenant?.primaryStallId ?? tenant?.stallId ?? ""),
+  ].filter(Boolean))).slice(0, 3);
+  const stallIndicatorText = assignedStallIds.length > 1
+    ? `${assignedStallIds.length} assigned stalls`
+    : assignedStallIds.length === 1
+      ? tenant?.stall
+        ? `Building ${tenant.stall.buildingNumber ?? "—"} · Stall ${tenant.stall.spaceId ?? assignedStallIds[0]}`
+        : `Stall ${assignedStallIds[0]}`
+      : "No assigned stall";
+
   // How many whole billing periods the "Payment" figure above actually
   // represents — e.g. missing 2 straight daily dues and paying nothing in
   // between means paymentDue is worth 2 periods, not 1.
@@ -460,6 +484,12 @@ export default function Dashboard() {
             <Text style={styles.bannerName}>
               {tenant?.firstName} {tenant?.lastName}
             </Text>
+            <View style={styles.stallIndicator}>
+              <Store size={12} color="#D7F7EC" strokeWidth={2.2} />
+              <Text style={styles.stallIndicatorText} numberOfLines={1}>
+                {stallIndicatorText}
+              </Text>
+            </View>
           </View>
           <View ref={arShortcutRef} collapsable={false}>
             <TouchableOpacity
@@ -784,6 +814,24 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xl,
     fontFamily: fontFamily.extrabold,
     marginTop: 2,
+  },
+  stallIndicator: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    maxWidth: "100%",
+    marginTop: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    gap: 5,
+    borderRadius: radius.pill,
+    backgroundColor: "rgba(255,255,255,0.13)",
+  },
+  stallIndicatorText: {
+    flexShrink: 1,
+    color: "#D7F7EC",
+    fontSize: 10,
+    fontFamily: fontFamily.semibold,
   },
   arShortcut: {
     width: 108,

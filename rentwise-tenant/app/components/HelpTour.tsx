@@ -112,51 +112,51 @@ export async function loadHelpLanguage(): Promise<TourLanguage> { return (await 
 export async function saveHelpLanguage(value: TourLanguage): Promise<void> { await AsyncStorage.setItem(HELP_LANGUAGE_KEY, value); }
 
 const TAGALOG_TITLES: Record<string, string> = {
-  Home: "Home", Profile: "Profile", Notifications: "Mga Abiso", Search: "Maghanap",
-  Help: "Tulong", Payments: "Mga Bayad", Financials: "Pananalapi", Reports: "Mga Ulat",
-  Archives: "Mga Archive", Stalls: "Mga Puwesto", Admin: "Admin", Tenants: "Mga Nangungupahan",
-  "Payment history": "Kasaysayan ng Bayad", "Coverage total": "Kabuuang Saklaw",
-  "Month & year": "Buwan at Taon", Transactions: "Mga Transaksyon",
-  "Total balance due": "Kabuuang Natitirang Bayarin",
-  "Add advance payment": "Magdagdag ng Paunang Bayad",
-  "Payment method": "Paraan ng Pagbabayad", "Pay Now": "Magbayad Ngayon",
-  "AR Stall Designer": "AR Disenyo ng Puwesto", "Rental payment": "Bayad sa Upa",
-  "Upcoming schedule": "Susunod na Iskedyul", "Your space": "Iyong Puwesto",
-  "Market category": "Kategorya ng Pamilihan", "Your details": "Iyong mga Detalye",
-  "Edit Profile": "I-edit ang Profile", "Change password": "Palitan ang Password",
-  "Sign out": "Mag-sign Out", "Mark all read": "Markahang Nabasa Lahat",
-  "Clear all": "Burahin Lahat",
+  Home: "Home", Profile: "Profile", Notifications: "Notifications", Search: "Search",
+  Help: "Help", Payments: "Payments", Financials: "Financials", Reports: "Reports",
+  Archives: "Archives", Stalls: "Stalls", Admin: "Admin", Tenants: "Tenants",
+  "Payment history": "Payment History", "Coverage total": "Total Coverage",
+  "Month & year": "Month at Year", Transactions: "Transactions",
+  "Total balance due": "Total Balance Due",
+  "Add advance payment": "Add Advance Payment",
+  "Payment method": "Payment Method", "Pay Now": "Pay Now",
+  "AR Stall Designer": "AR Stall Designer", "Rental payment": "Rent Payment",
+  "Upcoming schedule": "Upcoming Schedule", "Your space": "Your Stall",
+  "Market category": "Market Category", "Your details": "Your Details",
+  "Edit Profile": "Edit Profile", "Change password": "Change Password",
+  "Sign out": "Sign Out", "Mark all read": "Mark All as Read",
+  "Clear all": "Clear All",
 };
 
 const TAGALOG_DESCRIPTIONS: Record<string, string> = {
-  "Find a transaction by amount, date, or payment method.": "Maghanap ng transaksyon gamit ang halaga, petsa, o paraan ng pagbabayad.",
-  "Confirmed payments whose rent coverage begins in the selected month.": "Mga kumpirmadong bayad na nagsisimula ang saklaw ng upa sa napiling buwan.",
-  "Switch to a different month or year to see that period's transactions.": "Pumili ng ibang buwan o taon upang makita ang mga transaksyon sa panahong iyon.",
-  "Every payment for the selected period. Tap a card with a receipt to view it.": "Lahat ng bayad sa napiling panahon. Pindutin ang card na may resibo upang makita ito.",
-  "View past payments and download receipts.": "Tingnan ang mga nakaraang bayad at mag-download ng mga resibo.",
-  "What you currently owe for this billing period, after any payments already made.": "Ang kasalukuyang natitirang bayarin sa panahong ito matapos ibawas ang mga naibayad na.",
-  "Pre-filled with what's currently due. You can pay more, but not less.": "Nakalagay na ang kasalukuyang dapat bayaran. Maaari kang magbayad nang higit, ngunit hindi mas mababa.",
-  "Choose GCash or Maya for the PayMongo test demonstration.": "Pumili ng GCash o Maya para sa PayMongo test demonstration.",
-  "Opens PayMongo's test checkout. No real money is charged.": "Binubuksan ang test checkout ng PayMongo. Walang totoong perang sisingilin.",
-  "Come back here anytime for a guided tour of this page.": "Bumalik dito anumang oras para sa gabay sa pahinang ito.",
-  "Takes you back to the dashboard.": "Ibinabalik ka sa dashboard.",
-  "Marks every notification in your list as read, in one tap.": "Minamarkahan bilang nabasa ang lahat ng abiso sa isang pindot.",
-  "Pay your rent online, and view your payment and receipt history.": "Magbayad ng upa online at tingnan ang kasaysayan ng mga bayad at resibo.",
-  "Preview and arrange market fixtures in your space using your phone's camera.": "Tingnan at ayusin ang mga kagamitan sa iyong puwesto gamit ang camera ng iyong telepono.",
-  "Removes every notification from your list. This can't be undone.": "Binubura ang lahat ng abiso sa listahan. Hindi na ito maibabalik.",
-  "Rent reminders, payment updates, and other alerts. Tap one to mark it read.": "Mga paalala sa upa, update sa bayad, at iba pang abiso. Pindutin ang isa upang markahang nabasa.",
-  "Set a new login password without needing the Forgot Password flow. Must be 8-12 characters with an uppercase letter, a number, and a special character.": "Magtakda ng bagong password nang hindi ginagamit ang Nakalimutang Password. Dapat ay 8-12 character na may malaking titik, numero, at espesyal na character.",
-  "Signs you out of your account.": "Ini-sign out ka mula sa iyong account.",
-  "Unlocks the fields above so you can update them.": "Binubuksan ang mga field sa itaas upang ma-update mo ang mga ito.",
-  "Updates from the admin, like payment confirmations and account changes.": "Mga update mula sa admin, gaya ng kumpirmasyon ng bayad at mga pagbabago sa account.",
-  "View and edit your account details, and sign out.": "Tingnan at baguhin ang detalye ng iyong account, o mag-sign out.",
-  "Your current schedule, next payment date, settled amount, and amount due.": "Ang kasalukuyan mong iskedyul, susunod na petsa ng bayad, halagang nabayaran, at halagang dapat bayaran.",
-  "Your current balance is locked for safety. Use Add advance payment to include complete billing periods.": "Naka-lock ang kasalukuyang balanse para sa kaligtasan. Gamitin ang Magdagdag ng Paunang Bayad upang isama ang buong panahon ng pagsingil.",
-  "Your name, contact number, and assigned login username. SMS OTP secures password recovery.": "Ang iyong pangalan, contact number, at nakatalagang username. Pinoprotektahan ng SMS OTP ang pagbawi ng password.",
-  "Your next rent installments and when they're due.": "Ang mga susunod mong hulog sa upa at ang petsa ng kanilang pagbabayad.",
-  "Your space ID and how long you've been a tenant.": "Ang ID ng iyong puwesto at kung gaano ka na katagal na nangungupahan.",
-  "The kind of goods sold at your stall. Tap Edit Profile to change it — updates here sync with the admin's records too.": "Ang uri ng produktong ibinebenta sa iyong puwesto. Pindutin ang I-edit ang Profile upang baguhin ito—magsi-sync din ang update sa rekord ng admin.",
-  "Your dashboard — rental payment status and upcoming schedule.": "Ang iyong dashboard—katayuan ng bayad sa upa at paparating na iskedyul.",
+  "Find a transaction by amount, date, or payment method.": "I-search ang transaction gamit ang amount, date, o payment method.",
+  "Confirmed payments whose rent coverage begins in the selected month.": "Dito makikita ang confirmed payments na ang rent coverage ay nagsisimula sa selected month.",
+  "Switch to a different month or year to see that period's transactions.": "Pili ka ng ibang month o year para makita ang transactions sa period na iyon.",
+  "Every payment for the selected period. Tap a card with a receipt to view it.": "Lahat ng payments para sa selected period ay nandito. I-tap ang card para makita ang receipt.",
+  "View past payments and download receipts.": "Tingnan ang previous payments at mag-download ng receipts.",
+  "What you currently owe for this billing period, after any payments already made.": "Ito ang balance na kailangan mo pang bayaran for this billing period, after ma-apply ang previous payments.",
+  "Pre-filled with what's currently due. You can pay more, but not less.": "Automatic nang naka-set ang current amount due. Puwede kang magbayad ng mas mataas, pero hindi mas mababa.",
+  "Choose GCash or Maya for the PayMongo test demonstration.": "Pili ng GCash o Maya para sa PayMongo test demo.",
+  "Opens PayMongo's test checkout. No real money is charged.": "Bubuksan nito ang PayMongo test checkout. Walang real money na mababawas.",
+  "Come back here anytime for a guided tour of this page.": "Balik ka lang dito anytime kung gusto mong ulitin ang guide ng page.",
+  "Takes you back to the dashboard.": "Babalik ka nito sa dashboard.",
+  "Marks every notification in your list as read, in one tap.": "Ima-mark nito as read ang lahat ng notifications in one tap.",
+  "Pay your rent online, and view your payment and receipt history.": "Dito ka puwedeng magbayad ng rent online at makita ang payment at receipt history mo.",
+  "Preview and arrange market fixtures in your space using your phone's camera.": "I-preview at ayusin ang market fixtures sa stall mo gamit ang phone camera.",
+  "Removes every notification from your list. This can't be undone.": "Tatanggalin nito lahat ng notifications sa list. Hindi na ito puwedeng i-undo.",
+  "Rent reminders, payment updates, and other alerts. Tap one to mark it read.": "Makikita rito ang rent reminders, payment updates, at ibang alerts. I-tap ang notification para ma-mark as read.",
+  "Set a new login password without needing the Forgot Password flow. Must be 8-12 characters with an uppercase letter, a number, and a special character.": "Mag-set ng new password without using Forgot Password. Dapat 8-12 characters with uppercase letter, number, at special character.",
+  "Signs you out of your account.": "Ila-log out ka nito sa account mo.",
+  "Unlocks the fields above so you can update them.": "I-a-unlock nito ang fields sa taas para ma-update mo ang details.",
+  "Updates from the admin, like payment confirmations and account changes.": "Dito makikita ang updates from admin, tulad ng payment confirmation at account changes.",
+  "View and edit your account details, and sign out.": "Tingnan o i-edit ang account details mo, at dito ka rin puwedeng mag-sign out.",
+  "Your current schedule, next payment date, settled amount, and amount due.": "Makikita rito ang current schedule, next payment date, paid amount, at amount due mo.",
+  "Your current balance is locked for safety. Use Add advance payment to include complete billing periods.": "Locked ang current balance for safety. Gamitin ang Add Advance Payment kung gusto mong mag-cover ng additional complete billing periods.",
+  "Your name, contact number, and assigned login username. SMS OTP secures password recovery.": "Makikita rito ang name, contact number, at login username mo. SMS OTP ang security for password recovery.",
+  "Your next rent installments and when they're due.": "Dito makikita ang next rent payments mo at kung kailan sila due.",
+  "Your space ID and how long you've been a tenant.": "Makikita rito ang stall ID mo at kung gaano ka na katagal na tenant.",
+  "The kind of goods sold at your stall. Tap Edit Profile to change it — updates here sync with the admin's records too.": "Ito ang type of goods na binebenta sa stall mo. I-tap ang Edit Profile para baguhin; automatic din itong mag-sync sa admin records.",
+  "Your dashboard — rental payment status and upcoming schedule.": "Ito ang dashboard mo para sa rent payment status at upcoming schedule.",
 };
 
 export function tagalogStepText(step: Pick<HelpStep, "title" | "description">) {
@@ -580,7 +580,7 @@ export default function HelpTour({
           >
             <View style={styles.tooltipHeader}>
               <Text style={styles.stepCount}>
-                {language === "tl" ? "Hakbang" : "Step"} {(displayedText?.stepIndex ?? displayStepIndex) + 1} {language === "tl" ? "sa" : "of"} {steps.length}
+                Step {(displayedText?.stepIndex ?? displayStepIndex) + 1} of {steps.length}
               </Text>
               <View style={styles.languageToggle}>
                 {(["en", "tl"] as TourLanguage[]).map((value) => (
@@ -595,7 +595,7 @@ export default function HelpTour({
             <View style={styles.tooltipActions}>
               <Pressable onPress={onClose} hitSlop={8}>
                 {({ pressed }) => (
-                  <Text style={[styles.skipText, pressed && styles.skipTextPressed]}>{language === "tl" ? "Laktawan" : "Skip"}</Text>
+                  <Text style={[styles.skipText, pressed && styles.skipTextPressed]}>{language === "tl" ? "Skip muna" : "Skip"}</Text>
                 )}
               </Pressable>
               <Pressable
@@ -605,7 +605,7 @@ export default function HelpTour({
                 {({ pressed }) => (
                   <>
                     <Text style={[styles.nextBtnText, pressed && styles.nextBtnTextPressed]}>
-                      {isLast ? (language === "tl" ? "Naintindihan" : "Got it") : (language === "tl" ? "Susunod" : "Next")}
+                      {isLast ? (language === "tl" ? "Gets ko" : "Got it") : "Next"}
                     </Text>
                     {!isLast && (
                       <ArrowRight

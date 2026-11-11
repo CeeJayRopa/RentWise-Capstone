@@ -149,7 +149,7 @@ index 602dba8..fe35bae 100644
                                      name = model.nodeName()
                                  },
                              )
-+                            val normalizedScale = remember(node) { node.scale }
++                            val normalizedScale: Scale = remember(node) { node.scale }
 +                            SideEffect {
 +                                node.position = model.position
 +                                node.rotation = model.rotation

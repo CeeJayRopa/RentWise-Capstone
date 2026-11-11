@@ -36,6 +36,7 @@ import {
   interruptPaymentSession,
   PaymentRecordingResult,
   PaymentAttemptStatus,
+  PaymentRequestTimeoutError,
 } from "../../services/paymentService";
 import {
   setPendingCheckoutSession,
@@ -100,6 +101,7 @@ export default function PaymentsScreen() {
   const checkoutVisibleRef = useRef(false);
   const recoveryPromiseRef = useRef<Promise<boolean> | null>(null);
   const finalizationInFlight = useRef(false);
+  const checkoutReturnInFlight = useRef(false);
   const paymentInteractionLockedRef = useRef(false);
   const [paymentInteractionLocked, setPaymentInteractionLockedState] = useState(false);
 
@@ -129,7 +131,7 @@ export default function PaymentsScreen() {
   // session still makes process death/backgrounding recoverable.
   useEffect(() => {
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
-      return paymentInteractionLockedRef.current;
+      return paymentStartInFlight.current || paymentInteractionLockedRef.current;
     });
     return () => subscription.remove();
   }, []);
@@ -238,13 +240,15 @@ export default function PaymentsScreen() {
     if (!showWebView) return;
     let stopped = false;
     const verify = async () => {
-      if (reconciliationInFlight.current || interruptionInFlight.current || stopped) return;
+      if (reconciliationInFlight.current || interruptionInFlight.current || checkoutReturnInFlight.current || stopped) return;
       reconciliationInFlight.current = true;
       try {
         const sessionId = await getPendingCheckoutSession();
         if (!sessionId) return;
         const result = await reconcilePendingPayment(sessionId);
-        if (!stopped) await handleAttemptResult(result, activePaymentAmount);
+        if (!stopped && !checkoutReturnInFlight.current) {
+          await handleAttemptResult(result, activePaymentAmount);
+        }
       } catch (error) {
         console.log("PAYMENT STATUS CHECK ERROR:", error);
       } finally {
@@ -398,7 +402,10 @@ export default function PaymentsScreen() {
       return;
     }
     if (result.status === "processing") {
-      setPaymentInteractionLocked(true);
+      // Provider processing can legitimately take longer than one request.
+      // Keep the recoverable session, but do not trap the tenant behind an
+      // endless full-screen overlay while the polling loop checks again.
+      setPaymentInteractionLocked(false);
       return;
     }
     if (result.status === "pending") {
@@ -409,7 +416,7 @@ export default function PaymentsScreen() {
     // payment record has not yet been returned. Keep the recovery reference;
     // only `recorded` is allowed to clear it and show the success result.
     if (result.status === "paid") {
-      setPaymentInteractionLocked(true);
+      setPaymentInteractionLocked(false);
       return;
     }
     await clearPendingCheckoutSession();
@@ -482,9 +489,10 @@ export default function PaymentsScreen() {
 
   async function handlePayNow() {
     if (paymentStartInFlight.current) return;
-    if (!(await requireOnlineAction("Starting an online payment"))) return;
     paymentStartInFlight.current = true;
+    setRedirecting(true);
     try {
+    if (!(await requireOnlineAction("Starting an online payment"))) return;
     // The client sends only the selected advance quantity. The backend
     // computes the balance and final amount from the latest billing state.
     if (paymentDue <= 0 && advancePeriods <= 0) {
@@ -498,7 +506,6 @@ export default function PaymentsScreen() {
     const user = auth.currentUser;
     if (!user) return;
 
-    setRedirecting(true);
     const tenantName = tenant
       ? `${tenant.firstName ?? ""} ${tenant.lastName ?? ""}`.trim()
       : "";
@@ -517,7 +524,27 @@ export default function PaymentsScreen() {
     setShowWebView(true);
     } catch (error) {
       console.log("PAYMONGO ERROR:", error);
-      Alert.alert("Error", "Unable to start payment. Please try again.");
+      if (error instanceof PaymentRequestTimeoutError) {
+        // A timed-out create request may still have created a server session.
+        // Recover it instead of immediately allowing a duplicate submission.
+        try {
+          const recovered = await recoverUnfinishedPayment();
+          Alert.alert(
+            recovered ? "Payment recovered" : "Payment session is still being checked",
+            recovered
+              ? "Your verified payment was recovered safely."
+              : "RentWise did not submit another payment. Reopen Payments to continue or verify the existing session.",
+          );
+        } catch (recoveryError) {
+          console.log("PAYMENT START RECOVERY ERROR:", recoveryError);
+          Alert.alert(
+            "Payment session is still being checked",
+            "RentWise did not submit another payment. Check your connection, then reopen Payments to recover safely.",
+          );
+        }
+      } else {
+        Alert.alert("Error", "Unable to start payment. Please try again.");
+      }
     } finally {
       setRedirecting(false);
       paymentStartInFlight.current = false;
@@ -613,13 +640,60 @@ export default function PaymentsScreen() {
       await handleAttemptResult(result, paymentAmount);
     } catch (err) {
       console.log("[handlePaymentSuccess] error:", err);
+      // Preserve the session pointer for the next poll/app launch, but never
+      // leave the tenant permanently trapped behind the interaction overlay.
+      setPaymentInteractionLocked(false);
       Alert.alert(
         "Verification pending",
-        "RentWise could not confirm the final result yet. Your payment will continue to be checked securely.",
+        "RentWise could not confirm the final result yet. It is safe to close this screen; your saved payment session will be checked again.",
       );
     } finally {
       finalizationInFlight.current = false;
     }
+  }
+
+  function handleCheckoutReturn(url: string) {
+    if (checkoutReturnInFlight.current) return;
+    checkoutReturnInFlight.current = true;
+    // Lock synchronously at the WebView navigation boundary. This closes the
+    // small window where either provider-result button could be tapped twice.
+    setPaymentInteractionLocked(true);
+
+    void (async () => {
+      try {
+        if (url.includes("payment-success")) {
+          const amountMatch = url.match(/[?&]amount=(\d+)/);
+          const statusMatch = url.match(/[?&]returnStatus=([^&]+)/);
+          const centavos = amountMatch ? parseInt(amountMatch[1], 10) : 0;
+          const returnStatus = statusMatch ? decodeURIComponent(statusMatch[1]) : "success";
+          if (returnStatus === "success") {
+            await handlePaymentSuccess(centavos);
+            return;
+          }
+        }
+
+        const sessionId = await getPendingCheckoutSession();
+        if (!sessionId) {
+          setPaymentInteractionLocked(false);
+          Alert.alert(
+            "Verification pending",
+            "RentWise could not find the payment session. Reopen Payments to recover it securely.",
+          );
+          return;
+        }
+        const result = await reconcilePendingPayment(sessionId);
+        await handleAttemptResult(result, activePaymentAmount);
+      } catch (error) {
+        console.log("PAYMENT RETURN RECONCILIATION ERROR:", error);
+        setPaymentInteractionLocked(false);
+        Alert.alert(
+          "Verification pending",
+          "RentWise could not confirm the result yet. Your saved payment session will be checked again safely.",
+        );
+      } finally {
+        checkoutReturnInFlight.current = false;
+      }
+    })();
   }
 
   async function interruptActivePayment(reason: "close" | "background" = "close") {
@@ -755,25 +829,18 @@ export default function PaymentsScreen() {
           <View style={styles.caughtUpCard}>
             <CheckCircle2 size={28} color={colors.emerald} />
             <Text style={styles.caughtUpTitle}>You're all caught up</Text>
-            <Text style={styles.caughtUpText}>
+            <Text
+              style={styles.caughtUpText}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.75}
+            >
               {hasPendingCoverage
                 ? "Your payment is pending administrator confirmation."
                 : storedNextDueAt && storedNextDueAt > today
                   ? `Your next payment is due ${storedNextDueAt.toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" })}.`
                   : "You have no payment due right now."}
             </Text>
-            {!hasPendingCoverage ? (
-              <Pressable
-                style={({pressed}) => [styles.advanceButton, pressed && styles.advanceButtonPressed]}
-                onPress={() => {
-                  setDraftAdvancePeriods(1);
-                  setAdvanceModalVisible(true);
-                }}
-              >
-                <CalendarDays size={16} color={colors.emerald} />
-                <Text style={styles.advanceButtonText}>Pay in advance</Text>
-              </Pressable>
-            ) : null}
           </View>
         ) : (
           <>
@@ -1084,29 +1151,7 @@ export default function PaymentsScreen() {
             onShouldStartLoadWithRequest={(req) => {
               const url = req.url;
               if (url.startsWith("rentwise://")) {
-                if (url.includes("payment-success")) {
-                  const amountMatch = url.match(/[?&]amount=(\d+)/);
-                  const statusMatch = url.match(/[?&]returnStatus=([^&]+)/);
-                  const centavos = amountMatch ? parseInt(amountMatch[1], 10) : 0;
-                  const returnStatus = statusMatch ? decodeURIComponent(statusMatch[1]) : "success";
-                  if (returnStatus === "success") {
-                    void handlePaymentSuccess(centavos);
-                  } else {
-                    void (async () => {
-                      const sessionId = await getPendingCheckoutSession();
-                      if (!sessionId) return;
-                      const result = await reconcilePendingPayment(sessionId);
-                      await handleAttemptResult(result, activePaymentAmount);
-                    })().catch((error) => console.log("PAYMENT RETURN RECONCILIATION ERROR:", error));
-                  }
-                } else {
-                  void (async () => {
-                    const sessionId = await getPendingCheckoutSession();
-                    if (!sessionId) return;
-                    const result = await reconcilePendingPayment(sessionId);
-                    await handleAttemptResult(result, activePaymentAmount);
-                  })().catch((error) => console.log("PAYMENT RETURN RECONCILIATION ERROR:", error));
-                }
+                handleCheckoutReturn(url);
                 return false;
               }
               // PayMongo may hand off to a supported banking or e-wallet app.
@@ -1132,7 +1177,7 @@ export default function PaymentsScreen() {
       </Modal>
 
       <Modal
-        visible={paymentInteractionLocked}
+        visible={redirecting || paymentInteractionLocked}
         transparent
         animationType="fade"
         statusBarTranslucent
@@ -1144,9 +1189,13 @@ export default function PaymentsScreen() {
               <ShieldCheck size={30} color={colors.emerald} />
             </View>
             <ActivityIndicator size="large" color={colors.emerald} />
-            <Text style={styles.paymentLockTitle}>Securing your payment</Text>
+            <Text style={styles.paymentLockTitle}>
+              {redirecting ? "Opening secure payment" : "Securing your payment"}
+            </Text>
             <Text style={styles.paymentLockMessage}>
-              RentWise is verifying the provider result and recording it safely. Please wait and do not submit another payment.
+              {redirecting
+                ? "Please wait while RentWise creates your protected checkout. The screen is temporarily locked to prevent duplicate payments."
+                : "RentWise is verifying the provider result and recording it safely. Please wait and do not submit another payment."}
             </Text>
           </View>
         </View>
@@ -1491,6 +1540,7 @@ const styles = StyleSheet.create({
   },
 
   caughtUpText: {
+    width: "100%",
     fontSize: fontSize.sm,
     fontFamily: fontFamily.regular,
     color: colors.textSecondary,

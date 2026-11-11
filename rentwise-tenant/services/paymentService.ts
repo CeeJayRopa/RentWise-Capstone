@@ -48,12 +48,36 @@ export type PaymentRecoveryResult =
   | ({ status: PaymentAttemptStatus; providerStatus?: string; sessionId: string; redirectUrl?: string; amount?: number; paymentMethod?: PaymentMethodType })
   | { status: "none" };
 
+const PAYMENT_REQUEST_TIMEOUT_MS = 30_000;
+
+export class PaymentRequestTimeoutError extends Error {
+  constructor(operation: string) {
+    super(`${operation} is taking longer than expected.`);
+    this.name = "PaymentRequestTimeoutError";
+  }
+}
+
+async function withPaymentRequestTimeout<T>(operation: string, request: Promise<T>): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(
+      () => reject(new PaymentRequestTimeoutError(operation)),
+      PAYMENT_REQUEST_TIMEOUT_MS,
+    );
+  });
+  try {
+    return await Promise.race([request, timeout]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 export async function createPayment(data: any): Promise<PaymentRecordingResult> {
   const createPendingPayment = httpsCallable<
     Record<string, unknown>,
     PaymentRecordingResult
-  >(getFunctions(firebaseApp), "createTenantPendingPayment");
-  const result = await createPendingPayment(data);
+  >(getFunctions(firebaseApp, "us-central1"), "createTenantPendingPayment");
+  const result = await withPaymentRequestTimeout("Payment recording", createPendingPayment(data));
   return result.data;
 }
 
@@ -61,8 +85,8 @@ export async function reconcilePendingPayment(checkoutSessionId: string): Promis
   const reconcile = httpsCallable<
     { checkoutSessionId: string },
     PaymentRecordingResult
-  >(getFunctions(firebaseApp), "reconcileTenantPayment");
-  const result = await reconcile({ checkoutSessionId });
+  >(getFunctions(firebaseApp, "us-central1"), "reconcileTenantPayment");
+  const result = await withPaymentRequestTimeout("Payment verification", reconcile({ checkoutSessionId }));
   return result.data;
 }
 
@@ -70,8 +94,8 @@ export async function recoverPaymentSession(): Promise<PaymentRecoveryResult> {
   const recover = httpsCallable<
     Record<string, never>,
     PaymentRecoveryResult
-  >(getFunctions(firebaseApp), "recoverTenantPaymentSession");
-  const result = await recover({});
+  >(getFunctions(firebaseApp, "us-central1"), "recoverTenantPaymentSession");
+  const result = await withPaymentRequestTimeout("Payment recovery", recover({}));
   return result.data;
 }
 
@@ -79,8 +103,8 @@ export async function interruptPaymentSession(checkoutSessionId: string): Promis
   const interrupt = httpsCallable<
     { checkoutSessionId: string },
     PaymentRecordingResult
-  >(getFunctions(firebaseApp), "interruptTenantPaymentSession");
-  const result = await interrupt({ checkoutSessionId });
+  >(getFunctions(firebaseApp, "us-central1"), "interruptTenantPaymentSession");
+  const result = await withPaymentRequestTimeout("Payment cancellation", interrupt({ checkoutSessionId }));
   return result.data;
 }
 
@@ -92,8 +116,11 @@ export async function createOnlinePayment(
   const createIntent = httpsCallable<
     { advancePeriods: number; paymentMethod: PaymentMethodType },
     { redirectUrl: string; paymentIntentId: string; amount: number; paidThroughAt?: string }
-  >(getFunctions(firebaseApp), "createTenantPaymongoPaymentIntent");
-  const result = await createIntent({ advancePeriods, paymentMethod });
+  >(getFunctions(firebaseApp, "us-central1"), "createTenantPaymongoPaymentIntent");
+  const result = await withPaymentRequestTimeout(
+    "Payment session creation",
+    createIntent({ advancePeriods, paymentMethod }),
+  );
   return {
     redirectUrl: result.data.redirectUrl,
     paymentIntentId: result.data.paymentIntentId,

@@ -10,14 +10,16 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useLocalSearchParams } from "expo-router";
+import { signInWithCustomToken, signOut } from "firebase/auth";
 import { X, AlertCircle, CheckCircle2, Eye, EyeOff } from "lucide-react-native";
 import { getFunctions, httpsCallable } from "firebase/functions";
 
 import { firebaseApp } from "../shared/firebaseConfig";
+import { auth } from "../shared/firebaseConfig";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../shared/theme";
 
 type Step = "checking" | "invalid" | "form" | "done";
-const cloudFunctions = getFunctions(firebaseApp);
+const cloudFunctions = getFunctions(firebaseApp, "us-central1");
 
 // Reached from login.tsx's Forgot Password flow, which generates the reset
 // code server-side and navigates straight here with it — no email, no
@@ -25,9 +27,9 @@ const cloudFunctions = getFunctions(firebaseApp);
 // outside the app itself.
 export default function ResetPassword() {
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ resetToken?: string; identifier?: string }>();
+  const params = useLocalSearchParams<{ resetToken?: string; temporaryRecovery?: string }>();
+  const isTemporaryRecovery = params.temporaryRecovery === "1";
   const [step, setStep] = useState<Step>("checking");
-  const [identifier, setIdentifier] = useState("");
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -38,15 +40,15 @@ export default function ResetPassword() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!params.resetToken) {
+    if (!params.resetToken && !isTemporaryRecovery) {
       setStep("invalid");
       return;
     }
-    setIdentifier(params.identifier ?? "your tenant account");
     setStep("form");
-  }, [params.identifier, params.resetToken]);
+  }, [params.resetToken, isTemporaryRecovery]);
 
-  function goToLogin() {
+  async function goToLogin() {
+    if (isTemporaryRecovery) await signOut(auth).catch(() => {});
     router.replace("/login");
   }
 
@@ -71,12 +73,19 @@ export default function ResetPassword() {
       setConfirmError("");
     }
 
-    if (!valid || !params.resetToken) return;
+    if (!valid || (!params.resetToken && !isTemporaryRecovery)) return;
 
     setSubmitting(true);
     try {
-      const completeReset = httpsCallable(cloudFunctions, "completeTenantPasswordReset");
-      await completeReset({resetToken: params.resetToken, newPassword});
+      const completeReset = httpsCallable(cloudFunctions, isTemporaryRecovery ? "completeTenantTemporaryRecovery" : "completeTenantPasswordReset");
+      const response = await completeReset(isTemporaryRecovery ? {newPassword} : {resetToken: params.resetToken, newPassword});
+      if (isTemporaryRecovery) {
+        const customToken = (response.data as {customToken?: string})?.customToken;
+        if (!customToken) throw new Error("The recovery service did not return a new session.");
+        await signInWithCustomToken(auth, customToken);
+        router.replace("/welcome");
+        return;
+      }
       setStep("done");
     } catch {
       setPwError("This link has expired or was already used. Please request a new one.");
@@ -88,10 +97,12 @@ export default function ResetPassword() {
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
-        <Text style={styles.headerTitle}>Reset Password</Text>
-        <TouchableOpacity style={styles.closeBtn} onPress={goToLogin} activeOpacity={0.7}>
-          <X size={22} color={colors.emeraldSoft} />
-        </TouchableOpacity>
+        <Text style={styles.headerTitle}>{isTemporaryRecovery ? "Create New Password" : "Reset Password"}</Text>
+        {!isTemporaryRecovery && (
+          <TouchableOpacity style={styles.closeBtn} onPress={goToLogin} activeOpacity={0.7}>
+            <X size={22} color={colors.emeraldSoft} />
+          </TouchableOpacity>
+        )}
       </View>
 
       {step === "checking" && (
@@ -136,7 +147,7 @@ export default function ResetPassword() {
       {step === "form" && (
         <View style={styles.formBody}>
           <Text style={styles.formTitle}>Choose a new password</Text>
-          <Text style={styles.formSubtitle}>For {identifier}</Text>
+          <Text style={styles.formSubtitle}>For your tenant account</Text>
 
           <Text style={styles.fieldLabel}>New Password</Text>
           <View style={[styles.pwField, !!pwError && styles.pwFieldError]}>

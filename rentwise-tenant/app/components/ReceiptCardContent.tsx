@@ -1,9 +1,9 @@
-import { useRef, useState } from "react";
-import { View, Text, Image, StyleSheet, Pressable, Alert, Platform, ActivityIndicator } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { View, Text, Image, StyleSheet, Pressable, Alert, Platform, ActivityIndicator, Modal } from "react-native";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import * as FileSystem from "expo-file-system/legacy";
-import { Check, Clock, XCircle, Download, Copy } from "lucide-react-native";
+import { Check, Clock, XCircle, Download, Copy, FolderOpen } from "lucide-react-native";
 import { colors, fontFamily, fontSize, radius, spacing, shadow } from "../../shared/theme";
 import {
   getSavedReceiptDirectory,
@@ -199,23 +199,60 @@ async function downloadPdfOnAndroid(sourceUri: string, fileName: string) {
   Alert.alert("Downloaded", "Receipt saved to your chosen folder.");
 }
 
-async function confirmReceiptFolderAccess(): Promise<boolean> {
-  if (await getSavedReceiptDirectory()) return true;
-
-  const allowed = await new Promise<boolean>((resolve) => {
-    Alert.alert(
-      "Allow receipt storage?",
-      "RentWise needs access to a folder you choose so it can save your receipt soft copies. RentWise can only access the folder you select.",
-      [
-        { text: "Not now", style: "cancel", onPress: () => resolve(false) },
-        { text: "Choose folder", onPress: () => resolve(true) },
-      ],
-      { cancelable: true, onDismiss: () => resolve(false) },
-    );
-  });
-  if (!allowed) return false;
-
-  return Boolean(await requestReceiptDirectoryAccess());
+function ReceiptStoragePrompt({
+  visible,
+  onCancel,
+  onChoose,
+}: {
+  visible: boolean;
+  onCancel: () => void;
+  onChoose: () => void;
+}) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={onCancel}
+    >
+      <View style={styles.storagePromptBackdrop}>
+        <View style={styles.storagePromptCard} accessibilityViewIsModal>
+          <View style={styles.storagePromptIconWrap}>
+            <FolderOpen size={30} strokeWidth={2} color={colors.emerald} />
+          </View>
+          <Text style={styles.storagePromptEyebrow}>RECEIPT STORAGE</Text>
+          <Text style={styles.storagePromptTitle}>Choose where to save receipts</Text>
+          <Text style={styles.storagePromptMessage}>
+            Select one folder for your RentWise PDF receipts. The app can only save files inside the folder you choose.
+          </Text>
+          <View style={styles.storagePromptPrivacyRow}>
+            <Check size={16} strokeWidth={2.5} color={colors.emerald} />
+            <Text style={styles.storagePromptPrivacyText}>
+              Your other folders and files remain private.
+            </Text>
+          </View>
+          <View style={styles.storagePromptActions}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={onCancel}
+              style={({ pressed }) => [styles.storagePromptCancel, pressed && styles.storagePromptCancelPressed]}
+            >
+              <Text style={styles.storagePromptCancelText}>Not now</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={onChoose}
+              style={({ pressed }) => [styles.storagePromptChoose, pressed && styles.storagePromptChoosePressed]}
+            >
+              <FolderOpen size={17} color={colors.white} />
+              <Text style={styles.storagePromptChooseText}>Choose folder</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
 }
 
 // Shared by the receipt content and the standalone action bar below, so a
@@ -223,9 +260,35 @@ async function confirmReceiptFolderAccess(): Promise<boolean> {
 // of a modal) while the content itself scrolls independently.
 function useReceiptDerived(data: any, billing: any) {
   const [downloading, setDownloading] = useState(false);
+  const [storagePromptVisible, setStoragePromptVisible] = useState(false);
   const downloadingRef = useRef(false);
+  const storagePromptResolverRef = useRef<((allowed: boolean) => void) | null>(null);
   const { amountPaid } = getReceiptAmounts(data);
   const breakdown = completeBreakdown(data, billing, amountPaid);
+
+  useEffect(() => () => {
+    storagePromptResolverRef.current?.(false);
+    storagePromptResolverRef.current = null;
+  }, []);
+
+  function resolveStoragePrompt(allowed: boolean) {
+    const resolve = storagePromptResolverRef.current;
+    storagePromptResolverRef.current = null;
+    setStoragePromptVisible(false);
+    resolve?.(allowed);
+  }
+
+  async function confirmReceiptFolderAccess(): Promise<boolean> {
+    if (await getSavedReceiptDirectory()) return true;
+
+    const allowed = await new Promise<boolean>((resolve) => {
+      storagePromptResolverRef.current = resolve;
+      setStoragePromptVisible(true);
+    });
+    if (!allowed) return false;
+
+    return Boolean(await requestReceiptDirectoryAccess());
+  }
 
   async function handleDownloadPdf() {
     if (downloadingRef.current) return;
@@ -269,7 +332,15 @@ function useReceiptDerived(data: any, billing: any) {
     }
   }
 
-  return { breakdown, amountPaid, handleDownloadPdf, downloading };
+  return {
+    breakdown,
+    amountPaid,
+    handleDownloadPdf,
+    downloading,
+    storagePromptVisible,
+    cancelStoragePrompt: () => resolveStoragePrompt(false),
+    chooseStorageFolder: () => resolveStoragePrompt(true),
+  };
 }
 
 // Standalone Close/PDF action bar -- render this as a sibling AFTER a
@@ -285,10 +356,21 @@ export function ReceiptActionsBar({
   billing?: any;
   onClose?: () => void;
 }) {
-  const { handleDownloadPdf, downloading } = useReceiptDerived(data, billing);
+  const {
+    handleDownloadPdf,
+    downloading,
+    storagePromptVisible,
+    cancelStoragePrompt,
+    chooseStorageFolder,
+  } = useReceiptDerived(data, billing);
 
   return (
     <View style={styles.actionsRow}>
+      <ReceiptStoragePrompt
+        visible={storagePromptVisible}
+        onCancel={cancelStoragePrompt}
+        onChoose={chooseStorageFolder}
+      />
       <Pressable
         style={({ pressed }) => [styles.closeBtn, downloading && { opacity: 0.55 }, pressed && !downloading && styles.closeBtnPressed]}
         onPress={onClose}
@@ -329,7 +411,15 @@ export default function ReceiptCardContent({
 }) {
   const receiptDate = data.date ? new Date(data.date) : new Date();
 
-  const { breakdown, amountPaid, handleDownloadPdf, downloading } = useReceiptDerived(data, billing);
+  const {
+    breakdown,
+    amountPaid,
+    handleDownloadPdf,
+    downloading,
+    storagePromptVisible,
+    cancelStoragePrompt,
+    chooseStorageFolder,
+  } = useReceiptDerived(data, billing);
   const { cashTendered, change } = getReceiptAmounts(data);
 
   const info = statusInfo(data.status);
@@ -344,6 +434,11 @@ export default function ReceiptCardContent({
 
   return (
     <View style={styles.root}>
+      <ReceiptStoragePrompt
+        visible={storagePromptVisible}
+        onCancel={cancelStoragePrompt}
+        onChoose={chooseStorageFolder}
+      />
       <View style={[styles.statusIconCircle, { backgroundColor: info.iconBg }]}>
         <Icon size={26} color={info.iconColor} />
       </View>
@@ -702,5 +797,115 @@ const styles = StyleSheet.create({
 
   pdfBtnTextPressed: {
     color: colors.ink,
+  },
+  storagePromptBackdrop: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: spacing.xl,
+    backgroundColor: "rgba(4, 25, 21, 0.66)",
+  },
+  storagePromptCard: {
+    width: "100%",
+    maxWidth: 390,
+    alignItems: "center",
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xxl,
+    paddingBottom: spacing.xl,
+    borderRadius: radius.xl,
+    backgroundColor: colors.white,
+    ...shadow.raised,
+  },
+  storagePromptIconWrap: {
+    width: 64,
+    height: 64,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 32,
+    backgroundColor: colors.emeraldSoft,
+  },
+  storagePromptEyebrow: {
+    marginTop: spacing.lg,
+    fontSize: fontSize.xs,
+    letterSpacing: 1.2,
+    fontFamily: fontFamily.bold,
+    color: colors.emerald,
+  },
+  storagePromptTitle: {
+    marginTop: spacing.sm,
+    textAlign: "center",
+    fontSize: fontSize.xl,
+    lineHeight: 28,
+    fontFamily: fontFamily.bold,
+    color: colors.ink,
+  },
+  storagePromptMessage: {
+    marginTop: spacing.sm,
+    textAlign: "center",
+    fontSize: fontSize.sm,
+    lineHeight: 20,
+    fontFamily: fontFamily.regular,
+    color: colors.textSecondary,
+  },
+  storagePromptPrivacyRow: {
+    width: "100%",
+    marginTop: spacing.lg,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.mist,
+  },
+  storagePromptPrivacyText: {
+    flexShrink: 1,
+    fontSize: fontSize.xs,
+    lineHeight: 17,
+    fontFamily: fontFamily.medium,
+    color: colors.textSecondary,
+  },
+  storagePromptActions: {
+    width: "100%",
+    marginTop: spacing.lg,
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  storagePromptCancel: {
+    flex: 1,
+    minHeight: 50,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
+  },
+  storagePromptCancelPressed: {
+    backgroundColor: colors.mist,
+  },
+  storagePromptCancelText: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+    color: colors.textSecondary,
+  },
+  storagePromptChoose: {
+    flex: 1.35,
+    minHeight: 50,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: colors.emerald,
+  },
+  storagePromptChoosePressed: {
+    opacity: 0.86,
+  },
+  storagePromptChooseText: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.bold,
+    color: colors.white,
   },
 });

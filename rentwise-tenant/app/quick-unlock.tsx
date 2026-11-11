@@ -36,6 +36,7 @@ export default function QuickUnlock() {
   const [unlocking, setUnlocking] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const signingOutRef = useRef(false);
+  const unlockingRef = useRef(false);
   useEffect(() => {
     const user = auth.currentUser;
     // No active session (e.g. someone deep-linked here directly) — this
@@ -70,6 +71,7 @@ export default function QuickUnlock() {
   }
 
   async function handleUnlock() {
+    if (unlockingRef.current || signingOutRef.current) return;
     const user = auth.currentUser;
     if (!user || !user.email) {
       router.replace("/login");
@@ -79,6 +81,7 @@ export default function QuickUnlock() {
       setError("Please enter your password.");
       return;
     }
+    unlockingRef.current = true;
     setUnlocking(true);
     setError("");
     try {
@@ -108,12 +111,13 @@ export default function QuickUnlock() {
       setError(`Incorrect password. ${remaining} attempt${remaining === 1 ? "" : "s"} remaining.`);
       setPassword("");
     } finally {
+      unlockingRef.current = false;
       setUnlocking(false);
     }
   }
 
   async function handleSignOut() {
-    if (signingOutRef.current) return;
+    if (signingOutRef.current || unlockingRef.current) return;
     signingOutRef.current = true;
     setSigningOut(true);
     try {
@@ -161,6 +165,7 @@ export default function QuickUnlock() {
           <TextInput
             style={styles.textInput}
             value={password}
+            maxLength={24}
             onChangeText={(t) => {
               setPassword(t);
               setError("");
@@ -171,7 +176,7 @@ export default function QuickUnlock() {
             editable={!unlocking}
             autoFocus
           />
-          <Pressable style={styles.rightIcon} onPress={() => setShowPassword((v) => !v)} hitSlop={8}>
+          <Pressable style={[styles.rightIcon, unlocking && {opacity: 0.45}]} onPress={() => setShowPassword((v) => !v)} hitSlop={8} disabled={unlocking || signingOut} accessibilityState={{disabled: unlocking || signingOut}}>
             {showPassword ? (
               <Eye size={17} color={colors.textMuted} />
             ) : (
@@ -200,7 +205,7 @@ export default function QuickUnlock() {
           }
         </Pressable>
 
-        <Pressable style={styles.signOutLink} onPress={handleSignOut} disabled={signingOut || unlocking}>
+        <Pressable style={[styles.signOutLink, (signingOut || unlocking) && {opacity: 0.45}]} onPress={handleSignOut} disabled={signingOut || unlocking} accessibilityState={{disabled: signingOut || unlocking}}>
           {signingOut ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}><ActivityIndicator size="small" color={colors.textSecondary} /><Text style={styles.signOutLinkText}>Signing out...</Text></View>
           ) : <Text style={styles.signOutLinkText}>Not you? Sign out</Text>}

@@ -7,7 +7,7 @@ import { getFunctions, httpsCallable } from "firebase/functions";
 import { firebaseApp } from "../shared/firebaseConfig";
 import { colors, fontFamily, fontSize, lineHeight, radius, spacing, shadow } from "../shared/theme";
 
-const cloudFunctions = getFunctions(firebaseApp);
+const cloudFunctions = getFunctions(firebaseApp, "us-central1");
 
 type SendResult = { status: "sent"; phoneHint?: string; username?: string } | { status: "manual" };
 

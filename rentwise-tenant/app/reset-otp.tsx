@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  BackHandler,
   View,
   Text,
   TextInput,
@@ -7,6 +8,7 @@ import {
   TouchableOpacity,
   Pressable,
   ActivityIndicator,
+  Modal,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useLocalSearchParams } from "expo-router";
@@ -16,7 +18,7 @@ import { getFunctions, httpsCallable } from "firebase/functions";
 import { firebaseApp } from "../shared/firebaseConfig";
 import { colors, fontFamily, fontSize, lineHeight, radius, spacing, shadow } from "../shared/theme";
 
-const cloudFunctions = getFunctions(firebaseApp);
+const cloudFunctions = getFunctions(firebaseApp, "us-central1");
 const OTP_LENGTH = 6;
 const RESEND_COOLDOWN = 60; // seconds
 
@@ -27,7 +29,7 @@ const RESEND_COOLDOWN = 60; // seconds
 // OTP_RESET_PLAN.md.
 export default function ResetOtp() {
   const insets = useSafeAreaInsets();
-  const { identifier, phoneHint } = useLocalSearchParams<{ identifier?: string; phoneHint?: string }>();
+  const { recoveryToken, phoneHint } = useLocalSearchParams<{ recoveryToken?: string; phoneHint?: string }>();
 
   const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +37,17 @@ export default function ResetOtp() {
   const [submitting, setSubmitting] = useState(false);
   const [resending, setResending] = useState(false);
   const [cooldown, setCooldown] = useState(RESEND_COOLDOWN);
+  const [recoveryModal, setRecoveryModal] = useState(false);
+  const [newPhone, setNewPhone] = useState("");
   const inputRef = useRef<TextInput>(null);
+  const verifyInFlight = useRef(false);
+  const verificationLocked = submitting && verifyInFlight.current;
+
+  useEffect(() => {
+    if (!verificationLocked) return;
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => true);
+    return () => subscription.remove();
+  }, [verificationLocked]);
 
   // Resend cooldown countdown -- a code was just sent by /reset-sending, so
   // start locked and tick down to 0.
@@ -57,23 +69,26 @@ export default function ResetOtp() {
   }
 
   async function handleVerify() {
-    if (otp.length !== OTP_LENGTH || submitting) return;
-    if (!identifier) {
+    if (otp.length !== OTP_LENGTH || submitting || verifyInFlight.current) return;
+    if (!recoveryToken) {
       setError("Something went wrong. Please restart from the sign-in screen.");
       return;
     }
+    // Lock synchronously so rapid taps cannot start two verification requests
+    // before React has committed the submitting state.
+    verifyInFlight.current = true;
     setSubmitting(true);
     setError(null);
     setNotice(null);
     try {
       const verifyResetOtp = httpsCallable(cloudFunctions, "verifyResetOtp");
-      const res = (await verifyResetOtp({ identifier, otp })).data as { resetToken?: string };
+      const res = (await verifyResetOtp({ recoveryToken, otp })).data as { resetToken?: string };
       if (!res.resetToken) {
         setError("Something went wrong. Please request a new code.");
         setOtp("");
         return;
       }
-      router.replace({ pathname: "/reset-password", params: { resetToken: res.resetToken, identifier } });
+      router.replace({ pathname: "/reset-password", params: { resetToken: res.resetToken } });
     } catch (err: any) {
       // Server messages are already user-facing (incorrect + attempts left,
       // expired, locked out). Clear the field and let them retry / resend.
@@ -82,18 +97,19 @@ export default function ResetOtp() {
       setOtp("");
       inputRef.current?.focus();
     } finally {
+      verifyInFlight.current = false;
       setSubmitting(false);
     }
   }
 
   async function handleResend() {
-    if (cooldown > 0 || resending || !identifier) return;
+    if (cooldown > 0 || resending || !recoveryToken) return;
     setResending(true);
     setError(null);
     setNotice(null);
     try {
       const sendResetOtp = httpsCallable(cloudFunctions, "sendResetOtp");
-      const res = (await sendResetOtp({ identifier })).data as { status: string };
+      const res = (await sendResetOtp({ recoveryToken })).data as { status: string };
       // Stay generic regardless of outcome -- don't reveal account state.
       setOtp("");
       setCooldown(RESEND_COOLDOWN);
@@ -112,13 +128,18 @@ export default function ResetOtp() {
   }
 
   async function handleAdminRecovery() {
-    if (!identifier || submitting || resending) return;
+    if (!recoveryToken || submitting || resending) return;
+    if (!/^9\d{9}$/.test(newPhone)) {
+      setError("Enter a valid 10-digit mobile number starting with 9.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
       const requestRecovery = httpsCallable(cloudFunctions, "requestTenantAdminRecovery");
-      await requestRecovery({identifier});
-      setNotice("Recovery request sent. Visit the admin office with identification to receive a temporary code.");
+      await requestRecovery({recoveryToken, newPhone, confirmPhone: newPhone});
+      setRecoveryModal(false);
+      router.replace({pathname: "/login", params: {recoveryWaiting: "1"}});
     } catch (err: any) {
       setError(err?.message || "Couldn't send the recovery request. Please try again.");
     } finally {
@@ -132,7 +153,12 @@ export default function ResetOtp() {
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
         <Text style={styles.headerTitle}>Enter Code</Text>
-        <TouchableOpacity style={styles.closeBtn} onPress={goToLogin} activeOpacity={0.7}>
+        <TouchableOpacity
+          style={styles.closeBtn}
+          onPress={goToLogin}
+          disabled={verificationLocked}
+          activeOpacity={0.7}
+        >
           <X size={22} color={colors.emeraldSoft} />
         </TouchableOpacity>
       </View>
@@ -215,13 +241,43 @@ export default function ResetOtp() {
         </View>
         <TouchableOpacity
           style={styles.adminHelpButton}
-          onPress={handleAdminRecovery}
+          onPress={() => { setError(null); setRecoveryModal(true); }}
           disabled={submitting || resending}
           activeOpacity={0.7}
         >
           <Text style={styles.adminHelpText}>I can't access this phone</Text>
         </TouchableOpacity>
       </View>
+
+      <Modal visible={recoveryModal} transparent animationType="fade" onRequestClose={() => setRecoveryModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Use a new mobile number</Text>
+            <Text style={styles.modalSubtitle}>Admin approval is required. Your registered number will change only after you sign in and create a new password.</Text>
+            <Text style={styles.modalLabel}>New Mobile Number</Text>
+            <View style={styles.phoneField}><Text style={styles.phonePrefix}>+63</Text><TextInput style={styles.phoneInput} value={newPhone} onChangeText={(v) => setNewPhone(v.replace(/\D/g, "").slice(0, 10))} keyboardType="phone-pad" placeholder="9XXXXXXXXX" /></View>
+            {!!error && <Text style={styles.errorText}>{error}</Text>}
+            <View style={styles.modalActions}>
+              <Pressable style={styles.modalCancel} onPress={() => setRecoveryModal(false)} disabled={submitting}><Text style={styles.modalCancelText}>Cancel</Text></Pressable>
+              <Pressable style={[styles.modalSubmit, submitting && styles.submitBtnDisabled]} onPress={handleAdminRecovery} disabled={submitting}>{submitting ? <ActivityIndicator color={colors.white} /> : <Text style={styles.modalSubmitText}>Send Request</Text>}</Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {verificationLocked && (
+        <View
+          style={styles.interactionLock}
+          pointerEvents="auto"
+          accessibilityViewIsModal
+          accessibilityLabel="Verifying code"
+        >
+          <View style={styles.interactionLockIndicator}>
+            <ActivityIndicator color={colors.emerald} size="large" />
+            <Text style={styles.interactionLockText}>Verifying code...</Text>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -310,4 +366,40 @@ const styles = StyleSheet.create({
   resendLink: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.emerald },
   adminHelpButton: { alignItems: "center", marginTop: spacing.lg, paddingVertical: spacing.sm },
   adminHelpText: { fontSize: fontSize.sm, fontFamily: fontFamily.semibold, color: colors.textSecondary },
+  interactionLock: {
+    ...StyleSheet.absoluteFill,
+    zIndex: 1000,
+    elevation: 1000,
+    backgroundColor: "rgba(247, 246, 240, 0.72)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  interactionLockIndicator: {
+    minWidth: 170,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.lg,
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
+    alignItems: "center",
+    gap: spacing.sm,
+    ...shadow.card,
+  },
+  interactionLockText: {
+    color: colors.ink,
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.semibold,
+  },
+  modalBackdrop: { flex: 1, backgroundColor: "rgba(4,25,21,0.66)", justifyContent: "center", padding: spacing.xl },
+  modalCard: { backgroundColor: colors.white, borderRadius: radius.lg, padding: spacing.xl, ...shadow.raised },
+  modalTitle: { fontSize: fontSize.lg, fontFamily: fontFamily.bold, color: colors.ink },
+  modalSubtitle: { marginTop: spacing.sm, marginBottom: spacing.lg, color: colors.textSecondary, fontFamily: fontFamily.regular, lineHeight: 20 },
+  modalLabel: { marginTop: spacing.sm, marginBottom: 6, color: colors.emerald, fontFamily: fontFamily.semibold, fontSize: fontSize.sm },
+  phoneField: { flexDirection: "row", alignItems: "center", borderWidth: 1.5, borderColor: colors.emeraldSoft, borderRadius: radius.sm },
+  phonePrefix: { paddingHorizontal: spacing.md, color: colors.ink, fontFamily: fontFamily.semibold },
+  phoneInput: { flex: 1, padding: spacing.md, color: colors.ink, fontFamily: fontFamily.medium },
+  modalActions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.xl },
+  modalCancel: { flex: 1, alignItems: "center", padding: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: colors.emerald },
+  modalCancelText: { color: colors.emerald, fontFamily: fontFamily.bold },
+  modalSubmit: { flex: 1, alignItems: "center", padding: spacing.md, borderRadius: radius.md, backgroundColor: colors.emerald },
+  modalSubmitText: { color: colors.white, fontFamily: fontFamily.bold },
 });

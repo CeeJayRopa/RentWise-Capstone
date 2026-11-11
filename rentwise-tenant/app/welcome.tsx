@@ -25,6 +25,10 @@ export default function Welcome() {
     setPhotoURL(user.photoURL ?? null);
     getTenantData(user.uid)
       .then((data) => {
+        if (data?.mustChangePassword) {
+          router.replace({pathname: "/reset-password", params: {temporaryRecovery: "1"}});
+          return;
+        }
         if (data?.firstName) setDisplayName(data.firstName);
       })
       .catch(() => {});
@@ -69,7 +73,14 @@ export default function Welcome() {
 
     // Auto-advances instead of waiting for a tap — this screen is just a
     // brief greeting, not a step that needs confirmation.
-    const timer = setTimeout(() => router.replace("/dashboard"), 4000);
+    const timer = setTimeout(async () => {
+      const user = auth.currentUser;
+      if (!user) return router.replace("/login");
+      const data = await getTenantData(user.uid).catch(() => null);
+      router.replace(data?.mustChangePassword
+        ? {pathname: "/reset-password", params: {temporaryRecovery: "1"}}
+        : "/dashboard");
+    }, 700);
     return () => clearTimeout(timer);
   }, []);
 

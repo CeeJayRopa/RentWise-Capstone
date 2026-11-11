@@ -552,6 +552,7 @@ export default function Profile() {
           <TextInput
             style={[styles.input, !isEditing && styles.inputReadOnly, isEditing && firstNameFocused && styles.inputFocused]}
             value={firstName}
+            maxLength={24}
             onChangeText={setFirstName}
             placeholder="Enter first name"
             placeholderTextColor={colors.textMuted}
@@ -568,6 +569,7 @@ export default function Profile() {
           <TextInput
             style={[styles.input, !isEditing && styles.inputReadOnly, isEditing && lastNameFocused && styles.inputFocused]}
             value={lastName}
+            maxLength={24}
             onChangeText={setLastName}
             placeholder="Enter last name"
             placeholderTextColor={colors.textMuted}
@@ -704,6 +706,7 @@ export default function Profile() {
             <TextInput
               style={styles.pwInput}
               value={oldPassword}
+              maxLength={24}
               onChangeText={(t) => {
                 setOldPassword(t);
                 setOldPwError("");

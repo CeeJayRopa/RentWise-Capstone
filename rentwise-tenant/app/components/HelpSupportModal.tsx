@@ -41,7 +41,7 @@ export default function HelpSupportModal({ visible, steps, onClose, onReplayTour
           <View style={styles.header}>
             {view === "faq" ? <TouchableOpacity style={styles.iconButton} onPress={() => setView("menu")} accessibilityLabel="Back to Help and Support"><ArrowLeft size={19} color={colors.ink} /></TouchableOpacity> : null}
             <View style={styles.headerText}>
-              <Text style={styles.title}>{view === "faq" ? (language === "tl" ? "Mga Madalas Itanong" : "Frequently Asked Questions") : "Help & Support"}</Text>
+              <Text style={styles.title}>{view === "faq" ? (language === "tl" ? "Common Questions" : "Frequently Asked Questions") : "Help & Support"}</Text>
               {view === "faq" ? null : <Text style={styles.subtitle}>How can we help you?</Text>}
             </View>
             <TouchableOpacity style={styles.iconButton} onPress={onClose} accessibilityLabel="Close Help and Support"><X size={19} color={colors.ink} /></TouchableOpacity>
@@ -58,7 +58,7 @@ export default function HelpSupportModal({ visible, steps, onClose, onReplayTour
           ) : (
             <>
               <View style={styles.faqIntroRow}>
-                <Text style={styles.subtitle}>{language === "tl" ? "Mga sagot para sa pahinang ito." : "Answers for this page."}</Text>
+                <Text style={styles.subtitle}>{language === "tl" ? "Quick answers tungkol sa page na ito." : "Answers for this page."}</Text>
                 <View style={styles.languageToggle}>
                   {(["en", "tl"] as TourLanguage[]).map((value) => (
                     <Pressable key={value} onPress={() => changeLanguage(value)} style={[styles.languageOption, language === value && styles.languageOptionActive]}>
@@ -71,7 +71,7 @@ export default function HelpSupportModal({ visible, steps, onClose, onReplayTour
               <ScrollView style={styles.faqScroll} contentContainerStyle={styles.faqList} showsVerticalScrollIndicator={false}>
               {steps.map((step) => { const expanded = expandedKey === step.key; const translated = language === "tl" ? tagalogStepText(step) : step; return (
                 <TouchableOpacity key={step.key} style={styles.faqItem} onPress={() => setExpandedKey(expanded ? null : step.key)} activeOpacity={0.78}>
-                  <View style={styles.faqQuestionRow}><Text style={styles.faqQuestion}>{language === "tl" ? `Paano gumagana ang ${translated.title}?` : `How does ${translated.title} work?`}</Text><ChevronDown size={18} color={colors.emerald} style={{ transform: [{ rotate: expanded ? "180deg" : "0deg" }] }} /></View>
+                  <View style={styles.faqQuestionRow}><Text style={styles.faqQuestion}>{language === "tl" ? `Paano gamitin ang ${translated.title}?` : `How does ${translated.title} work?`}</Text><ChevronDown size={18} color={colors.emerald} style={{ transform: [{ rotate: expanded ? "180deg" : "0deg" }] }} /></View>
                   {expanded ? <Text style={styles.faqAnswer}>{translated.description}</Text> : null}
                 </TouchableOpacity>
               ); })}

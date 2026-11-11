@@ -19,8 +19,8 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useRef, useEffect } from "react";
-import { router } from "expo-router";
-import { Mail, Lock, Eye, EyeOff, Check, X } from "lucide-react-native";
+import { router, useLocalSearchParams } from "expo-router";
+import { Mail, Lock, Eye, EyeOff, Check, X, Phone, KeyRound } from "lucide-react-native";
 import { loginUserWithAccountLockout } from "../shared/services/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { firebaseApp } from "../shared/firebaseConfig";
@@ -59,7 +59,17 @@ function loginServiceMessage(err: any): string | null {
   return "Unable to sign in. Please try again later.";
 }
 
-const cloudFunctions = getFunctions(firebaseApp);
+const cloudFunctions = getFunctions(firebaseApp, "us-central1");
+
+// Tenant contact numbers are stored by the registration flow as the ten
+// local digits after +63 (for example, 9123456789). Accept pasted variants
+// such as 09123456789 and +639123456789, but keep one canonical value here.
+function normalizeRecoveryMobileNumber(value: string): string {
+  let digits = value.replace(/\D/g, "");
+  if (digits.startsWith("63")) digits = digits.slice(2);
+  if (digits.startsWith("0")) digits = digits.slice(1);
+  return digits.slice(0, 10);
+}
 
 type TenantLoginResolution = {
   email: string | null;
@@ -78,6 +88,7 @@ async function resolveTenantLogin(identifier: string): Promise<TenantLoginResolu
 }
 
 export default function Login() {
+  const {recoveryWaiting} = useLocalSearchParams<{recoveryWaiting?: string}>();
   const insets = useSafeAreaInsets();
   // Live window height, not a one-time Dimensions.get() snapshot -- see
   // HelpTour.tsx for why a module-level constant can be stale on some
@@ -86,6 +97,7 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const loginInFlightRef = useRef(false);
   const [showPassword, setShowPassword] = useState(false);
   const [emailFocused, setEmailFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
@@ -93,6 +105,7 @@ export default function Login() {
   const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
   const [, setLockoutTick] = useState(0);
   const [rememberMe, setRememberMeChecked] = useState(false);
+  const [waitingVisible, setWaitingVisible] = useState(recoveryWaiting === "1");
 
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [fpEmail, setFpEmail] = useState("");
@@ -240,37 +253,51 @@ export default function Login() {
     setFpError(null);
   }
 
+  function openForgotModal() {
+    if (loading || loginInFlightRef.current) return;
+    // Treat each opening as a new recovery attempt. The Login route can stay
+    // mounted underneath the OTP route, so never reuse a previously submitted
+    // phone number when the tenant navigates back.
+    setFpEmail("");
+    setFpEmailFocused(false);
+    setFpError(null);
+    setShowForgotModal(true);
+  }
+
   // Keep the request on this modal so the pressed Continue button owns the
   // loading state. Only leave this screen after the server has found an
   // active tenant account and successfully sent its SMS code.
   async function handleForgotSubmit() {
-    const trimmed = fpEmail.trim().toUpperCase();
-    if (!/^RW[A-Z0-9._-]{2,38}$/.test(trimmed)) {
-      setFpError("Enter your username beginning with RW (for example, RWJAYCEE).");
+    const mobileNumber = normalizeRecoveryMobileNumber(fpEmail);
+    if (!/^9\d{9}$/.test(mobileNumber)) {
+      setFpError("Enter the 10-digit number after +63, starting with 9.");
       return;
     }
     setFpError(null);
     setFpSubmitting(true);
     try {
       const sendResetOtp = httpsCallable(cloudFunctions, "sendResetOtp");
-      const result = (await sendResetOtp({ identifier: trimmed })).data as {
+      const result = (await sendResetOtp({ mobileNumber })).data as {
         status?: "sent" | "manual";
         phoneHint?: string;
-        username?: string;
+        recoveryToken?: string;
       };
 
-      if (result.status !== "sent") {
+      if (result.status !== "sent" || !result.recoveryToken) {
         setFpError(
-          "This account cannot receive an SMS reset code. Please request help from the administrator.",
+          "We couldn't send a code to this number. Check the registered contact number or ask the administrator for help.",
         );
         return;
       }
 
       setShowForgotModal(false);
+      setFpEmail("");
+      setFpEmailFocused(false);
+      setFpError(null);
       router.push({
         pathname: "/reset-otp",
         params: {
-          identifier: result.username ?? trimmed,
+          recoveryToken: result.recoveryToken,
           phoneHint: result.phoneHint ?? "",
         },
       });
@@ -289,6 +316,10 @@ export default function Login() {
   }
 
   async function handleLogin() {
+    // React state updates are asynchronous. The ref closes the brief window
+    // where a second tap could run before the loading state is rendered.
+    if (loading || loginInFlightRef.current) return;
+
     setErrorMsg("");
     const identifier = email.trim().toUpperCase();
     if (!identifier && !password.trim()) {
@@ -308,13 +339,17 @@ export default function Login() {
       return;
     }
 
+    loginInFlightRef.current = true;
     setLoading(true);
+    Keyboard.dismiss();
+    let navigationStarted = false;
     try {
       await loginUserWithAccountLockout(identifier, password, "tenant");
 
       await resetLockout(identifier);
       await setRememberMe(rememberMe);
       router.replace({ pathname: "/welcome" });
+      navigationStarted = true;
     } catch (err: any) {
       const details = err?.details ?? {};
       if (err?.code === "functions/resource-exhausted") {
@@ -351,7 +386,12 @@ export default function Login() {
       }
       setErrorMsg("Unable to sign in. Please try again later.");
     } finally {
-      setLoading(false);
+      // Keep the entire login screen locked until successful navigation
+      // unmounts it. This prevents a short interactive frame after login.
+      if (!navigationStarted) {
+        loginInFlightRef.current = false;
+        setLoading(false);
+      }
     }
   }
 
@@ -369,7 +409,7 @@ export default function Login() {
       >
         <View style={{ flex: 1, minHeight: screenHeight }}>
           {/* Top gradient hero */}
-          <LinearGradient
+    <LinearGradient
             colors={[colors.emerald, colors.ink]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
@@ -417,12 +457,13 @@ export default function Login() {
                   ref={emailInputRef}
                   style={[styles.textInput, emailFocused && styles.textInputFocused]}
                   value={email}
+                  maxLength={24}
                   onChangeText={setEmail}
                   placeholder="Enter your username"
                   placeholderTextColor={colors.textMuted}
                   autoCapitalize="none"
                   keyboardType="default"
-                  editable={!lockoutUntil}
+                  editable={!loading && !lockoutUntil}
                   onFocus={() => { setEmailFocused(true); scrollToRevealForm(); }}
                   onBlur={() => setEmailFocused(false)}
                 />
@@ -440,17 +481,19 @@ export default function Login() {
                   ref={passwordInputRef}
                   style={[styles.textInput, passwordFocused && styles.textInputFocused]}
                   value={password}
+                  maxLength={24}
                   onChangeText={setPassword}
                   secureTextEntry={!showPassword}
                   placeholder="Enter your password"
                   placeholderTextColor={colors.textMuted}
-                  editable={!lockoutUntil}
+                  editable={!loading && !lockoutUntil}
                   onFocus={() => { setPasswordFocused(true); scrollToRevealForm(); }}
                   onBlur={() => setPasswordFocused(false)}
                 />
                 <Pressable
-                  style={styles.rightIcon}
+                  style={[styles.rightIcon, loading && styles.controlDisabled]}
                   onPress={() => setShowPassword((v) => !v)}
+                  disabled={loading}
                   hitSlop={8}
                 >
                   {showPassword ? (
@@ -476,8 +519,11 @@ export default function Login() {
                 <Text style={[styles.rememberMeText, loading && styles.rememberMeTextDisabled]}>Remember me</Text>
               </Pressable>
 
-              <Pressable onPress={() => setShowForgotModal(true)}>
-                <Text style={styles.forgotLinkText}>Forgot password?</Text>
+              <Pressable
+                onPress={openForgotModal}
+                disabled={loading}
+              >
+                <Text style={[styles.forgotLinkText, loading && styles.controlDisabled]}>Forgot password?</Text>
               </Pressable>
             </View>
 
@@ -520,12 +566,34 @@ export default function Login() {
         </View>
       </ScrollView>
 
+      {loading && (
+        <Pressable
+          style={styles.interactionShield}
+          onPress={() => undefined}
+          accessible
+          accessibilityRole="progressbar"
+          accessibilityLabel="Signing in. Please wait."
+        />
+      )}
+
       {/* FORGOT PASSWORD MODAL */}
+      <Modal visible={waitingVisible} transparent animationType="fade" onRequestClose={() => setWaitingVisible(false)}>
+        <View style={fp.overlay}>
+          <View style={fp.card}>
+            <Text style={fp.title}>Waiting for Admin approval</Text>
+            <Text style={fp.subtitle}>Your recovery request was sent. After approval, an 8-character access code will be texted to your new number. Use it in the password field above.</Text>
+            <Pressable style={fp.submitBtn} onPress={() => setWaitingVisible(false)}><Text style={fp.submitText}>Got it</Text></Pressable>
+          </View>
+        </View>
+      </Modal>
+
       <Modal
-        visible={showForgotModal}
+        visible={showForgotModal && !loading}
         transparent
         animationType="fade"
-        onRequestClose={closeForgotModal}
+        onRequestClose={() => {
+          if (!loading) closeForgotModal();
+        }}
       >
         {/* Dim lives on its own full-screen layer so keyboard padding can't
             shift it (see fp.backdrop). */}
@@ -543,26 +611,33 @@ export default function Login() {
 
               {/* Header */}
               <View style={fp.iconCircle}>
-                <Mail size={22} color={colors.emerald} />
+                <KeyRound size={22} color={colors.emerald} />
               </View>
               <Text style={fp.title}>Forgot password</Text>
               <Text style={fp.subtitle}>
-                Enter your username. We'll text a 6-digit code to the phone on your account.
+                Enter the contact number registered to your tenant account. We'll text a 6-digit code.
               </Text>
 
-              {/* Username field */}
+              {/* Registered contact-number field */}
               <View style={{ marginTop: spacing.xxl - 2, alignSelf: "stretch" }}>
-                <Text style={fp.label}>Username</Text>
+                <Text style={fp.label}>Contact number</Text>
                 <View style={fp.inputWrapper}>
-                  <Mail size={16} color={colors.emeraldBright} style={fp.inputIcon} />
+                  <Phone size={16} color={colors.emeraldBright} style={fp.inputIcon} />
+                  <Text style={fp.phonePrefix}>+63</Text>
                   <TextInput
                     style={[fp.input, fpEmailFocused && fp.inputFocused]}
                     value={fpEmail}
-                    onChangeText={(t) => { setFpEmail(t); setFpError(null); }}
-                    placeholder="Username"
+                    maxLength={10}
+                    onChangeText={(t) => {
+                      setFpEmail(normalizeRecoveryMobileNumber(t));
+                      setFpError(null);
+                    }}
+                    placeholder="9XX XXX XXXX"
                     placeholderTextColor={colors.textMuted}
-                    keyboardType="default"
+                    keyboardType="phone-pad"
                     autoCapitalize="none"
+                    autoComplete="tel"
+                    textContentType="telephoneNumber"
                     onFocus={() => setFpEmailFocused(true)}
                     onBlur={() => setFpEmailFocused(false)}
                     editable={!fpSubmitting}
@@ -743,6 +818,19 @@ const styles = StyleSheet.create({
     color: colors.emeraldBright,
     fontFamily: fontFamily.semibold,
   },
+  controlDisabled: {
+    opacity: 0.45,
+  },
+  interactionShield: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 100,
+    elevation: 100,
+    backgroundColor: "transparent",
+  },
   optionsRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -870,6 +958,14 @@ const fp = StyleSheet.create({
     left: 13,
     zIndex: 1,
   },
+  phonePrefix: {
+    position: "absolute",
+    left: 38,
+    zIndex: 1,
+    color: colors.emerald,
+    fontFamily: fontFamily.semibold,
+    fontSize: fontSize.base - 1,
+  },
   input: {
     width: "100%",
     borderRadius: radius.md,
@@ -877,7 +973,7 @@ const fp = StyleSheet.create({
     borderColor: colors.emeraldSoft,
     backgroundColor: colors.mist,
     paddingVertical: 12,
-    paddingLeft: 38,
+    paddingLeft: 72,
     paddingRight: spacing.lg,
     color: colors.ink,
     fontFamily: fontFamily.medium,

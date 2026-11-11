@@ -32,6 +32,7 @@ import {
   Check,
   Trash2,
   AlarmClock,
+  CalendarClock,
   Wallet,
   CheckCircle2,
   HelpCircle,
@@ -56,6 +57,7 @@ type Notification = {
 };
 
 const PAYMENTS_ROUTE = "/(tabs)/payments";
+const DASHBOARD_ROUTE = "/(tabs)/dashboard";
 
 function isPaymentReminder(item: Notification): boolean {
   if (item.route === PAYMENTS_ROUTE) return true;
@@ -78,6 +80,9 @@ function isPaymentReminder(item: Notification): boolean {
 // the only way to give each notification a distinct title/icon/color
 // without touching every Cloud Function that creates one.
 function categorize(message: string, type?: string) {
+  if (type === "schedule_update") {
+    return { title: "Schedule Updated", icon: CalendarClock, iconColor: colors.emerald, iconBg: colors.emeraldSoft };
+  }
   if (type === "payment_reminder") {
     return { title: "Rent Due", icon: AlarmClock, iconColor: colors.error, iconBg: colors.errorSoft };
   }
@@ -204,6 +209,8 @@ export default function Notification() {
     void markRead(item);
     if (isPaymentReminder(item)) {
       router.push(PAYMENTS_ROUTE);
+    } else if (item.type === "schedule_update") {
+      router.push(DASHBOARD_ROUTE);
     }
   };
 

@@ -280,6 +280,7 @@ export default function PaymentHistoryScreen() {
             <TextInput
               style={styles.searchInput}
               value={searchQuery}
+              maxLength={24}
               onChangeText={setSearchQuery}
               placeholder="Search by amount, date, or method"
               placeholderTextColor={colors.emeraldSoft}

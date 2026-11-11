@@ -4,7 +4,7 @@ import { getFunctions, httpsCallable } from "firebase/functions";
 import { db, firebaseApp, auth } from "../shared/firebaseConfig";
 import { readLocalCache, saveLocalCache } from "../shared/services/localCache";
 
-const cloudFunctions = getFunctions(firebaseApp);
+const cloudFunctions = getFunctions(firebaseApp, "us-central1");
 
 export interface Tenant {
   id: string;
