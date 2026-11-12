@@ -36,6 +36,7 @@ const TEXT_MUTED = "#5B6560";
 const DANGER = "#B3261E";
 // Model validation remains active, but its QA-only card is hidden from guests.
 const SHOW_MODEL_WARNING_PANEL = false;
+const CONTROL_PROCESSING_MS = 5_000;
 
 // Translates WebXR's raw DOMException names (thrown by navigator.xr.requestSession) into
 // plain-English causes, instead of surfacing something like "NotAllowedError" directly.
@@ -112,6 +113,7 @@ export default function ARView() {
   // debugging session) means chrome://inspect isn't reachable at all right now. Remove
   // alongside ARSessionScene's DEV_LOG_PLANE_DIAGNOSTICS once the investigation concludes.
   const [planeDiagnostics, setPlaneDiagnostics] = useState<string[]>([]);
+  const [processingLabel, setProcessingLabel] = useState<string | null>(null);
   const wasReticleVisibleRef = useRef(false);
   const scanPulseAnim = useRef(new Animated.Value(0)).current;
 
@@ -173,6 +175,28 @@ export default function ARView() {
   const transformFrameRef = useRef<number | null>(null);
   const sessionOperationRef = useRef(false);
   const armingRef = useRef(false);
+  const processingRef = useRef(false);
+  const processingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const processControl = (label: string, action: () => void | Promise<void>) => {
+    if (processingRef.current || sessionOperationRef.current) return;
+    processingRef.current = true;
+    setProcessingLabel(label);
+    sceneRef.current?.beginUIInteraction();
+    processingTimerRef.current = setTimeout(async () => {
+      processingTimerRef.current = null;
+      try {
+        await action();
+      } catch (err) {
+        console.error("[AR] delayed control failed safely:", err);
+        setError("That control couldn't be applied. You can continue arranging your scene.");
+      } finally {
+        sceneRef.current?.endUIInteraction();
+        processingRef.current = false;
+        setProcessingLabel(null);
+      }
+    }, CONTROL_PROCESSING_MS);
+  };
 
   const flushPendingTransforms = () => {
     if (transformFrameRef.current !== null) {
@@ -226,12 +250,14 @@ export default function ARView() {
     sceneRef.current?.beginTransformGesture();
   };
 
-  const endSliderInteraction = () => {
-    // Flush before closing the gesture so even the final input event belongs
-    // to the same single undo record.
-    flushPendingTransforms();
-    sceneRef.current?.endTransformGesture();
-    suppressPressOut();
+  const endSliderInteraction = (label: string) => {
+    processControl(label, () => {
+      // Flush before closing the gesture so even the final input event belongs
+      // to the same single undo record.
+      flushPendingTransforms();
+      sceneRef.current?.endTransformGesture();
+      suppressPressOut();
+    });
   };
 
   const runSceneControl = (action: (scene: ARSessionScene) => void) => {
@@ -247,7 +273,10 @@ export default function ARView() {
 
   useEffect(() => () => {
     if (transformFrameRef.current !== null) cancelAnimationFrame(transformFrameRef.current);
+    if (processingTimerRef.current) clearTimeout(processingTimerRef.current);
     transformFrameRef.current = null;
+    processingTimerRef.current = null;
+    processingRef.current = false;
     pendingRotationRef.current = 0;
     pendingScaleRef.current = { x: 1, y: 1, z: 1 };
     pendingUniformScaleRef.current = 1;
@@ -330,6 +359,7 @@ export default function ARView() {
       wasReticleVisibleRef.current = visible;
       setReticleVisible(visible);
     });
+    scene.setInteractionRequestCallback((label, action) => processControl(label, action));
     scene.setMeasurementCallback(setMeasurement);
     scene.setSurfaceIssueCallback(setSurfaceIssue);
     scene.setLightLevelCallback(setIsDim);
@@ -392,7 +422,6 @@ export default function ARView() {
     rotateValueRef.current = nextValue;
     if (delta !== 0) {
       pendingRotationRef.current += delta;
-      scheduleTransformFlush();
     }
     setRotateValue(nextValue);
   };
@@ -402,7 +431,6 @@ export default function ARView() {
     scaleValuesRef.current = { ...scaleValuesRef.current, [axis]: nextValue };
     if (previousValue > 0 && nextValue !== previousValue) {
       pendingScaleRef.current[axis] *= nextValue / previousValue;
-      scheduleTransformFlush();
     }
     setScaleValues((previous) => ({ ...previous, [axis]: nextValue }));
   };
@@ -431,13 +459,6 @@ export default function ARView() {
       pendingPinchFactor = 1;
       if (factor !== 1) runSceneControl((scene) => scene.scaleSelectedUniform(factor));
     };
-    const schedulePinchScale = () => {
-      if (pinchFrame !== null) return;
-      pinchFrame = requestAnimationFrame(() => {
-        pinchFrame = null;
-        flushPinchScale();
-      });
-    };
     const distanceBetween = (touches: TouchList) => {
       const dx = touches[0].clientX - touches[1].clientX;
       const dy = touches[0].clientY - touches[1].clientY;
@@ -459,7 +480,6 @@ export default function ARView() {
       if (previousDistance > 0 && nextDistance > 0) {
         const incrementalFactor = Math.min(1.15, Math.max(0.85, nextDistance / previousDistance));
         pendingPinchFactor *= incrementalFactor;
-        schedulePinchScale();
         previousDistance = nextDistance;
       }
       event.preventDefault();
@@ -469,9 +489,11 @@ export default function ARView() {
       if (!pinching || event.touches.length >= 2) return;
       pinching = false;
       previousDistance = 0;
-      flushPinchScale();
-      sceneRef.current?.endTransformGesture();
-      sceneRef.current?.endUIInteraction();
+      processControl("Resizing object", () => {
+        flushPinchScale();
+        sceneRef.current?.endTransformGesture();
+        sceneRef.current?.endUIInteraction();
+      });
     };
 
     document.addEventListener("touchstart", onTouchStart, { passive: false, capture: true });
@@ -689,7 +711,7 @@ export default function ARView() {
             {sessionActive && placedState.canUndo && (
               <TouchableOpacity
                 style={styles.topAction}
-                onPress={() => runSceneControl((scene) => scene.undo())}
+                onPress={() => processControl("Undoing last action", () => runSceneControl((scene) => scene.undo()))}
                 onPressIn={suppressPressIn}
                 onPressOut={suppressPressOut}
               >
@@ -961,7 +983,7 @@ export default function ARView() {
                     style={styles.toolBackButton}
                     onPressIn={suppressPressIn}
                     onPressOut={suppressPressOut}
-                    onPress={() => setToolMode(null)}
+                    onPress={() => processControl("Opening controls", () => setToolMode(null))}
                     accessibilityRole="button"
                     accessibilityLabel="Back to object controls"
                   >
@@ -978,7 +1000,7 @@ export default function ARView() {
                   <Text style={styles.sliderTitle}>Rotate object</Text>
                   <Text style={styles.sliderValue}>{rotateValue}°</Text>
                 </View>
-                <input aria-label="Rotate selected object" type="range" min={-180} max={180} value={rotateValue} onPointerDown={beginSliderInteraction} onPointerUp={endSliderInteraction} onPointerCancel={endSliderInteraction} onChange={(event) => setRotationFromSlider(Number(event.target.value))} style={styles.webSlider as any} />
+                <input aria-label="Rotate selected object" type="range" min={-180} max={180} value={rotateValue} onPointerDown={beginSliderInteraction} onPointerUp={() => endSliderInteraction("Rotating object")} onPointerCancel={() => endSliderInteraction("Rotating object")} onChange={(event) => setRotationFromSlider(Number(event.target.value))} style={styles.webSlider as any} />
                 <View style={styles.sliderMarks}><Text style={styles.sliderMark}>−180°</Text><Text style={styles.sliderMark}>0°</Text><Text style={styles.sliderMark}>180°</Text></View>
               </View>
             ) : toolMode === "resize" ? (
@@ -989,20 +1011,20 @@ export default function ARView() {
                 </View>
                 <View style={styles.axisTabs}>
                   {AXIS_LABELS.map(({ axis, label }) => (
-                    <TouchableOpacity key={axis} style={[styles.axisTab, resizeAxis === axis && styles.axisTabActive]} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => setResizeAxis(axis)}>
+                    <TouchableOpacity key={axis} style={[styles.axisTab, resizeAxis === axis && styles.axisTabActive]} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => processControl(`Selecting ${label.toLowerCase()}`, () => setResizeAxis(axis))}>
                       <Text style={[styles.axisTabText, resizeAxis === axis && styles.axisTabTextActive]}>{label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
-                <input aria-label="Resize selected object" type="range" min={50} max={150} value={scaleValues[resizeAxis]} onPointerDown={beginSliderInteraction} onPointerUp={endSliderInteraction} onPointerCancel={endSliderInteraction} onChange={(event) => setScaleFromSlider(resizeAxis, Number(event.target.value))} style={styles.webSlider as any} />
+                <input aria-label="Resize selected object" type="range" min={50} max={150} value={scaleValues[resizeAxis]} onPointerDown={beginSliderInteraction} onPointerUp={() => endSliderInteraction("Resizing object")} onPointerCancel={() => endSliderInteraction("Resizing object")} onChange={(event) => setScaleFromSlider(resizeAxis, Number(event.target.value))} style={styles.webSlider as any} />
                 <View style={styles.sliderMarks}><Text style={styles.sliderMark}>50%</Text><Text style={styles.sliderMark}>100%</Text><Text style={styles.sliderMark}>150%</Text></View>
               </View>
             ) : (
               <View style={styles.actionRow}>
-                <TouchableOpacity style={styles.actionButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => { rotateValueRef.current = 0; setRotateValue(0); setToolMode("rotate"); }}><Text style={styles.actionIcon}>⟳</Text><Text style={styles.actionText}>Rotate</Text></TouchableOpacity>
-                <TouchableOpacity style={styles.actionButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => setToolMode("resize")}><Text style={styles.actionIcon}>⛶</Text><Text style={styles.actionText}>Resize</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.actionButton, !reticleVisible && styles.controlBtnDisabled]} disabled={!reticleVisible} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => runSceneControl((scene) => scene.moveSelectedToReticle())}><Text style={styles.actionIcon}>✥</Text><Text style={styles.actionText}>Move</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.actionButton, styles.deleteBtn]} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => runSceneControl((scene) => scene.deleteSelected())}><Text style={styles.actionIcon}>🗑</Text><Text style={styles.actionText}>Delete</Text></TouchableOpacity>
+                <TouchableOpacity style={styles.actionButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => processControl("Opening rotate controls", () => { rotateValueRef.current = 0; setRotateValue(0); setToolMode("rotate"); })}><Text style={styles.actionIcon}>⟳</Text><Text style={styles.actionText}>Rotate</Text></TouchableOpacity>
+                <TouchableOpacity style={styles.actionButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => processControl("Opening resize controls", () => setToolMode("resize"))}><Text style={styles.actionIcon}>⛶</Text><Text style={styles.actionText}>Resize</Text></TouchableOpacity>
+                <TouchableOpacity style={[styles.actionButton, !reticleVisible && styles.controlBtnDisabled]} disabled={!reticleVisible} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => processControl("Moving object", () => runSceneControl((scene) => scene.moveSelectedToReticle()))}><Text style={styles.actionIcon}>✥</Text><Text style={styles.actionText}>Move</Text></TouchableOpacity>
+                <TouchableOpacity style={[styles.actionButton, styles.deleteBtn]} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => processControl("Deleting object", () => runSceneControl((scene) => scene.deleteSelected()))}><Text style={styles.actionIcon}>🗑</Text><Text style={styles.actionText}>Delete</Text></TouchableOpacity>
               </View>
             )}
             {false && <ScrollView
@@ -1121,7 +1143,7 @@ export default function ARView() {
               </View>
               <View style={styles.catalogHeaderActions}>
                 <Text style={styles.catalogCount}>{objects.length} items</Text>
-                <TouchableOpacity style={styles.minimizeButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => { setCatalogOpen(false); setToolMode(null); }}>
+                <TouchableOpacity style={styles.minimizeButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => processControl("Hiding object catalog", () => { setCatalogOpen(false); setToolMode(null); })}>
                   <Text style={styles.minimizeButtonText}>−</Text>
                 </TouchableOpacity>
               </View>
@@ -1139,7 +1161,7 @@ export default function ARView() {
                   disabled={arming || sessionBusy}
                   onPressIn={suppressPressIn}
                   onPressOut={suppressPressOut}
-                  onPress={() => arm(o)}
+                  onPress={() => processControl(`Selecting ${o.name}`, () => arm(o))}
                 >
                   <View style={[styles.catalogThumb, armedId === o.id && styles.catalogThumbActive]}>
                     {thumbnailUrls[o.id] && (
@@ -1160,9 +1182,24 @@ export default function ARView() {
             </ScrollView>
           </View>
         ) : objects.length > 0 ? (
-          <TouchableOpacity style={styles.addObjectButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => setCatalogOpen(true)}>
+          <TouchableOpacity style={styles.addObjectButton} onPressIn={suppressPressIn} onPressOut={suppressPressOut} onPress={() => processControl("Opening object catalog", () => setCatalogOpen(true))}>
             <Text style={styles.addObjectText}>View 3D Objects</Text>
           </TouchableOpacity>
+        ) : null}
+
+        {processingLabel ? (
+          <View
+            style={styles.processingOverlay}
+            pointerEvents="auto"
+            accessibilityRole="progressbar"
+            accessibilityLabel={`${processingLabel}. Please wait.`}
+          >
+            <View style={styles.processingCard}>
+              <ActivityIndicator size="large" color="#5DE7C2" />
+              <Text style={styles.processingTitle}>{processingLabel}</Text>
+              <Text style={styles.processingText}>Processing for 5 seconds. Scene controls and object placement are temporarily locked.</Text>
+            </View>
+          </View>
         ) : null}
       </View>
     </View>
@@ -1172,6 +1209,10 @@ export default function ARView() {
 const styles = StyleSheet.create({
   // Stays black — this is the live camera/AR passthrough backdrop, not brand chrome.
   screen: { flex: 1, backgroundColor: "#000" },
+  processingOverlay: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, zIndex: 2000, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(2,12,18,0.72)", padding: 24 },
+  processingCard: { width: "100%", maxWidth: 330, alignItems: "center", borderRadius: 18, borderWidth: 1, borderColor: "rgba(93,231,194,0.34)", backgroundColor: "rgba(8,28,38,0.98)", paddingHorizontal: 24, paddingVertical: 30 },
+  processingTitle: { marginTop: 14, color: "#fff", fontSize: 17, fontWeight: "800", textAlign: "center" },
+  processingText: { marginTop: 8, color: "rgba(255,255,255,0.7)", fontSize: 12, lineHeight: 18, textAlign: "center" },
 
   header: {
     position: "absolute",
