@@ -37,6 +37,7 @@ const DANGER = "#B3261E";
 // Model validation remains active, but its QA-only card is hidden from guests.
 const SHOW_MODEL_WARNING_PANEL = false;
 const MOVE_PROCESSING_MS = 3_000;
+const CATALOG_SELECTION_COOLDOWN_MS = 500;
 
 // Translates WebXR's raw DOMException names (thrown by navigator.xr.requestSession) into
 // plain-English causes, instead of surfacing something like "NotAllowedError" directly.
@@ -115,6 +116,7 @@ export default function ARView() {
   const [planeDiagnostics, setPlaneDiagnostics] = useState<string[]>([]);
   const [moveProcessing, setMoveProcessing] = useState(false);
   const [moveSecondsRemaining, setMoveSecondsRemaining] = useState(3);
+  const [catalogSelectionLocked, setCatalogSelectionLocked] = useState(false);
   const wasReticleVisibleRef = useRef(false);
   const scanPulseAnim = useRef(new Animated.Value(0)).current;
 
@@ -177,6 +179,8 @@ export default function ARView() {
   const sessionOperationRef = useRef(false);
   const armingRef = useRef(false);
   const moveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const catalogSelectionLockRef = useRef(false);
+  const catalogSelectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const moveSelected = () => {
     if (moveProcessing || sessionOperationRef.current || !reticleVisible) return;
@@ -270,8 +274,11 @@ export default function ARView() {
   useEffect(() => () => {
     if (transformFrameRef.current !== null) cancelAnimationFrame(transformFrameRef.current);
     if (moveTimerRef.current) clearInterval(moveTimerRef.current);
+    if (catalogSelectionTimerRef.current) clearTimeout(catalogSelectionTimerRef.current);
     transformFrameRef.current = null;
     moveTimerRef.current = null;
+    catalogSelectionTimerRef.current = null;
+    catalogSelectionLockRef.current = false;
     pendingRotationRef.current = 0;
     pendingScaleRef.current = { x: 1, y: 1, z: 1 };
     pendingUniformScaleRef.current = 1;
@@ -542,6 +549,26 @@ export default function ARView() {
       setArming(false);
       setArmingId(null);
     }
+  };
+
+  // Catalog presses are single-flight: the synchronous ref closes the tiny gap before
+  // React applies `disabled`, then the UI remains locked until loading finishes plus a
+  // short cooldown. This prevents rapid taps from queueing multiple object selections
+  // without changing WebXR placement or session behavior.
+  const selectCatalogObject = async (object: ARObject) => {
+    if (catalogSelectionLockRef.current || armingRef.current || sessionOperationRef.current) return;
+
+    catalogSelectionLockRef.current = true;
+    setCatalogSelectionLocked(true);
+
+    await arm(object);
+
+    if (catalogSelectionTimerRef.current) clearTimeout(catalogSelectionTimerRef.current);
+    catalogSelectionTimerRef.current = setTimeout(() => {
+      catalogSelectionTimerRef.current = null;
+      catalogSelectionLockRef.current = false;
+      setCatalogSelectionLocked(false);
+    }, CATALOG_SELECTION_COOLDOWN_MS);
   };
 
   // Arm the first catalog item automatically once AR starts, so tapping the surface
@@ -1161,11 +1188,11 @@ export default function ARView() {
               {objects.map((o) => (
                 <TouchableOpacity
                   key={o.id}
-                  style={[styles.catalogItem, (arming || sessionBusy) && styles.controlDisabled]}
-                  disabled={arming || sessionBusy}
+                  style={[styles.catalogItem, (arming || sessionBusy || catalogSelectionLocked) && styles.controlDisabled]}
+                  disabled={arming || sessionBusy || catalogSelectionLocked}
                   onPressIn={suppressPressIn}
                   onPressOut={suppressPressOut}
-                  onPress={() => arm(o)}
+                  onPress={() => void selectCatalogObject(o)}
                 >
                   <View style={[styles.catalogThumb, armedId === o.id && styles.catalogThumbActive]}>
                     {thumbnailUrls[o.id] && (
