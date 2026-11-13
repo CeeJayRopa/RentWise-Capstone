@@ -256,6 +256,7 @@ function cloneWithOwnMaterials(source: THREE.Object3D): THREE.Group {
 }
 
 export class ARSessionScene {
+  private static readonly PLACEMENT_ARM_GRACE_MS = 700;
   private renderer: THREE.WebGLRenderer | null = null;
   private camera = new THREE.PerspectiveCamera(70, 1, 0.01, 20);
   private scene = new THREE.Scene();
@@ -305,6 +306,7 @@ export class ARSessionScene {
   >();
   private armedObjectId: string | null = null;
   private armedModel: THREE.Group | null = null;
+  private armedAtMs = 0;
   private armedGroundOffset = 0;
   private scratchCamDir = new THREE.Vector3();
   private scratchLookMatrix = new THREE.Matrix4();
@@ -722,6 +724,9 @@ export class ARSessionScene {
     // tells the user why nothing happened, and an impatient tap shouldn't accidentally
     // select an unrelated placed object instead.
     if (this.reticle.visible && this.armedModel) {
+      // A catalog DOM tap can also surface as a delayed WebXR `select` event.
+      // Require a fresh physical tap after arming before placement is allowed.
+      if (performance.now() - this.armedAtMs < ARSessionScene.PLACEMENT_ARM_GRACE_MS) return;
       if (this.isPlacementConfident) this.placeArmedAtReticle();
       return;
     }
@@ -930,6 +935,7 @@ export class ARSessionScene {
     // thumbnail, which is what re-arms it (see armObject).
     this.armedObjectId = null;
     this.armedModel = null;
+    this.armedAtMs = 0;
 
     this.notifyPlacedChange();
   }
@@ -988,6 +994,7 @@ export class ARSessionScene {
     this.armedObjectId = objectId;
     this.armedModel = cached.template;
     this.armedGroundOffset = cached.groundOffset;
+    this.armedAtMs = performance.now();
   }
 
   // .glb catalog assets are authored entirely outside this app (manual Firebase upload, no
