@@ -267,6 +267,12 @@ export class ARSessionScene {
   private hitTestSourceRequested = false;
   private raycaster = new THREE.Raycaster();
   private tempMatrix = new THREE.Matrix4();
+  // Three's runtime XR controller emits `select`, although Object3D's public TS event map
+  // does not currently declare that WebXR-specific event.
+  private controller: any = null;
+  private readonly handleControllerSelect = () => {
+    if (this.controller) this.onSelect(this.controller);
+  };
 
   // Smoothed reticle transform (see RETICLE_SMOOTHING) and scratch space for the
   // per-result horizontal-surface check, reused every frame to avoid GC churn.
@@ -579,9 +585,14 @@ export class ARSessionScene {
 
     session.addEventListener("end", () => this.onSessionEnd());
 
-    const controller = this.renderer.xr.getController(0);
-    controller.addEventListener("select", () => this.onSelect(controller));
-    this.scene.add(controller);
+    // getController(0) returns the same object across session restarts. Registering a new
+    // anonymous listener on every start would stack handlers, causing one physical tap to
+    // run placement multiple times after reopening AR.
+    if (!this.controller) {
+      this.controller = this.renderer.xr.getController(0);
+      this.controller.addEventListener("select", this.handleControllerSelect);
+      this.scene.add(this.controller);
+    }
 
     await this.renderer.xr.setSession(session);
   }
@@ -664,10 +675,11 @@ export class ARSessionScene {
     this.tooCloseToWallDebounced = false;
     this.reticle.visible = false;
 
-    this.placedGroup.clear();
-    this.placed = [];
     this.selected = null;
     this.updateSelectionOutline();
+    this.disposeSessionModelResources();
+    this.placedGroup.clear();
+    this.placed = [];
     this.history = [];
     this.transformGestureStart = null;
     this.onPlacedChange({ placed: [], selectedId: null, canUndo: false });
@@ -684,6 +696,56 @@ export class ARSessionScene {
       mesh.geometry.dispose();
     }
     this.detectedPlaneMeshes.clear();
+  }
+
+  // GLTF templates, placed clones, and deleted objects retained for undo can collectively
+  // hold a large amount of WebGL memory. Releasing only their scene references does not
+  // release GPU buffers/textures, so clean every unique resource when the AR session ends.
+  // Resources are deduplicated because placed clones share geometry/textures with templates.
+  private disposeSessionModelResources() {
+    const roots = new Set<THREE.Object3D>();
+    for (const placedObject of this.placed) {
+      placedObject.anchor?.delete?.();
+      placedObject.anchor = null;
+      roots.add(placedObject.group);
+    }
+    for (const entry of this.history) {
+      entry.object.anchor?.delete?.();
+      entry.object.anchor = null;
+      roots.add(entry.object.group);
+    }
+    for (const cached of this.modelCache.values()) roots.add(cached.template);
+
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    const textures = new Set<THREE.Texture>();
+
+    for (const root of roots) {
+      root.traverse((node) => {
+        const mesh = node as THREE.Mesh;
+        if (!(mesh as any).isMesh) return;
+        if (mesh.geometry) geometries.add(mesh.geometry);
+        const meshMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const material of meshMaterials) {
+          if (!material) continue;
+          materials.add(material);
+          for (const value of Object.values(material)) {
+            if ((value as any)?.isTexture && value !== this.groundShadowTexture) {
+              textures.add(value as THREE.Texture);
+            }
+          }
+        }
+      });
+    }
+
+    for (const texture of textures) texture.dispose();
+    for (const material of materials) material.dispose();
+    for (const geometry of geometries) geometry.dispose();
+
+    this.modelCache.clear();
+    this.armedObjectId = null;
+    this.armedModel = null;
+    this.armedGroundOffset = 0;
   }
 
   // Active for the full duration of any DOM overlay button press (touch-down through
@@ -1824,6 +1886,12 @@ export class ARSessionScene {
   dispose() {
     window.removeEventListener("resize", this.resizeHandler);
     if (this.uiInteractionClearTimer) clearTimeout(this.uiInteractionClearTimer);
+    if (this.controller) {
+      this.controller.removeEventListener("select", this.handleControllerSelect);
+      this.scene.remove(this.controller);
+      this.controller = null;
+    }
+    this.disposeSessionModelResources();
     if (this.session) {
       this.session.end().catch(() => {});
     }
@@ -1832,5 +1900,10 @@ export class ARSessionScene {
     this.renderer?.setAnimationLoop(null);
     this.renderer?.dispose();
     this.renderer = null;
+    this.groundShadowTexture.dispose();
+    this.selectionOutline.geometry.dispose();
+    (this.selectionOutline.material as THREE.Material).dispose();
+    this.planeVisualizationMaterialFloor.dispose();
+    this.planeVisualizationMaterialWall.dispose();
   }
 }
