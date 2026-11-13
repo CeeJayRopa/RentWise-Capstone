@@ -421,7 +421,6 @@ export class ARSessionScene {
   private pendingCapture: ((dataUrl: string | null) => void) | null = null;
 
   private onPlacedChange: (state: PlacedState) => void = () => {};
-  private onInteractionRequest: (label: string, action: () => void) => void = (_label, action) => action();
   private onReticleVisible: (visible: boolean) => void = () => {};
   private onMeasurementChange: (measurement: SelectedMeasurement | null) => void = () => {};
   private onSurfaceIssue: (issue: SurfaceIssue) => void = () => {};
@@ -478,10 +477,6 @@ export class ARSessionScene {
   setCallbacks(onPlacedChange: (state: PlacedState) => void, onReticleVisible: (visible: boolean) => void) {
     this.onPlacedChange = onPlacedChange;
     this.onReticleVisible = onReticleVisible;
-  }
-
-  setInteractionRequestCallback(callback: (label: string, action: () => void) => void) {
-    this.onInteractionRequest = callback;
   }
 
   setMeasurementCallback(onMeasurementChange: (measurement: SelectedMeasurement | null) => void) {
@@ -727,13 +722,7 @@ export class ARSessionScene {
     // tells the user why nothing happened, and an impatient tap shouldn't accidentally
     // select an unrelated placed object instead.
     if (this.reticle.visible && this.armedModel) {
-      if (this.isPlacementConfident) {
-        this.onInteractionRequest("Placing object", () => {
-          if (this.reticle.visible && this.armedModel && this.isPlacementConfident) {
-            this.placeArmedAtReticle();
-          }
-        });
-      }
+      if (this.isPlacementConfident) this.placeArmedAtReticle();
       return;
     }
 
@@ -746,9 +735,7 @@ export class ARSessionScene {
     if (hit) {
       const placedObject = this.placed.find((p) => p.group === hit.object || p.group.getObjectById(hit.object.id));
       if (placedObject) {
-        this.onInteractionRequest("Selecting object", () => {
-          if (this.placed.includes(placedObject)) this.selectPlaced(placedObject);
-        });
+        this.selectPlaced(placedObject);
       }
     }
   }
