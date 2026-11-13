@@ -267,14 +267,6 @@ export class ARSessionScene {
   private hitTestSourceRequested = false;
   private raycaster = new THREE.Raycaster();
   private tempMatrix = new THREE.Matrix4();
-  // Three's runtime XR controller emits `select`, although Object3D's public TS event map
-  // does not currently declare that WebXR-specific event.
-  private controller: any = null;
-  private readonly handleControllerSelect = () => {
-    if (this.controller) this.onSelect(this.controller);
-  };
-  private disposeRequested = false;
-  private rendererDisposed = false;
 
   // Smoothed reticle transform (see RETICLE_SMOOTHING) and scratch space for the
   // per-result horizontal-surface check, reused every frame to avoid GC churn.
@@ -587,14 +579,9 @@ export class ARSessionScene {
 
     session.addEventListener("end", () => this.onSessionEnd());
 
-    // getController(0) returns the same object across session restarts. Registering a new
-    // anonymous listener on every start would stack handlers, causing one physical tap to
-    // run placement multiple times after reopening AR.
-    if (!this.controller) {
-      this.controller = this.renderer.xr.getController(0);
-      this.controller.addEventListener("select", this.handleControllerSelect);
-      this.scene.add(this.controller);
-    }
+    const controller = this.renderer.xr.getController(0);
+    controller.addEventListener("select", () => this.onSelect(controller));
+    this.scene.add(controller);
 
     await this.renderer.xr.setSession(session);
   }
@@ -677,10 +664,10 @@ export class ARSessionScene {
     this.tooCloseToWallDebounced = false;
     this.reticle.visible = false;
 
-    this.selected = null;
-    this.updateSelectionOutline();
     this.placedGroup.clear();
     this.placed = [];
+    this.selected = null;
+    this.updateSelectionOutline();
     this.history = [];
     this.transformGestureStart = null;
     this.onPlacedChange({ placed: [], selectedId: null, canUndo: false });
@@ -1834,48 +1821,16 @@ export class ARSessionScene {
     return best;
   }
 
-  private finalizeRendererDisposal() {
-    if (this.rendererDisposed) return;
-    this.rendererDisposed = true;
-
-    (this.xrLight as any)?.dispose();
-    this.xrLight = null;
-    this.renderer?.dispose();
-    this.renderer = null;
-    this.modelCache.clear();
-    this.armedObjectId = null;
-    this.armedModel = null;
-    this.armedGroundOffset = 0;
-  }
-
   dispose() {
-    if (this.disposeRequested) return;
-    this.disposeRequested = true;
-
     window.removeEventListener("resize", this.resizeHandler);
     if (this.uiInteractionClearTimer) clearTimeout(this.uiInteractionClearTimer);
-    this.uiInteractionClearTimer = null;
+    if (this.session) {
+      this.session.end().catch(() => {});
+    }
+    (this.xrLight as any)?.dispose();
+    this.xrLight = null;
     this.renderer?.setAnimationLoop(null);
-    if (this.controller) {
-      this.controller.removeEventListener("select", this.handleControllerSelect);
-      this.scene.remove(this.controller);
-      this.controller = null;
-    }
-
-    const activeSession = this.session;
-    if (activeSession) {
-      // Register last so Three.js can finish its own WebXR session-end handler before the
-      // renderer is destroyed. Releasing GPU resources while that handler/final XR frame
-      // is still active can crash Chromium instead of producing a recoverable JS error.
-      activeSession.addEventListener("end", () => this.finalizeRendererDisposal(), { once: true });
-      try {
-        Promise.resolve(activeSession.end()).catch(() => this.finalizeRendererDisposal());
-      } catch {
-        this.finalizeRendererDisposal();
-      }
-      return;
-    }
-
-    this.finalizeRendererDisposal();
+    this.renderer?.dispose();
+    this.renderer = null;
   }
 }
