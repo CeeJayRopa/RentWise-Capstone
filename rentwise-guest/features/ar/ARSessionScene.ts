@@ -273,6 +273,8 @@ export class ARSessionScene {
   private readonly handleControllerSelect = () => {
     if (this.controller) this.onSelect(this.controller);
   };
+  private disposeRequested = false;
+  private rendererDisposed = false;
 
   // Smoothed reticle transform (see RETICLE_SMOOTHING) and scratch space for the
   // per-result horizontal-surface check, reused every frame to avoid GC churn.
@@ -677,7 +679,6 @@ export class ARSessionScene {
 
     this.selected = null;
     this.updateSelectionOutline();
-    this.disposeSessionModelResources();
     this.placedGroup.clear();
     this.placed = [];
     this.history = [];
@@ -696,56 +697,6 @@ export class ARSessionScene {
       mesh.geometry.dispose();
     }
     this.detectedPlaneMeshes.clear();
-  }
-
-  // GLTF templates, placed clones, and deleted objects retained for undo can collectively
-  // hold a large amount of WebGL memory. Releasing only their scene references does not
-  // release GPU buffers/textures, so clean every unique resource when the AR session ends.
-  // Resources are deduplicated because placed clones share geometry/textures with templates.
-  private disposeSessionModelResources() {
-    const roots = new Set<THREE.Object3D>();
-    for (const placedObject of this.placed) {
-      placedObject.anchor?.delete?.();
-      placedObject.anchor = null;
-      roots.add(placedObject.group);
-    }
-    for (const entry of this.history) {
-      entry.object.anchor?.delete?.();
-      entry.object.anchor = null;
-      roots.add(entry.object.group);
-    }
-    for (const cached of this.modelCache.values()) roots.add(cached.template);
-
-    const geometries = new Set<THREE.BufferGeometry>();
-    const materials = new Set<THREE.Material>();
-    const textures = new Set<THREE.Texture>();
-
-    for (const root of roots) {
-      root.traverse((node) => {
-        const mesh = node as THREE.Mesh;
-        if (!(mesh as any).isMesh) return;
-        if (mesh.geometry) geometries.add(mesh.geometry);
-        const meshMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        for (const material of meshMaterials) {
-          if (!material) continue;
-          materials.add(material);
-          for (const value of Object.values(material)) {
-            if ((value as any)?.isTexture && value !== this.groundShadowTexture) {
-              textures.add(value as THREE.Texture);
-            }
-          }
-        }
-      });
-    }
-
-    for (const texture of textures) texture.dispose();
-    for (const material of materials) material.dispose();
-    for (const geometry of geometries) geometry.dispose();
-
-    this.modelCache.clear();
-    this.armedObjectId = null;
-    this.armedModel = null;
-    this.armedGroundOffset = 0;
   }
 
   // Active for the full duration of any DOM overlay button press (touch-down through
@@ -1883,27 +1834,48 @@ export class ARSessionScene {
     return best;
   }
 
+  private finalizeRendererDisposal() {
+    if (this.rendererDisposed) return;
+    this.rendererDisposed = true;
+
+    (this.xrLight as any)?.dispose();
+    this.xrLight = null;
+    this.renderer?.dispose();
+    this.renderer = null;
+    this.modelCache.clear();
+    this.armedObjectId = null;
+    this.armedModel = null;
+    this.armedGroundOffset = 0;
+  }
+
   dispose() {
+    if (this.disposeRequested) return;
+    this.disposeRequested = true;
+
     window.removeEventListener("resize", this.resizeHandler);
     if (this.uiInteractionClearTimer) clearTimeout(this.uiInteractionClearTimer);
+    this.uiInteractionClearTimer = null;
+    this.renderer?.setAnimationLoop(null);
     if (this.controller) {
       this.controller.removeEventListener("select", this.handleControllerSelect);
       this.scene.remove(this.controller);
       this.controller = null;
     }
-    this.disposeSessionModelResources();
-    if (this.session) {
-      this.session.end().catch(() => {});
+
+    const activeSession = this.session;
+    if (activeSession) {
+      // Register last so Three.js can finish its own WebXR session-end handler before the
+      // renderer is destroyed. Releasing GPU resources while that handler/final XR frame
+      // is still active can crash Chromium instead of producing a recoverable JS error.
+      activeSession.addEventListener("end", () => this.finalizeRendererDisposal(), { once: true });
+      try {
+        Promise.resolve(activeSession.end()).catch(() => this.finalizeRendererDisposal());
+      } catch {
+        this.finalizeRendererDisposal();
+      }
+      return;
     }
-    (this.xrLight as any)?.dispose();
-    this.xrLight = null;
-    this.renderer?.setAnimationLoop(null);
-    this.renderer?.dispose();
-    this.renderer = null;
-    this.groundShadowTexture.dispose();
-    this.selectionOutline.geometry.dispose();
-    (this.selectionOutline.material as THREE.Material).dispose();
-    this.planeVisualizationMaterialFloor.dispose();
-    this.planeVisualizationMaterialWall.dispose();
+
+    this.finalizeRendererDisposal();
   }
 }
