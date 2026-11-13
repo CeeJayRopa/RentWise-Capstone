@@ -560,15 +560,23 @@ export default function ARView() {
 
     catalogSelectionLockRef.current = true;
     setCatalogSelectionLocked(true);
+    // Keep the scene's existing UI-interaction gate active beyond pointer-up. A catalog
+    // tap can otherwise leak through the DOM overlay as a WebXR `select` event and place
+    // the armed object. This uses the same stable suppression path as every other AR UI
+    // control and leaves placement/reticle logic completely unchanged.
+    sceneRef.current?.beginUIInteraction();
 
-    await arm(object);
-
-    if (catalogSelectionTimerRef.current) clearTimeout(catalogSelectionTimerRef.current);
-    catalogSelectionTimerRef.current = setTimeout(() => {
-      catalogSelectionTimerRef.current = null;
-      catalogSelectionLockRef.current = false;
-      setCatalogSelectionLocked(false);
-    }, CATALOG_SELECTION_COOLDOWN_MS);
+    try {
+      await arm(object);
+    } finally {
+      if (catalogSelectionTimerRef.current) clearTimeout(catalogSelectionTimerRef.current);
+      catalogSelectionTimerRef.current = setTimeout(() => {
+        catalogSelectionTimerRef.current = null;
+        catalogSelectionLockRef.current = false;
+        setCatalogSelectionLocked(false);
+        sceneRef.current?.endUIInteraction();
+      }, CATALOG_SELECTION_COOLDOWN_MS);
+    }
   };
 
   // Arm the first catalog item automatically once AR starts, so tapping the surface
