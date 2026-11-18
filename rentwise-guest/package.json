@@ -37,7 +37,8 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "test:stall-category": "node --experimental-strip-types tests/stall-category-visibility.test.ts"
   },
   "private": true
 }

@@ -1,5 +1,6 @@
 import { View, Text, StyleSheet, TouchableOpacity, useWindowDimensions } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { isOccupiedStallStatus } from "../constants/stallStatus";
 
 const PRIMARY = "#0E7C5A";
 const OCCUPIED = "#C0392B";
@@ -72,7 +73,8 @@ export default function StallPopup({
 }: Props) {
   const { width } = useWindowDimensions();
   const isMobile = width <= 480;
-  const isVacant = stall.status?.trim().toLowerCase() !== "occupied";
+  const isOccupied = isOccupiedStallStatus(stall.status);
+  const isVacant = !isOccupied;
   const statusColor = isVacant ? PRIMARY : OCCUPIED;
   const formattedPrice =
     typeof stall.price === "number"
@@ -114,12 +116,14 @@ export default function StallPopup({
         </View>
       </View>
 
-      <View style={[styles.categoryBlock, isMobile && styles.categoryBlockMobile, tooltip && styles.categoryBlockTooltip]}>
-        <Text style={[styles.categoryLabel, isMobile && styles.categoryLabelMobile, tooltip && styles.categoryLabelTooltip]}>Stall category</Text>
-        <Text style={[styles.categoryText, isMobile && styles.categoryTextMobile, tooltip && styles.categoryTextTooltip]} numberOfLines={1}>
-          {marketLabel(stall)}
-        </Text>
-      </View>
+      {isOccupied && (
+        <View style={[styles.categoryBlock, isMobile && styles.categoryBlockMobile, tooltip && styles.categoryBlockTooltip]}>
+          <Text style={[styles.categoryLabel, isMobile && styles.categoryLabelMobile, tooltip && styles.categoryLabelTooltip]}>Stall category</Text>
+          <Text style={[styles.categoryText, isMobile && styles.categoryTextMobile, tooltip && styles.categoryTextTooltip]} numberOfLines={1}>
+            {marketLabel(stall)}
+          </Text>
+        </View>
+      )}
 
       <View style={[styles.rentBox, isMobile && styles.rentBoxMobile, tooltip && styles.rentBoxTooltip]}>
         <Text style={[styles.rentLabel, isMobile && styles.rentLabelMobile, tooltip && styles.rentLabelTooltip]}>Market rental</Text>

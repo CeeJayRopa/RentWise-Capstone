@@ -4,9 +4,13 @@ export type StallStatusMeta = {
   soft: string;
 };
 
+export function isOccupiedStallStatus(status?: string): boolean {
+  return String(status ?? "").trim().toLowerCase() === "occupied";
+}
+
 export function statusMeta(status?: string): StallStatusMeta {
   const normalized = String(status ?? "available").trim().toLowerCase();
-  if (normalized === "occupied") {
+  if (isOccupiedStallStatus(status)) {
     return {label: "Occupied", color: "#D95F61", soft: "#FBE0E1"};
   }
   if (normalized === "reserved" || normalized === "pending") {

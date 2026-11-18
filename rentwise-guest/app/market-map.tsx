@@ -20,7 +20,7 @@ import StallPopup from "../shared/components/StallPopup";
 import { subscribeToStalls } from "../services/stallService";
 import { MARKET_LAYOUT, StallHotspot } from "../shared/constants/marketLayout";
 import { matchMapStalls } from "../shared/constants/stallLookup";
-import { statusMeta } from "../shared/constants/stallStatus";
+import { isOccupiedStallStatus, statusMeta } from "../shared/constants/stallStatus";
 
 // Matches the blueprint's real pixel size (assets/market-2Dlayout.png) so hotspot
 // percentages line up correctly regardless of screen width.
@@ -264,11 +264,12 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
 
           {selected && (() => {
             const meta = statusMeta(selected.stall.status);
+            const isOccupied = isOccupiedStallStatus(selected.stall.status);
             return (
               <View style={mobileStyles.selectedCard}>
                 <Pressable style={mobileStyles.selectedClose} onPress={closeSelection} accessibilityLabel="Close stall details"><Ionicons name="close" size={22} color="#22302A" /></Pressable>
                 <Text style={mobileStyles.selectedCode}>{stallCode(selected.stall)}</Text>
-                <Text style={mobileStyles.selectedCategory}>{stallCategory(selected.stall)}</Text>
+                {isOccupied && <Text style={mobileStyles.selectedCategory}>{stallCategory(selected.stall)}</Text>}
                 <View style={mobileStyles.selectedDetails}>
                   <Text style={mobileStyles.selectedDetail}>Dimensions: {stallDimensions(selected.stall)}</Text>
                   <Text style={mobileStyles.selectedDetail}>Daily rent: ₱{Number(selected.stall.price ?? 0).toLocaleString("en-PH")}</Text>
@@ -342,16 +343,19 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
             {selected && (() => {
               const stall = selected.stall;
               const meta = statusMeta(stall.status);
+              const isOccupied = isOccupiedStallStatus(stall.status);
               const dimension = stallDimensions(stall);
               const building = stallBuilding(stall);
               return (
                 <>
                   <Text style={mobileStyles.modalDescription}>
-                    {stallCode(stall)} is a {stallCategory(stall).toLowerCase()} stall located in {building}. It has an area measurement of {dimension} and a daily rental rate of ₱{Number(stall.price ?? 0).toLocaleString("en-PH")}.
+                    {isOccupied
+                      ? `${stallCode(stall)} is a ${stallCategory(stall).toLowerCase()} stall located in ${building}.`
+                      : `${stallCode(stall)} is located in ${building}.`} It has an area measurement of {dimension} and a daily rental rate of ₱{Number(stall.price ?? 0).toLocaleString("en-PH")}.
                   </Text>
                   <View style={mobileStyles.modalDetailsCard}>
                     <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Building</Text><Text style={mobileStyles.modalDetailValue}>{building}</Text></View>
-                    <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Category</Text><Text style={mobileStyles.modalDetailValue}>{stallCategory(stall)}</Text></View>
+                    {isOccupied && <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Category</Text><Text style={mobileStyles.modalDetailValue}>{stallCategory(stall)}</Text></View>}
                     <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Dimensions</Text><Text style={mobileStyles.modalDetailValue}>{dimension}</Text></View>
                     <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Rent rate</Text><Text style={mobileStyles.modalDetailValue}>₱{Number(stall.price ?? 0).toLocaleString("en-PH")} / day</Text></View>
                     <View style={[mobileStyles.modalDetailRow, {borderBottomWidth: 0}]}><Text style={mobileStyles.modalDetailLabel}>Availability</Text><View style={[mobileStyles.statusPill, mobileStyles.modalStatusPill, {backgroundColor: meta.soft}]}><Text style={[mobileStyles.statusText, {color: meta.color}]}>{meta.label}</Text></View></View>
