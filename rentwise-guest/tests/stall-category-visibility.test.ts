@@ -1,3 +1,4 @@
+// @ts-expect-error Node's type-stripping test runner requires the runtime .ts extension.
 import { isOccupiedStallStatus } from "../shared/constants/stallStatus.ts";
 
 const cases: Array<{status: string | undefined; expected: boolean}> = [
