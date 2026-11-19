@@ -1,3 +1,6 @@
+// @ts-expect-error The dependency-free Node test runner is intentionally outside the Expo app types.
+import { readFileSync } from "node:fs";
+
 // @ts-expect-error Node's type-stripping test runner requires the runtime .ts extension.
 import { isOccupiedStallStatus } from "../shared/constants/stallStatus.ts";
 
@@ -23,4 +26,25 @@ for (const testCase of cases) {
   }
 }
 
-console.log(`stall category visibility: ${cases.length} status cases passed`);
+const sharedPopupSource = readFileSync(
+  new URL("../shared/components/StallPopup.tsx", import.meta.url),
+  "utf8",
+);
+const mobilePopupSource = readFileSync(
+  new URL("../app/market-map.tsx", import.meta.url),
+  "utf8",
+);
+
+for (const forbidden of ["Market rental", "rentBox", "formattedPrice"]) {
+  if (sharedPopupSource.includes(forbidden)) {
+    throw new Error(`Expected the shared stall popup to omit ${JSON.stringify(forbidden)}.`);
+  }
+}
+
+for (const forbidden of ["Daily rent:", "daily rental rate", ">Rent rate<"]) {
+  if (mobilePopupSource.includes(forbidden)) {
+    throw new Error(`Expected the mobile stall popup to omit ${JSON.stringify(forbidden)}.`);
+  }
+}
+
+console.log(`stall popup visibility: ${cases.length} status cases and rental-field checks passed`);

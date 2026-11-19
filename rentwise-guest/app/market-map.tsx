@@ -272,7 +272,6 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
                 {isOccupied && <Text style={mobileStyles.selectedCategory}>{stallCategory(selected.stall)}</Text>}
                 <View style={mobileStyles.selectedDetails}>
                   <Text style={mobileStyles.selectedDetail}>Dimensions: {stallDimensions(selected.stall)}</Text>
-                  <Text style={mobileStyles.selectedDetail}>Daily rent: ₱{Number(selected.stall.price ?? 0).toLocaleString("en-PH")}</Text>
                   <View style={[mobileStyles.statusPill, {backgroundColor: meta.soft}]}><Text style={[mobileStyles.statusText, {color: meta.color}]}>{meta.label}</Text></View>
                 </View>
                 <Pressable style={mobileStyles.descriptionButton} onPress={() => setDescriptionVisible(true)}>
@@ -351,13 +350,12 @@ function MobileMarketView({items, loading}: {items: MobileMapItem[]; loading: bo
                   <Text style={mobileStyles.modalDescription}>
                     {isOccupied
                       ? `${stallCode(stall)} is a ${stallCategory(stall).toLowerCase()} stall located in ${building}.`
-                      : `${stallCode(stall)} is located in ${building}.`} It has an area measurement of {dimension} and a daily rental rate of ₱{Number(stall.price ?? 0).toLocaleString("en-PH")}.
+                      : `${stallCode(stall)} is located in ${building}.`} It has an area measurement of {dimension}.
                   </Text>
                   <View style={mobileStyles.modalDetailsCard}>
                     <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Building</Text><Text style={mobileStyles.modalDetailValue}>{building}</Text></View>
                     {isOccupied && <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Category</Text><Text style={mobileStyles.modalDetailValue}>{stallCategory(stall)}</Text></View>}
                     <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Dimensions</Text><Text style={mobileStyles.modalDetailValue}>{dimension}</Text></View>
-                    <View style={mobileStyles.modalDetailRow}><Text style={mobileStyles.modalDetailLabel}>Rent rate</Text><Text style={mobileStyles.modalDetailValue}>₱{Number(stall.price ?? 0).toLocaleString("en-PH")} / day</Text></View>
                     <View style={[mobileStyles.modalDetailRow, {borderBottomWidth: 0}]}><Text style={mobileStyles.modalDetailLabel}>Availability</Text><View style={[mobileStyles.statusPill, mobileStyles.modalStatusPill, {backgroundColor: meta.soft}]}><Text style={[mobileStyles.statusText, {color: meta.color}]}>{meta.label}</Text></View></View>
                   </View>
                   <Text style={mobileStyles.modalNote}>Availability may change. Contact the market administrator to confirm rental requirements and current availability.</Text>
