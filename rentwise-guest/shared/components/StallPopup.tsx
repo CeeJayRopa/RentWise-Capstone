@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, TouchableOpacity, useWindowDimensions } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { isOccupiedStallStatus } from "../constants/stallStatus";
+import { isOccupiedStallStatus, shouldShowMarketRental } from "../constants/stallStatus";
 
 const PRIMARY = "#0E7C5A";
 const OCCUPIED = "#C0392B";
@@ -19,6 +19,7 @@ interface Stall {
   spaceDimension?: string;
   width?: number;
   length?: number;
+  price?: number;
 }
 
 interface Props {
@@ -73,8 +74,16 @@ export default function StallPopup({
   const { width } = useWindowDimensions();
   const isMobile = width <= 480;
   const isOccupied = isOccupiedStallStatus(stall.status);
+  const showMarketRental = shouldShowMarketRental(stall.status);
   const isVacant = !isOccupied;
   const statusColor = isVacant ? PRIMARY : OCCUPIED;
+  const formattedPrice =
+    typeof stall.price === "number"
+      ? stall.price.toLocaleString("en-PH", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })
+      : "—";
 
   return (
     <View style={[
@@ -114,6 +123,16 @@ export default function StallPopup({
           <Text style={[styles.categoryText, isMobile && styles.categoryTextMobile, tooltip && styles.categoryTextTooltip]} numberOfLines={1}>
             {marketLabel(stall)}
           </Text>
+        </View>
+      )}
+
+      {showMarketRental && (
+        <View style={[styles.rentBox, isMobile && styles.rentBoxMobile, tooltip && styles.rentBoxTooltip]}>
+          <Text style={[styles.rentLabel, isMobile && styles.rentLabelMobile, tooltip && styles.rentLabelTooltip]}>Market rental</Text>
+          <View style={styles.rentValueRow}>
+            <Text style={[styles.rentValue, isMobile && styles.rentValueMobile, tooltip && styles.rentValueTooltip]}>₱{formattedPrice}</Text>
+            <Text style={[styles.rentUnit, isMobile && styles.rentUnitMobile, tooltip && styles.rentUnitTooltip]}>/ day</Text>
+          </View>
         </View>
       )}
 
@@ -221,6 +240,30 @@ const styles = StyleSheet.create({
   },
   categoryTextTooltip: { fontSize: 16 },
   categoryTextMobile: { fontSize: 17 },
+  rentBox: {
+    backgroundColor: "#F7F8F6",
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 13,
+    paddingVertical: 15,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 18,
+  },
+  rentBoxTooltip: { paddingVertical: 9, paddingHorizontal: 10, marginBottom: 10, borderRadius: 10 },
+  rentBoxMobile: { paddingVertical: 11, paddingHorizontal: 12, marginBottom: 13, borderRadius: 10 },
+  rentLabel: { fontSize: 13, color: TEXT_MUTED, fontWeight: "700" },
+  rentLabelTooltip: { fontSize: 10 },
+  rentLabelMobile: { fontSize: 10 },
+  rentValueRow: { flexDirection: "row", alignItems: "baseline", gap: 5 },
+  rentValue: { fontSize: 20, fontWeight: "800", color: TEXT_DARK },
+  rentValueTooltip: { fontSize: 15 },
+  rentValueMobile: { fontSize: 16 },
+  rentUnit: { fontSize: 12, color: TEXT_MUTED, fontWeight: "700" },
+  rentUnitTooltip: { fontSize: 10 },
+  rentUnitMobile: { fontSize: 9 },
   dimensionsRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 28 },
   dimensionsRowTooltip: { paddingHorizontal: 14 },
   dimensionsRowMobile: { paddingHorizontal: 12 },

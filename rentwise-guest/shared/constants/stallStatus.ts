@@ -8,6 +8,10 @@ export function isOccupiedStallStatus(status?: string): boolean {
   return String(status ?? "").trim().toLowerCase() === "occupied";
 }
 
+export function shouldShowMarketRental(status?: string): boolean {
+  return !isOccupiedStallStatus(status);
+}
+
 export function statusMeta(status?: string): StallStatusMeta {
   const normalized = String(status ?? "available").trim().toLowerCase();
   if (isOccupiedStallStatus(status)) {
