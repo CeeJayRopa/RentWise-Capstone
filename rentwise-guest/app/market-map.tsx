@@ -66,7 +66,19 @@ const MOBILE_BG = "#F7F4EC";
 const MOBILE_STALLS_PER_PAGE = 5;
 
 function stallCode(stall: Stall): string {
-  return String(stall.spaceId ?? stall.name ?? stall.id).replace(/^stall\s*/i, "").trim();
+  const rawCode = String(stall.spaceId ?? stall.name ?? stall.id)
+    .replace(/^stall\s*/i, "")
+    .trim();
+  const buildingMatch = String(stall.buildingNumber ?? "").trim()
+    .match(/^(?:b(?:uilding)?\s*[- ]?\s*)?(\d+)$/i);
+
+  // Firestore stores the building and space separately (for example, "2"
+  // and "B-19"). Present them together in the Guest map so the visible
+  // stall name matches the map label: "B2 B-19".
+  if (buildingMatch && !new RegExp(`^B${buildingMatch[1]}\\b`, "i").test(rawCode)) {
+    return `B${buildingMatch[1]} ${rawCode}`;
+  }
+  return rawCode;
 }
 
 function stallCategory(stall: Stall): string {
