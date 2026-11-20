@@ -1,5 +1,7 @@
 import * as THREE from "three";
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import { XREstimatedLight } from "three/examples/jsm/webxr/XREstimatedLight.js";
 
 // The WebXR Device API (XRSession, XRFrame, XRHitTestSource, navigator.xr, ...) is not
@@ -256,6 +258,8 @@ function cloneWithOwnMaterials(source: THREE.Object3D): THREE.Group {
 }
 
 export class ARSessionScene {
+  private dracoLoader: DRACOLoader;
+  private gltfLoader: GLTFLoader;
   private renderer: THREE.WebGLRenderer | null = null;
   private camera = new THREE.PerspectiveCamera(70, 1, 0.01, 20);
   private scene = new THREE.Scene();
@@ -446,6 +450,17 @@ export class ARSessionScene {
   private scratchMeasurePos = new THREE.Vector3();
 
   constructor() {
+    // The Firebase AR catalog contains a mix of uncompressed, Meshopt-compressed,
+    // and Draco-compressed GLBs. Configure one loader up front so every catalog
+    // item follows the same supported path. Draco's runtime files are served from
+    // rentwise-guest/public/draco to avoid depending on a third-party CDN during
+    // an AR session; Meshopt ships as an ES module with Three.js itself.
+    this.dracoLoader = new DRACOLoader();
+    this.dracoLoader.setDecoderPath("/draco/");
+    this.gltfLoader = new GLTFLoader();
+    this.gltfLoader.setDRACOLoader(this.dracoLoader);
+    this.gltfLoader.setMeshoptDecoder(MeshoptDecoder);
+
     const geometry = new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2);
     const material = new THREE.MeshBasicMaterial({ color: RETICLE_COLOR_SEARCHING });
     this.reticle = new THREE.Mesh(geometry, material);
@@ -1040,7 +1055,7 @@ export class ARSessionScene {
 
   private loadModel(url: string): Promise<THREE.Group> {
     return new Promise((resolve, reject) => {
-      new GLTFLoader().load(
+      this.gltfLoader.load(
         url,
         (gltf) => resolve(gltf.scene),
         undefined,
@@ -1832,5 +1847,6 @@ export class ARSessionScene {
     this.renderer?.setAnimationLoop(null);
     this.renderer?.dispose();
     this.renderer = null;
+    this.dracoLoader.dispose();
   }
 }
